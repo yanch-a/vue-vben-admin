@@ -11,7 +11,17 @@ import {
 export const overridesPreferences = defineOverridesPreferences({
   // overrides
   app: {
+    defaultHomePath: '/dashboard',
+    accessMode: 'backend',
+    enableRefreshToken: false,
     name: import.meta.env.VITE_APP_TITLE,
+  },
+  // 关闭页面缓存与过渡，避免连点菜单时右侧内容挂载失败后空白
+  tabbar: {
+    keepAlive: false,
+  },
+  transition: {
+    enable: false,
   },
   copyright: appCopyrightPreferences,
 });

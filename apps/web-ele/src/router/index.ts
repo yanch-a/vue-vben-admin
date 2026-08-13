@@ -34,4 +34,9 @@ const resetRoutes = () => resetStaticRoutes(router, routes);
 // 创建路由守卫
 createRouterGuard(router);
 
+// 避免导航中组件卸载异常变成未捕获错误，导致后续菜单无法再点
+router.onError((error) => {
+  console.error('[router]', error);
+});
+
 export { resetRoutes, router };

@@ -4,47 +4,45 @@ import type {
   RouteLocationNormalizedLoadedGeneric,
 } from 'vue-router';
 
-import { computed } from 'vue';
+import { computed, defineComponent } from 'vue';
 
 import { preferences, usePreferences } from '@vben/preferences';
 
+const MissingView = defineComponent({
+  name: 'MissingView',
+  render: () => null,
+});
+
 /**
- * 转换组件，自动添加 name
- * @param component
- * @param route
+ * 转换组件，自动添加 name（供 KeepAlive include 匹配）
+ * 注意：禁止在每次渲染时新建组件定义，否则会导致右侧内容空白/无法切换。
  */
 export function transformComponent(
   component: VNode,
   route: RouteLocationNormalizedLoadedGeneric,
 ) {
-  // 组件视图未找到，如果有设置后备视图，则返回后备视图，如果没有，则抛出错误
   if (!component) {
     console.error(
       'Component view not found，please check the route configuration',
     );
-    return undefined;
+    return MissingView;
   }
 
   const routeName = route.name as string;
-  // 如果组件没有 name，则直接返回
   if (!routeName) {
     return component;
   }
-  const componentName = (component?.type as any)?.name;
 
-  // 已经设置过 name，则直接返回
+  const type = component.type as any;
+  const componentName = type?.name || type?.__name;
   if (componentName) {
     return component;
   }
 
-  // componentName 与 routeName 一致，则直接返回
-  if (componentName === routeName) {
-    return component;
+  // 仅补 name，不替换组件类型（保持引用稳定）
+  if (type && (typeof type === 'object' || typeof type === 'function')) {
+    type.name = routeName;
   }
-
-  // 设置 name
-  component.type ||= {};
-  (component.type as any).name = routeName;
 
   return component;
 }
@@ -80,14 +78,6 @@ export function useLayoutHook() {
       return transitionName;
     }
 
-    // 如果页面已经加载过，则不使用动画
-    // if (route.meta.loaded) {
-    //   return;
-    // }
-    // 已经打开且已经加载过的页面不使用动画
-    // const inTabs = getCachedTabs.value.includes(route.name as string);
-
-    // return inTabs && route.meta.loaded ? undefined : transitionName;
     return transitionName;
   }
 

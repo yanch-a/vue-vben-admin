@@ -1,0 +1,15 @@
+/**
+ * 对齐 admin-plus 页面容器：内容区默认无 padding，原版 *-container 自带 20px。
+ */
+[class*='-management-container'] {
+  box-sizing: border-box;
+  min-height: 100%;
+  padding: 16px;
+  background: var(--el-bg-color);
+}
+
+/* 表格与操作栏之间不要被分页默认外边距撑开太多 */
+[class*='-management-container'] > .el-pagination,
+[class*='-management-container'] .el-pagination {
+  margin-top: 12px;
+}

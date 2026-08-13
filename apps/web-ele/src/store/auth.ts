@@ -1,4 +1,4 @@
-import type { Recordable, UserInfo } from '@vben/types';
+import type { Recordable } from '@vben/types';
 
 import { ref } from 'vue';
 import { useRouter } from 'vue-router';
@@ -10,8 +10,36 @@ import { resetAllStores, useAccessStore, useUserStore } from '@vben/stores';
 import { ElNotification } from 'element-plus';
 import { defineStore } from 'pinia';
 
-import { getAccessCodesApi, getUserInfoApi, loginApi, logoutApi } from '#/api';
+import {
+  extractAccessCodes,
+  getUserInfoApi,
+  loginApi,
+  logoutApi,
+  memberLoginApi,
+  memberLogoutApi,
+} from '#/api';
 import { $t } from '#/locales';
+
+export type LoginUserType = 'ADMIN' | 'MEMBER';
+
+const LOGIN_USER_TYPE_KEY = 'lemon_login_user_type';
+
+function readLoginUserType(): LoginUserType {
+  try {
+    const v = localStorage.getItem(LOGIN_USER_TYPE_KEY);
+    return v === 'MEMBER' ? 'MEMBER' : 'ADMIN';
+  } catch {
+    return 'ADMIN';
+  }
+}
+
+function saveLoginUserType(type: LoginUserType) {
+  try {
+    localStorage.setItem(LOGIN_USER_TYPE_KEY, type);
+  } catch {
+    // ignore
+  }
+}
 
 export const useAuthStore = defineStore('auth', () => {
   const accessStore = useAccessStore();
@@ -19,75 +47,114 @@ export const useAuthStore = defineStore('auth', () => {
   const router = useRouter();
 
   const loginLoading = ref(false);
+  const loginUserType = ref<LoginUserType>(readLoginUserType());
+
+  async function afterLogin(
+    accessToken: string,
+    type: LoginUserType,
+    onSuccess?: () => Promise<void> | void,
+  ) {
+    accessStore.setAccessToken(accessToken);
+    loginUserType.value = type;
+    saveLoginUserType(type);
+
+    const userInfo = await fetchUserInfo();
+    userStore.setUserInfo(userInfo);
+    accessStore.setAccessCodes(extractAccessCodes(userInfo as any));
+
+    if (accessStore.loginExpired) {
+      accessStore.setLoginExpired(false);
+    } else {
+      onSuccess
+        ? await onSuccess?.()
+        : await router.push(
+            userInfo.homePath || preferences.app.defaultHomePath,
+          );
+    }
+
+    if (userInfo?.realName) {
+      ElNotification({
+        message: `${$t('authentication.loginSuccessDesc')}:${userInfo?.realName}`,
+        title: $t('authentication.loginSuccess'),
+        type: 'success',
+      });
+    }
+
+    return { userInfo };
+  }
 
   /**
-   * 异步处理登录操作
-   * Asynchronously handle the login process
-   * @param params 登录表单数据
+   * 管理员登录
    */
   async function authLogin(
     params: Recordable<any>,
     onSuccess?: () => Promise<void> | void,
   ) {
-    // 异步处理用户登录操作并获取 accessToken
-    let userInfo: null | UserInfo = null;
     try {
       loginLoading.value = true;
       const { accessToken } = await loginApi(params);
-
-      // 如果成功获取到 accessToken
-      if (accessToken) {
-        // 将 accessToken 存储到 accessStore 中
-        accessStore.setAccessToken(accessToken);
-
-        // 获取用户信息并存储到 accessStore 中
-        const [fetchUserInfoResult, accessCodes] = await Promise.all([
-          fetchUserInfo(),
-          getAccessCodesApi(),
-        ]);
-
-        userInfo = fetchUserInfoResult;
-
-        userStore.setUserInfo(userInfo);
-        accessStore.setAccessCodes(accessCodes);
-
-        if (accessStore.loginExpired) {
-          accessStore.setLoginExpired(false);
-        } else {
-          onSuccess
-            ? await onSuccess?.()
-            : await router.push(
-                userInfo.homePath || preferences.app.defaultHomePath,
-              );
-        }
-
-        if (userInfo?.realName) {
-          ElNotification({
-            message: `${$t('authentication.loginSuccessDesc')}:${userInfo?.realName}`,
-            title: $t('authentication.loginSuccess'),
-            type: 'success',
-          });
-        }
-      }
+      return await afterLogin(accessToken, 'ADMIN', onSuccess);
     } finally {
       loginLoading.value = false;
     }
+  }
 
-    return {
-      userInfo,
-    };
+  /**
+   * 会员密码登录
+   */
+  async function memberLogin(
+    params: Recordable<any>,
+    onSuccess?: () => Promise<void> | void,
+  ) {
+    try {
+      loginLoading.value = true;
+      const { accessToken } = await memberLoginApi(params);
+      return await afterLogin(accessToken, 'MEMBER', onSuccess);
+    } finally {
+      loginLoading.value = false;
+    }
+  }
+
+  /**
+   * 短信 / 微信等已拿到 token 后的统一入口
+   */
+  async function loginWithToken(
+    accessToken: string,
+    type: LoginUserType = 'MEMBER',
+    onSuccess?: () => Promise<void> | void,
+  ) {
+    try {
+      loginLoading.value = true;
+      return await afterLogin(accessToken, type, onSuccess);
+    } finally {
+      loginLoading.value = false;
+    }
+  }
+
+  async function clearAuthState() {
+    loginUserType.value = 'ADMIN';
+    saveLoginUserType('ADMIN');
+    resetAllStores();
+    accessStore.setLoginExpired(false);
   }
 
   async function logout(redirect: boolean = true) {
+    const type = loginUserType.value;
     try {
-      await logoutApi();
+      // 仍持有 token 时先通知后端；失败（含无效 token）忽略
+      if (accessStore.accessToken) {
+        if (type === 'MEMBER') {
+          await memberLogoutApi();
+        } else {
+          await logoutApi();
+        }
+      }
     } catch {
-      // 不做任何处理
+      // ignore
     }
-    resetAllStores();
-    accessStore.setLoginExpired(false);
 
-    // 回登录页带上当前路由地址
+    await clearAuthState();
+
     await router.replace({
       path: LOGIN_PATH,
       query: redirect
@@ -100,6 +167,10 @@ export const useAuthStore = defineStore('auth', () => {
 
   async function fetchUserInfo() {
     const userInfo = await getUserInfoApi();
+    if ((userInfo as any).loginUserType) {
+      loginUserType.value = (userInfo as any).loginUserType as LoginUserType;
+      saveLoginUserType(loginUserType.value);
+    }
     userStore.setUserInfo(userInfo);
     return userInfo;
   }
@@ -111,8 +182,13 @@ export const useAuthStore = defineStore('auth', () => {
   return {
     $reset,
     authLogin,
+    afterLogin,
     fetchUserInfo,
     loginLoading,
+    loginUserType,
+    loginWithToken,
     logout,
+    clearAuthState,
+    memberLogin,
   };
 });

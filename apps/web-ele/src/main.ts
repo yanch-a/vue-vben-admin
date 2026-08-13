@@ -1,4 +1,4 @@
-import { initPreferences } from '@vben/preferences';
+import { initPreferences, updatePreferences } from '@vben/preferences';
 import { unmountGlobalLoading } from '@vben/utils';
 
 import { overridesPreferences } from './preferences';
@@ -17,6 +17,12 @@ async function initApplication() {
   await initPreferences({
     namespace,
     overrides: overridesPreferences,
+  });
+
+  // 本地缓存的偏好会覆盖 overrides，这里强制关掉页面缓存/过渡，避免连点菜单右侧空白
+  updatePreferences({
+    tabbar: { keepAlive: false },
+    transition: { enable: false },
   });
 
   // 启动应用并挂载

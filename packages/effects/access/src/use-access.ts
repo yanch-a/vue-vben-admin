@@ -27,8 +27,12 @@ function useAccess() {
    * @param codes
    */
   function hasAccessByCodes(codes: string[]) {
-    const userCodesSet = new Set(accessStore.accessCodes);
-
+    const userCodes = accessStore.accessCodes;
+    // lemon 超管 permissions 含 *
+    if (userCodes.includes('*') || userCodes.includes('*:*:*')) {
+      return true;
+    }
+    const userCodesSet = new Set(userCodes);
     const intersection = codes.filter((item) => userCodesSet.has(item));
     return intersection.length > 0;
   }

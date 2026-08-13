@@ -105,6 +105,10 @@ watch(
       activePath.value = '';
     }
     updateActiveName(currentActive);
+    // 详情页用 activePath 高亮列表时，需重新展开父级，否则手风琴会收起
+    nextTick(() => {
+      initMenu();
+    });
   },
 );
 

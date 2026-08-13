@@ -1,6 +1,14 @@
+import { createRequire } from 'node:module';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
 import { defineConfig, viteCssLayerPlugin } from '@vben/vite-config';
 
 import ElementPlus from 'unplugin-element-plus/vite';
+
+const rootDir = path.dirname(fileURLToPath(import.meta.url));
+const require = createRequire(import.meta.url);
+const logicflowCoreEntry = require.resolve('@logicflow/core');
 
 export default defineConfig(async () => {
   return {
@@ -11,13 +19,24 @@ export default defineConfig(async () => {
         viteCssLayerPlugin({ layerName: 'el', packageName: 'element-plus' }),
         ElementPlus({ format: 'esm' }),
       ],
+      resolve: {
+        alias: {
+          // 兼容从 admin-plus 拷贝过来的 `@/` 路径
+          '@': path.resolve(rootDir, 'src'),
+          // $ 精确匹配，避免把 @logicflow/core/dist/style 也指到 entry.js
+          // package.json "module" 指向 UMD，Vite 当 ESM 导入会导致 default 不是构造函数；强制走 CJS entry
+          '@logicflow/core$': logicflowCoreEntry,
+        },
+      },
+      optimizeDeps: {
+        include: ['@logicflow/core', '@logicflow/extension'],
+      },
       server: {
         proxy: {
-          '/api': {
+          '/lemon': {
             changeOrigin: true,
-            rewrite: (path) => path.replace(/^\/api/, ''),
-            // mock代理目标地址
-            target: 'http://localhost:5320/api',
+            // lemon 本地默认端口，见 lemon-main application-dev.yml
+            target: 'http://localhost:7806',
             ws: true,
           },
         },

@@ -3,13 +3,16 @@
  * Used for fine-grained control of component permissions
  * @Example v-access:role="[ROLE_NAME]" or v-access:role="ROLE_NAME"
  * @Example v-access:code="[ROLE_CODE]" or v-access:code="ROLE_CODE"
+ *
+ * 不要用 el.remove()：会破坏 Vue vnode 与 DOM 映射，路由切换时易触发
+ * Cannot read properties of null (reading 'parentNode')
  */
 import type { App, Directive, DirectiveBinding } from 'vue';
 
 import { useAccess } from './use-access';
 
-function isAccessible(
-  el: Element,
+function applyAccess(
+  el: HTMLElement,
   binding: DirectiveBinding<string | string[]>,
 ) {
   const { accessMode, hasAccessByCodes, hasAccessByRoles } = useAccess();
@@ -24,17 +27,23 @@ function isAccessible(
 
   const values = Array.isArray(value) ? value : [value];
 
-  if (!authMethod(values)) {
-    el?.remove();
+  if (authMethod(values)) {
+    el.style.removeProperty('display');
+    el.removeAttribute('aria-hidden');
+    return;
   }
+
+  el.style.display = 'none';
+  el.setAttribute('aria-hidden', 'true');
 }
 
-const mounted = (el: Element, binding: DirectiveBinding<string | string[]>) => {
-  isAccessible(el, binding);
-};
-
 const authDirective: Directive = {
-  mounted,
+  mounted(el, binding) {
+    applyAccess(el as HTMLElement, binding);
+  },
+  updated(el, binding) {
+    applyAccess(el as HTMLElement, binding);
+  },
 };
 
 export function registerAccessDirective(app: App) {

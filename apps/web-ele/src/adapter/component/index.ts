@@ -186,6 +186,7 @@ export type ComponentType =
   | 'IconPicker'
   | 'Input'
   | 'InputNumber'
+  | 'LemonUpload'
   | 'RadioGroup'
   | 'Select'
   | 'Space'
@@ -353,6 +354,9 @@ async function initComponentAdapter() {
     },
     TreeSelect: withDefaultPlaceholder(ElTreeSelect, 'select'),
     Upload: ElUpload,
+    LemonUpload: defineAsyncComponent(
+      () => import('#/components/lemon-upload/index.vue'),
+    ),
   };
 
   // 将组件注册到全局共享状态中

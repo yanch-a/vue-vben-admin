@@ -8,6 +8,7 @@ import '@vben/styles';
 import '@vben/styles/ele';
 
 import { useTitle } from '@vueuse/core';
+import ElementPlus from 'element-plus';
 import { ElLoading } from 'element-plus';
 
 import { $t, setupI18n } from '#/locales';
@@ -15,7 +16,14 @@ import { $t, setupI18n } from '#/locales';
 import { initComponentAdapter } from './adapter/component';
 import { initSetupVbenForm } from './adapter/form';
 import App from './app.vue';
+import { setupAdminPlusCompat } from './compat/admin-plus';
+import { registerPermissionsDirective } from './compat/permissions';
+import { registerVabComponents } from './compat/vab';
 import { router } from './router';
+
+// 全局注册 Element Plus 时，unplugin-element-plus 不会按需注入组件样式，需全量引入
+import 'element-plus/dist/index.css';
+import './compat/admin-plus-page.css';
 
 async function bootstrap(namespace: string) {
   // 初始化组件适配器
@@ -34,6 +42,9 @@ async function bootstrap(namespace: string) {
   // });
   const app = createApp(App);
 
+  // 原版 Options API 页面依赖全局注册的 Element Plus 组件
+  app.use(ElementPlus);
+
   // 注册Element Plus提供的v-loading指令
   app.directive('loading', ElLoading.directive);
 
@@ -42,6 +53,11 @@ async function bootstrap(namespace: string) {
     loading: false, // Vben提供的v-loading指令和Element Plus提供的v-loading指令二选一即可，此处false表示不注册Vben提供的v-loading指令
     spinning: 'spinning',
   });
+
+  // admin-plus 兼容：$baseMessage / $baseConfirm、v-permissions、vab-* 组件
+  setupAdminPlusCompat(app);
+  registerPermissionsDirective(app);
+  registerVabComponents(app);
 
   // 国际化 i18n 配置
   await setupI18n(app);
