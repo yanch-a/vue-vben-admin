@@ -1,30 +1,40 @@
 import type { RouteRecordRaw } from 'vue-router';
 
 /**
- * 可视化：表分组画布 / 关系画布
- * 列表页通过 name 跳转；backend 菜单若未配置或嵌套在列表下会导致「URL 变了内容不变」
+ * 可视化 / 数据库客户端
+ * 列表页通过 name 跳转；backend 菜单若未配置隐藏子页会兜底
  */
 const routes: RouteRecordRaw[] = [
   {
+    name: 'VisualClient',
+    path: '/visual/client',
+    // @ts-expect-error Options/SFC
+    component: () => import('#/views/visual/client/index.vue'),
+    meta: {
+      title: '数据库客户端',
+      hideInMenu: true,
+    },
+  },
+  {
     name: 'DbConfigCanvas',
     path: '/visual/dbConfig/canvas',
-    // @ts-expect-error Options API SFC：vue-tsc 无法为其生成模块声明
+    // @ts-expect-error Options API SFC
     component: () => import('#/views/visual/dbConfig/canvas.vue'),
     meta: {
       hideInMenu: true,
       title: '表分组',
-      activePath: '/visual/dbConfig',
+      activePath: '/visual/client',
     },
   },
   {
     name: 'RelationCanvas',
     path: '/visual/dbConfig/relationCanvas',
-    // @ts-expect-error Options API SFC：vue-tsc 无法为其生成模块声明
+    // @ts-expect-error Options API SFC
     component: () => import('#/views/visual/dbConfig/relationCanvas.vue'),
     meta: {
       hideInMenu: true,
       title: '关系画布',
-      activePath: '/visual/dbConfig',
+      activePath: '/visual/client',
     },
   },
 ];

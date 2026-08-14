@@ -26,6 +26,11 @@
     "#/*": "./src/*"
   },
   "dependencies": {
+    "@antv/x6": "^2.18.1",
+    "@antv/x6-plugin-history": "^2.2.4",
+    "@antv/x6-plugin-keyboard": "^2.2.3",
+    "@antv/x6-plugin-selection": "^2.2.2",
+    "@antv/x6-plugin-snapline": "^2.1.7",
     "@element-plus/icons-vue": "catalog:",
     "@logicflow/core": "1.2.28",
     "@logicflow/extension": "1.2.28",
@@ -60,6 +65,7 @@
     "@vueuse/core": "catalog:",
     "dayjs": "catalog:",
     "element-plus": "catalog:",
+    "monaco-editor": "^0.56.0",
     "pinia": "catalog:",
     "react": "18.3.1",
     "react-dom": "18.3.1",

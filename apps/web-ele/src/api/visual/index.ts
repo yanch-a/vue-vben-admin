@@ -1,9 +1,15 @@
 export {
+  executeSql,
+  getEvents,
+  getFunctions,
   getInstances,
-  getTablesWithColumns as getRemoteTablesWithColumns,
+  getProcedures,
   getTableColumns,
   getTableDDL,
   getTables,
+  getTablesWithColumns as getRemoteTablesWithColumns,
+  getTriggers,
+  getViews,
   testConnection,
 } from './database';
 export * from './vq';

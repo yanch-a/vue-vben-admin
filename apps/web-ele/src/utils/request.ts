@@ -34,8 +34,23 @@ export default async function request(config: {
     });
   }
 
-  // 已是标准 body
+  // 已是标准 body。responseReturn:'body' 时拦截器不校验业务码，这里补校验，
+  // 否则 code=-1 会被当成成功，调用方拿不到错误信息（结果区空白）。
   if (body && typeof body === 'object' && 'code' in body) {
+    const code = (body as { code?: number | string }).code;
+    if (code !== 200 && code !== 0 && code !== '200' && code !== '0') {
+      const msg =
+        (body as { msg?: string; message?: string }).msg ||
+        (body as { message?: string }).message ||
+        '请求失败';
+      return Promise.reject(
+        Object.assign(new Error(msg), {
+          msg,
+          code,
+          data: (body as { data?: unknown }).data,
+        }),
+      );
+    }
     return body;
   }
   return { code: 200, msg: 'ok', data: body };

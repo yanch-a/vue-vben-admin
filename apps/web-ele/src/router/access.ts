@@ -173,7 +173,7 @@ const HIDDEN_PAGE_ROUTES: RouteRecordStringComponent[] = [
     meta: {
       hideInMenu: true,
       title: '表分组',
-      activePath: '/visual/dbConfig',
+      activePath: '/visual/client',
     },
   },
   {
@@ -183,7 +183,16 @@ const HIDDEN_PAGE_ROUTES: RouteRecordStringComponent[] = [
     meta: {
       hideInMenu: true,
       title: '关系画布',
-      activePath: '/visual/dbConfig',
+      activePath: '/visual/client',
+    },
+  },
+  {
+    name: 'VisualClient',
+    path: '/visual/client',
+    component: '/visual/client/index',
+    meta: {
+      hideInMenu: true,
+      title: '数据库客户端',
     },
   },
 ];
@@ -215,6 +224,8 @@ const COMPONENT_ALIASES: Record<string, string> = {
   '/member/memberOrder/detail': '/member/memberOrder/MemberOrderView',
   '/visual/dbConfig/canvas': '/visual/dbConfig/canvas',
   '/visual/dbConfig/relationCanvas': '/visual/dbConfig/relationCanvas',
+  '/visual/client': '/visual/client/index',
+  '/visual/index': '/visual/client/index',
   '/setting/parameter/index': '/setting/parameter/index',
   '/setting/attachment/index': '/setting/attachment/index',
 };

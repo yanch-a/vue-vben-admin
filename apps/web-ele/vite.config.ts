@@ -26,10 +26,19 @@ export default defineConfig(async () => {
           // $ 精确匹配，避免把 @logicflow/core/dist/style 也指到 entry.js
           // package.json "module" 指向 UMD，Vite 当 ESM 导入会导致 default 不是构造函数；强制走 CJS entry
           '@logicflow/core$': logicflowCoreEntry,
+          // monaco 0.56 exports 只映射到 esm/vs，CSS 仍在 min/vs，需旁路
+          'monaco-editor/min': path.resolve(
+            rootDir,
+            'node_modules/monaco-editor/min',
+          ),
         },
       },
       optimizeDeps: {
-        include: ['@logicflow/core', '@logicflow/extension'],
+        include: [
+          '@logicflow/core',
+          '@logicflow/extension',
+          'monaco-editor',
+        ],
       },
       server: {
         proxy: {

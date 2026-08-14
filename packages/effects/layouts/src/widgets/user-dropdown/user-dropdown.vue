@@ -291,23 +291,15 @@ async function handleLocaleChange(event: Event, value: 'en-US' | 'zh-CN') {
   openPopover.value = false;
 }
 
+// 已关闭锁屏快捷键（Alt+L / L），避免输入字母 L 误触锁屏
 if (preferences.shortcutKeys.enable) {
   const keys = useMagicKeys();
   const logoutKey = keys['Alt+KeyQ'];
-  const lockKey = keys['Alt+KeyL'];
 
   if (logoutKey) {
     whenever(logoutKey, () => {
       if (enableLogoutShortcutKey.value) {
         handleLogout();
-      }
-    });
-  }
-
-  if (lockKey) {
-    whenever(lockKey, () => {
-      if (enableLockScreenShortcutKey.value) {
-        handleOpenLock();
       }
     });
   }

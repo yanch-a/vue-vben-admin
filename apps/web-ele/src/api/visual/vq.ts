@@ -347,6 +347,19 @@ export function previewQuerySql(configId: string) {
   })
 }
 
+/** 根据勾选字段预览 SQL */
+export function previewSqlBySelection(data: {
+  dbConfigId: number | string
+  groupId?: number | string
+  fieldIds: Array<number | string>
+}) {
+  return request({
+    url: queryExecuteUrl + 'previewSqlBySelection',
+    method: 'post',
+    data,
+  })
+}
+
 /** 执行查询 */
 export function executeQueryConfig(configId: string, limit?: number) {
   return request({

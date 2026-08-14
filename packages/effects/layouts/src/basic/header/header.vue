@@ -114,19 +114,10 @@ function handleSubmitLogout() {
   logoutModalApi.close();
 }
 
-// 快捷键
+// 快捷键：已关闭锁屏快捷键（Alt+L / L），避免输入字母 L 误触锁屏
 if (preferences.shortcutKeys.enable) {
   const keys = useMagicKeys();
-  const lockKey = keys['Alt+KeyL'];
   const logoutKey = keys['Alt+KeyQ'];
-
-  if (lockKey) {
-    whenever(lockKey, () => {
-      if (enableLockScreenShortcutKey.value) {
-        handleOpenLock();
-      }
-    });
-  }
 
   if (logoutKey) {
     whenever(logoutKey, () => {
