@@ -230,22 +230,41 @@ export function splitSqlStatements(fullText: string): SqlRange[] {
 }
 
 /**
- * 取待执行 SQL：
- * - 有非空选区 → 只执行选中内容
- * - 否则 → 光标所在分号语句（无分号则整篇）
+ * 收紧区间：去掉语句两端空白，便于格式化后原地替换。
  */
-export function extractExecutableSql(
+function tightenSqlRange(text: string, range: SqlRange): SqlRange {
+  let start = range.start;
+  let end = range.end;
+  while (start < end && /\s/.test(text[start]!)) start++;
+  while (end > start && /\s/.test(text[end - 1]!)) end--;
+  return { start, end };
+}
+
+/**
+ * 取待执行/格式化的 SQL 区间：
+ * - 有非空选区 → 选区（两端空白收紧）
+ * - 否则 → 光标所在分号语句（无分号则整篇）
+ *
+ * @returns range 为原文中的替换区间；text 为该区间内容（已 trim）
+ */
+export function extractExecutableSqlRange(
   fullText: string,
   cursorOffset: number,
   selection?: SqlRange | null,
-): string {
-  if (selection && selection.end > selection.start) {
-    return fullText.slice(selection.start, selection.end).trim();
-  }
+): { range: SqlRange; text: string } | null {
   const text = fullText || '';
-  if (!text.trim()) return '';
+  if (selection && selection.end > selection.start) {
+    const range = tightenSqlRange(text, selection);
+    const slice = text.slice(range.start, range.end);
+    if (!slice.trim()) return null;
+    return { range, text: slice };
+  }
+  if (!text.trim()) return null;
   const ranges = splitSqlStatements(text);
-  if (!ranges.length) return text.trim();
+  if (!ranges.length) {
+    const range = tightenSqlRange(text, { start: 0, end: text.length });
+    return { range, text: text.slice(range.start, range.end) };
+  }
 
   const pos = Math.max(0, Math.min(cursorOffset, text.length));
   // 光标落在语句内，或紧贴语句后的空白/分号
@@ -262,7 +281,24 @@ export function extractExecutableSql(
     // 光标在末尾空白：取最后一条非空
     hit = ranges[ranges.length - 1];
   }
-  return hit ? text.slice(hit.start, hit.end).trim() : text.trim();
+  if (!hit) return null;
+  const range = tightenSqlRange(text, hit);
+  const slice = text.slice(range.start, range.end);
+  if (!slice.trim()) return null;
+  return { range, text: slice };
+}
+
+/**
+ * 取待执行 SQL：
+ * - 有非空选区 → 只执行选中内容
+ * - 否则 → 光标所在分号语句（无分号则整篇）
+ */
+export function extractExecutableSql(
+  fullText: string,
+  cursorOffset: number,
+  selection?: SqlRange | null,
+): string {
+  return extractExecutableSqlRange(fullText, cursorOffset, selection)?.text?.trim() || '';
 }
 
 // ─────────────────────────── 补全上下文检测 ───────────────────────────

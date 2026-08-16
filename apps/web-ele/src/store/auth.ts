@@ -65,6 +65,7 @@ export const useAuthStore = defineStore('auth', () => {
     if (accessStore.loginExpired) {
       accessStore.setLoginExpired(false);
     } else {
+      // 先进入 defaultHomePath，由 access 守卫生成菜单后改写为角色第一个菜单
       onSuccess
         ? await onSuccess?.()
         : await router.push(

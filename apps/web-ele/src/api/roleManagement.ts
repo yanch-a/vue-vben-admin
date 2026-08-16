@@ -71,6 +71,22 @@ export function updateRolePerm(params: any) {
   })
 }
 
+/**
+ * 批量授予/撤销菜单及按钮权限（父节点级联）
+ * @author yanch
+ */
+export function updateRolePermBatch(data: {
+  roleId: number | string
+  menuIds: Array<number | string>
+  dealType: number
+}) {
+  return request({
+    url: '/system/roleManagement/updateRolePermBatch',
+    method: 'post',
+    data,
+  })
+}
+
 export function updateRoleOpera(params: any) {
   return request({
     url: '/system/roleManagement/updateRoleOpera',

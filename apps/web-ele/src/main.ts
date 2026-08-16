@@ -2,9 +2,15 @@ import { initPreferences, updatePreferences } from '@vben/preferences';
 import { unmountGlobalLoading } from '@vben/utils';
 
 import { overridesPreferences } from './preferences';
+import {
+  applyBrandConfigMap,
+  loadRemoteBrandConfig,
+} from './store/branding';
 
 /**
  * 应用初始化完成之后再进行页面加载渲染
+ *
+ * @author yanch
  */
 async function initApplication() {
   // name用于指定项目唯一标识
@@ -24,6 +30,10 @@ async function initApplication() {
     tabbar: { keepAlive: false },
     transition: { enable: false },
   });
+
+  // 先落到本地品牌默认，再尝试拉后台覆盖（失败不影响启动）
+  applyBrandConfigMap(null);
+  await loadRemoteBrandConfig();
 
   // 启动应用并挂载
   // vue应用主要逻辑及视图

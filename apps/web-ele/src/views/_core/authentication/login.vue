@@ -24,6 +24,7 @@ import {
   sendLoginCodeApi,
 } from '#/api';
 import { useAuthStore } from '#/store';
+import { branding } from '#/store/branding';
 
 defineOptions({ name: 'Login' });
 
@@ -400,7 +401,7 @@ onBeforeUnmount(() => {
 <template>
   <div class="lemon-login">
     <div class="lemon-login__card">
-      <h1 class="lemon-login__title">欢迎登录</h1>
+      <h1 class="lemon-login__title">{{ branding.welcome || '欢迎登录' }}</h1>
 
       <div class="lemon-login__tabs">
         <button

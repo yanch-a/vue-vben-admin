@@ -65,18 +65,20 @@ function convertRoutes(
   pageMap: ComponentRecordType,
 ): RouteRecordRaw[] {
   return mapTree(routes, (node) => {
-    const route = node as unknown as RouteRecordRaw;
-    const { component, name } = node;
+    // 拷贝节点，避免原地改写上游菜单（第二次登录 component 已是函数会崩）
+    const route = { ...node } as unknown as RouteRecordRaw;
+    const component = node.component;
+    const { name } = node;
 
     if (!name) {
       console.error('route name is required', route);
     }
 
-    // layout转换
-    if (component && layoutMap[component]) {
+    // layout转换（仅字符串 component 才查 layoutMap）
+    if (typeof component === 'string' && component && layoutMap[component]) {
       route.component = layoutMap[component];
       // 页面组件转换
-    } else if (component) {
+    } else if (typeof component === 'string' && component) {
       const normalizePath = normalizeViewPath(component);
       const pageKey = normalizePath.endsWith('.vue')
         ? normalizePath
@@ -87,6 +89,9 @@ function convertRoutes(
         console.error(`route component is invalid: ${pageKey}`, route);
         route.component = pageMap['/_core/fallback/not-found.vue'];
       }
+    } else if (component && typeof component !== 'string') {
+      // 已是组件函数/对象：保持原样，不再走字符串路径规范化
+      route.component = component as RouteRecordRaw['component'];
     }
 
     return route;
@@ -94,6 +99,10 @@ function convertRoutes(
 }
 
 function normalizeViewPath(path: string): string {
+  // 防御：非字符串（组件函数等）直接转空，避免 path.replace is not a function
+  if (typeof path !== 'string') {
+    return '/';
+  }
   // 去除相对路径前缀
   const normalizedPath = path.replace(/^(\.\/|\.\.\/)+/, '');
 

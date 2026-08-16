@@ -87,7 +87,7 @@
           })
         } else {
           if (state.selectRows.length > 0) {
-            const ids = state.selectRows.map((item) => item.id).join()
+            const ids = state.selectRows.map((item) => item.roleId).join()
             $baseConfirm('你确定要删除选中项吗', null, async () => {
               const { msg } = await doDelete({ ids })
               $baseMessage(msg, 'success', 'vab-hey-message-success')

@@ -20,6 +20,7 @@ import { setupAdminPlusCompat } from './compat/admin-plus';
 import { registerPermissionsDirective } from './compat/permissions';
 import { registerVabComponents } from './compat/vab';
 import { router } from './router';
+import { branding } from './store/branding';
 
 // 全局注册 Element Plus 时，unplugin-element-plus 不会按需注入组件样式，需全量引入
 import 'element-plus/dist/index.css';
@@ -79,12 +80,14 @@ async function bootstrap(namespace: string) {
   const { MotionPlugin } = await import('@vben/plugins/motion');
   app.use(MotionPlugin);
 
-  // 动态更新标题
+  // 动态更新标题（优先使用后台配置的 browserTitle）
   watchEffect(() => {
     if (preferences.app.dynamicTitle) {
       const routeTitle = router.currentRoute.value.meta?.title;
+      const appTitle =
+        branding.browserTitle || preferences.app.name || 'Lemon';
       const pageTitle =
-        (routeTitle ? `${$t(routeTitle)} - ` : '') + preferences.app.name;
+        (routeTitle ? `${$t(routeTitle)} - ` : '') + appTitle;
       useTitle(pageTitle);
     }
   });

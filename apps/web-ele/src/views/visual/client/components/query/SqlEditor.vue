@@ -2,14 +2,16 @@
 /**
  * SQL 编辑器（Monaco）
  * - 跟随系统亮/暗主题
- * - Ctrl+Enter 执行（由父级按光标/选区切分语句）
+ * - Ctrl+Enter / F9 执行（由父级按光标/选区切分语句）
  * - Ctrl+S 保存
+ * - F12 格式化当前选区或光标所在语句
  * - 智能补全：写表名用本地表清单；写字段名按需拉列并缓存；Tab 接受建议
  * @author yanch
  */
 import * as monaco from 'monaco-editor';
 import editorWorker from 'monaco-editor/editor/editor.worker?worker';
 import { usePreferences } from '@vben/preferences';
+import { ElMessage } from 'element-plus';
 import { onBeforeUnmount, onMounted, ref, watch } from 'vue';
 
 import 'monaco-editor/min/vs/editor/editor.main.css';
@@ -17,6 +19,7 @@ import 'monaco-editor/min/vs/editor/editor.main.css';
 import {
   detectCompletionContext,
   extractExecutableSql,
+  extractExecutableSqlRange,
   getAllRememberedTables,
   getCachedColumns,
   getRememberedTables,
@@ -24,6 +27,7 @@ import {
   matchTableSuggestions,
   setCachedColumns,
 } from '../../utils/sqlEditorAssist';
+import { formatSqlByDialect } from '../../utils/formatSql';
 import { resolveSqlDialect } from '../../dialect/sqlDialect';
 
 // monaco-editor 0.56+：exports 映射为 "./*" -> "./esm/vs/*.js"
@@ -237,6 +241,10 @@ onMounted(() => {
   editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => {
     emit('save');
   });
+  // F12：格式化当前选区 / 光标所在语句（与执行切分规则一致）
+  editor.addCommand(monaco.KeyCode.F12, () => {
+    formatCurrentSql();
+  });
   registerCompletion();
 });
 
@@ -296,10 +304,76 @@ function getExecutableSql(): string {
   return extractExecutableSql(value, cursor, selectionRange);
 }
 
+/**
+ * 格式化当前选区，或光标所在 SQL 语句，并原地替换。
+ * @author yanch
+ */
+function formatCurrentSql(): boolean {
+  if (!editor) return false;
+  const model = editor.getModel();
+  if (!model) return false;
+
+  const value = model.getValue();
+  const sel = editor.getSelection();
+  let selectionRange = null as { start: number; end: number } | null;
+  if (sel && !sel.isEmpty()) {
+    selectionRange = {
+      start: model.getOffsetAt(sel.getStartPosition()),
+      end: model.getOffsetAt(sel.getEndPosition()),
+    };
+  }
+  const pos = editor.getPosition() || sel?.getStartPosition();
+  const cursor = pos ? model.getOffsetAt(pos) : value.length;
+  const target = extractExecutableSqlRange(value, cursor, selectionRange);
+  if (!target) {
+    ElMessage.warning('没有可格式化的 SQL');
+    return false;
+  }
+
+  let formatted: string;
+  try {
+    formatted = formatSqlByDialect(target.text, props.dbType);
+  } catch (e: any) {
+    ElMessage.warning(e?.message || 'SQL 格式化失败，请检查语法');
+    return false;
+  }
+  if (!formatted || formatted === target.text) {
+    return true;
+  }
+
+  const startPos = model.getPositionAt(target.range.start);
+  const endPos = model.getPositionAt(target.range.end);
+  const replaceRange = new monaco.Range(
+    startPos.lineNumber,
+    startPos.column,
+    endPos.lineNumber,
+    endPos.column,
+  );
+  editor.pushUndoStop();
+  editor.executeEdits('format-sql', [
+    { range: replaceRange, text: formatted, forceMoveMarkers: true },
+  ]);
+  editor.pushUndoStop();
+
+  // 选中格式化后的内容，方便继续编辑 / 确认改动
+  const newEnd = model.getPositionAt(target.range.start + formatted.length);
+  editor.setSelection(
+    new monaco.Selection(
+      startPos.lineNumber,
+      startPos.column,
+      newEnd.lineNumber,
+      newEnd.column,
+    ),
+  );
+  editor.focus();
+  return true;
+}
+
 defineExpose({
   insertText,
   getValue: () => editor?.getValue() || '',
   getExecutableSql,
+  formatSql: formatCurrentSql,
 });
 </script>
 

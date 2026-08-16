@@ -17,6 +17,8 @@ interface Props {
   pageTitle?: string;
   pageDescription?: string;
   sloganImage?: string;
+  /** 登录页背景图（侧栏/居中布局装饰区），空则使用默认渐变 */
+  loginBackground?: string;
   toolbar?: boolean;
   copyright?: boolean;
   toolbarList?: ToolbarType[];
@@ -31,6 +33,7 @@ const props = withDefaults(defineProps<Props>(), {
   pageDescription: '',
   pageTitle: '',
   sloganImage: '',
+  loginBackground: '',
   toolbar: true,
   toolbarList: () => ['color', 'language', 'layout', 'theme'],
   clickLogo: () => {},
@@ -49,6 +52,20 @@ const logoSrc = computed(() => {
   }
   // 否则使用默认的 logo
   return props.logo;
+});
+
+/** 有自定义背景图时覆盖默认模糊渐变 */
+const loginBgStyle = computed(() => {
+  if (!props.loginBackground) {
+    return undefined;
+  }
+  return {
+    backgroundImage: `url(${props.loginBackground})`,
+    backgroundSize: 'cover',
+    backgroundPosition: 'center',
+    backgroundRepeat: 'no-repeat',
+    filter: 'none',
+  } as Record<string, string>;
 });
 </script>
 
@@ -108,23 +125,34 @@ const logoSrc = computed(() => {
       <div
         class="absolute inset-0 size-full bg-background-deep dark:bg-[#070709]"
       >
-        <div class="login-background absolute top-0 left-0 size-full"></div>
+        <div
+          class="login-background absolute top-0 left-0 size-full"
+          :class="{ 'login-background--image': !!loginBackground }"
+          :style="loginBgStyle"
+        ></div>
         <div
           :key="authPanelLeft ? 'left' : authPanelRight ? 'right' : 'center'"
-          class="mr-20 flex-col-center h-full"
+          class="mr-20 flex-col-center h-full relative z-[1]"
           :class="{
             'enter-x': authPanelLeft,
             '-enter-x': authPanelRight,
+            'login-slogan--on-image': !!loginBackground,
           }"
         >
-          <template v-if="sloganImage">
-            <img
+          <template v-if="!loginBackground">
+            <template v-if="sloganImage">
+              <img
+                :alt="appName"
+                :src="sloganImage"
+                class="h-64 w-2/5 animate-float"
+              />
+            </template>
+            <SloganIcon
+              v-else
               :alt="appName"
-              :src="sloganImage"
               class="h-64 w-2/5 animate-float"
             />
           </template>
-          <SloganIcon v-else :alt="appName" class="h-64 w-2/5 animate-float" />
           <div class="text-1xl mt-6 font-sans text-foreground lg:text-2xl">
             {{ pageTitle }}
           </div>
@@ -137,7 +165,11 @@ const logoSrc = computed(() => {
 
     <!-- 中心认证面板 -->
     <div v-if="authPanelCenter" class="relative flex-center w-full">
-      <div class="login-background absolute top-0 left-0 size-full"></div>
+      <div
+        class="login-background absolute top-0 left-0 size-full"
+        :class="{ 'login-background--image': !!loginBackground }"
+        :style="loginBgStyle"
+      ></div>
       <AuthenticationFormView
         class="w-full rounded-3xl pb-20 shadow-float shadow-primary/5 md:w-2/3 md:bg-background lg:w-1/2 xl:w-[36%]"
         data-side="bottom"
@@ -182,8 +214,17 @@ const logoSrc = computed(() => {
   filter: blur(100px);
 }
 
+.login-background--image {
+  filter: none;
+}
+
+/* 背景图上的文案提高可读性 */
+.login-slogan--on-image {
+  text-shadow: 0 1px 2px rgb(0 0 0 / 45%);
+}
+
 .dark {
-  .login-background {
+  .login-background:not(.login-background--image) {
     background: linear-gradient(
       154deg,
       #07070915 30%,

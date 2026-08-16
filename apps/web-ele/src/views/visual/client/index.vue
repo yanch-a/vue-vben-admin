@@ -578,6 +578,11 @@ function pickErrorMsg(e: any, fallback: string) {
   );
 }
 
+/** 格式化当前选区或光标所在 SQL（与编辑器 F12 相同） */
+function onFormatSql() {
+  sqlEditorRef.value?.formatSql?.();
+}
+
 /**
  * 按右栏可用高度设置结果区为约 1/3（编辑器占约 2/3）
  * @author yanch
@@ -1037,6 +1042,7 @@ onBeforeUnmount(() => {
             >
               执行 (Ctrl+Enter / F9)
             </ElButton>
+            <ElButton size="small" @click="onFormatSql">格式化 (F12)</ElButton>
             <ElButton size="small" @click="onSaveQuery">保存 (Ctrl+S)</ElButton>
             <ElButton size="small" @click="onSaveQueryAs">另存为</ElButton>
             <ElButton

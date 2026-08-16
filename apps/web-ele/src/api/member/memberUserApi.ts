@@ -44,3 +44,14 @@ export function doDelete(data: any) {
   })
 }
 
+/**
+ * 检查用户名是否可用（true=可用）
+ * @author yanch
+ */
+export function checkUsername(username: string) {
+  return request({
+    url: `${adminUrl}/member/checkUsername/${encodeURIComponent(username)}`,
+    method: 'get',
+  })
+}
+

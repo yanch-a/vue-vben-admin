@@ -11,7 +11,11 @@
   import { useTabbarStore } from '@vben/stores'
 
   import { getMemberLevelList } from '@/api/member/memberLevelApi'
-  import { doEdit, getById } from '@/api/member/memberUserApi'
+  import {
+    checkUsername,
+    doEdit,
+    getById,
+  } from '@/api/member/memberUserApi'
   import { getById as getRoleById } from '@/api/userManagement'
   import LemonUpload from '@/components/lemon-upload/index.vue'
   import { activeValue, getDictData } from '@/utils/convert'
@@ -41,7 +45,7 @@
           callback()
         }
       }
-      // 重复密码自定义验证规则
+      // 邮箱自定义验证规则
       const emailValidator = (rule, value, callback) => {
         if (value) {
           if (!isEmail(value)) {
@@ -69,6 +73,36 @@
           callback()
         }
       }
+      /**
+       * 用户名唯一性校验：新增必查；编辑仅在改名后查接口
+       * @author yanch
+       */
+      const userNameValidator = async (rule, value, callback) => {
+        const userName = (value || '').trim()
+        if (!userName) {
+          callback(new Error('请输入用户名'))
+          return
+        }
+        if (userName.length < 2 || userName.length > 30) {
+          callback(new Error('用户名长度必须在2-30个字符之间'))
+          return
+        }
+        // 编辑且未改用户名，无需再请求
+        if (state.form.id && userName === state.originalUserName) {
+          callback()
+          return
+        }
+        try {
+          const { data } = await checkUsername(userName)
+          if (data === true || data === 1 || data === 'true') {
+            callback()
+          } else {
+            callback(new Error('用户名已存在'))
+          }
+        } catch (e) {
+          callback(new Error('校验用户名失败，请稍后重试'))
+        }
+      }
       const state = reactive({
         elForm: null,
         userGroupOptions: {
@@ -79,6 +113,8 @@
         sexOptions: getDictData('sex').data,
         userStatusOptions: getDictData('userStatus').data,
         route: { query: { title: '加载中' } },
+        /** 编辑回显的原始用户名，用于跳过未改名时的唯一性请求 */
+        originalUserName: '',
         form: {
           integral: 0,
           userStatus: '1',
@@ -90,7 +126,7 @@
 
         rules: {
           userName: [
-            { required: true, trigger: 'blur', message: '请输入用户名' },
+            { required: true, trigger: 'blur', validator: userNameValidator },
           ],
           password: [
             { required: true, trigger: 'blur', validator: passwordValidator },
@@ -151,6 +187,9 @@
           const { data } = await getById({ id: route.query.id })
           state.form = data
           state.form.repassword = data.password
+          state.originalUserName = (data.userName || '').trim()
+        } else {
+          state.originalUserName = ''
         }
         const {
           data: { roles },
@@ -189,13 +228,13 @@
     </el-page-header>
     <el-form
       ref="elForm"
-      inline
+      class="member-edit-form"
       label-width="160px"
       :model="form"
       :rules="rules"
       size="large"
     >
-      <el-row>
+      <el-row :gutter="16">
         <el-col :span="24">
           <el-form-item label="头像" prop="avatar">
             <template #label>
@@ -275,7 +314,11 @@
         </el-col>
         <el-col :span="8">
           <el-form-item label="角色" prop="roleIds">
-            <el-select v-model="form.roleId" placeholder="请选择角色">
+            <el-select
+              v-model="form.roleId"
+              placeholder="请选择角色"
+              style="width: 100%"
+            >
               <el-option
                 v-for="item in options"
                 :key="item.roleId"
@@ -291,6 +334,7 @@
               v-model="form.memberLevelId"
               placeholder="请选择会员等级"
               clearable
+              style="width: 100%"
             >
               <el-option
                 v-for="item in userLevelOptions"
@@ -308,12 +352,13 @@
               :precision="2"
               :step="1"
               :max="999999999"
+              style="width: 100%"
             />
           </el-form-item>
         </el-col>
         <el-col :span="8">
           <el-form-item label="会员组" prop="userGroup">
-            <el-select v-model="form.userGroup">
+            <el-select v-model="form.userGroup" style="width: 100%">
               <el-option
                 v-for="(key, value) in userGroupOptions"
                 :key="value"
@@ -371,6 +416,7 @@
               format="YYYY-MM-DD HH:mm:ss"
               value-format="YYYY-MM-DD HH:mm:ss"
               :disabled="form.openPermission !== 1"
+              style="width: 100%"
             />
           </el-form-item>
         </el-col>
@@ -389,3 +435,22 @@
     </el-form>
   </div>
 </template>
+
+<style scoped>
+.detail-container {
+  padding: 12px 16px 24px;
+}
+.member-edit-form :deep(.el-form-item) {
+  width: 100%;
+}
+.member-edit-form :deep(.el-form-item__content) {
+  flex: 1;
+  min-width: 0;
+}
+.member-edit-form :deep(.el-input),
+.member-edit-form :deep(.el-select),
+.member-edit-form :deep(.el-date-editor),
+.member-edit-form :deep(.el-input-number) {
+  width: 100%;
+}
+</style>

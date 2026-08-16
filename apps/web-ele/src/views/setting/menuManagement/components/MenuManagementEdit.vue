@@ -26,8 +26,10 @@
       noColumn: activeValue.inActive,
       orderNum: 10,
       menuType: 'C',
-      sysSelect: 1,
+      // 默认自定义菜单：页面路由与权限模块解耦，通过「接口权限挂载」绑定
+      sysSelect: 0,
       operations: [],
+      moduleMounts: [],
       icon: '',
       activeIcon: '',
       parentId: 0,
@@ -38,7 +40,6 @@
       component: '',
       queryParam: '',
       remark: '',
-      // vben 扩展（与旧字段共存，保存到同一张 sys_menu）
       redirect: '',
       activePath: '',
       iframeSrc: '',
@@ -86,6 +87,14 @@
     form.operations = Array.isArray(form.operations)
       ? form.operations.map(String)
       : []
+    form.moduleMounts = Array.isArray(form.moduleMounts)
+      ? form.moduleMounts.map((m) => ({
+          moduleCode: m.moduleCode,
+          operationCodes: Array.isArray(m.operationCodes)
+            ? m.operationCodes.map(String)
+            : [],
+        }))
+      : []
     return form
   }
 
@@ -120,15 +129,18 @@
           sysSelect: [
             { required: true, trigger: 'change', message: '请选择菜单来源' },
           ],
-          path: [{ required: true, trigger: 'blur', message: '请输入 path' }],
-          component: [
-            { required: true, trigger: 'blur', message: '请输入 component' },
-          ],
+          path: [],
+          component: [],
         },
         componentValid: {
           required: true,
           trigger: 'blur',
           message: '请输入 component',
+        },
+        pathValid: {
+          required: true,
+          trigger: 'blur',
+          message: '请输入 path',
         },
         title: '',
         dialogFormVisible: false,
@@ -136,12 +148,29 @@
         modules: [],
         selectMenu: '',
         nameFlag: false,
-        custom: false,
+        custom: true,
         operations: {},
         isEdit: false,
         showOperation: false,
         checkAll: false,
+        /** 待添加的模块码（挂载器） */
+        mountPickCode: '',
       })
+
+      /** 按菜单类型 / 可见性刷新 path、component 校验 */
+      const refreshFieldRules = () => {
+        const type = state.form.menuType
+        const visible = Number(state.form.visible)
+        if (type === 'M' || type === 'F') {
+          state.rules.path = []
+          state.rules.component = []
+          return
+        }
+        // 页面 C：可见时 path+component 必填；隐藏权限桩可不填 component
+        state.rules.path = [state.pathValid]
+        state.rules.component =
+          visible === activeValue.active ? [state.componentValid] : []
+      }
 
       const getOptions = async () => {
         const { data } = await getModules()
@@ -149,14 +178,19 @@
         list.forEach((item) => {
           item.label = item.name
           item.value = item.code
-          if (state.form.name === item.code) {
-            state.operations = item.operations || {}
-            state.showOperation = true
-            operationChange()
-          }
         })
         state.modules = list
         state.options = list
+        // 旧：单系统模块勾选回显
+        if (Number(state.form.sysSelect) === 1 && state.form.name) {
+          const hit = list.find((m) => m.code === state.form.name)
+          if (hit) {
+            state.operations = hit.operations || {}
+            state.showOperation = true
+            state.selectMenu = hit.code
+            operationChange()
+          }
+        }
       }
 
       const onSelectMenuChange = (code) => {
@@ -180,26 +214,76 @@
       }
 
       const menuTypeChange = (val) => {
-        if (val === 'M') {
+        if (val === 'M' || val === 'F') {
           state.form.sysSelect = 0
-          state.rules.component = []
-        } else {
-          state.form.sysSelect = 1
-          state.rules.component = [state.componentValid]
         }
         sysSelectChange(state.form.sysSelect)
+        refreshFieldRules()
       }
 
       const menuChange = (val) => {
+        // 仅回填模块码与展示名；不覆盖用户已填的 path（避免 DataBaseOperate → dataBaseOperate）
         state.form.name = val.code
-        state.form.menuName = val.name
-        setPath(val.code)
+        if (!state.form.menuName) {
+          state.form.menuName = val.name
+        }
         state.nameFlag = true
-        state.form.operations = []
+        state.form.operations = Object.keys(val.operations || {})
         state.operations = val.operations || {}
         state.showOperation = true
         state.selectMenu = val.code
         operationChange()
+        // 同步进挂载列表（单模块快捷）
+        upsertMount(val.code, state.form.operations)
+      }
+
+      const upsertMount = (moduleCode, operationCodes) => {
+        if (!moduleCode) return
+        const list = state.form.moduleMounts || []
+        const idx = list.findIndex((m) => m.moduleCode === moduleCode)
+        const item = {
+          moduleCode,
+          operationCodes: [...(operationCodes || [])],
+        }
+        if (idx >= 0) {
+          list[idx] = item
+        } else {
+          list.push(item)
+        }
+        state.form.moduleMounts = [...list]
+      }
+
+      const addModuleMount = () => {
+        const code = state.mountPickCode
+        if (!code) {
+          $baseMessage('请先选择要挂载的后端模块', 'warning')
+          return
+        }
+        const mod = state.modules.find((m) => m.code === code)
+        if (!mod) {
+          $baseMessage('模块不存在或未加载', 'warning')
+          return
+        }
+        const codes = Object.keys(mod.operations || {})
+        upsertMount(code, codes)
+        state.mountPickCode = ''
+      }
+
+      const removeModuleMount = (moduleCode) => {
+        state.form.moduleMounts = (state.form.moduleMounts || []).filter(
+          (m) => m.moduleCode !== moduleCode,
+        )
+      }
+
+      const getModuleOpsMap = (moduleCode) => {
+        const mod = state.modules.find((m) => m.code === moduleCode)
+        return mod?.operations || {}
+      }
+
+      const toggleMountAll = (moduleCode, checked) => {
+        const ops = getModuleOpsMap(moduleCode)
+        const codes = checked ? Object.keys(ops) : []
+        upsertMount(moduleCode, codes)
       }
 
       const checkAllHandler = (val) => {
@@ -208,12 +292,18 @@
         } else {
           state.form.operations = []
         }
+        if (state.form.name) {
+          upsertMount(state.form.name, state.form.operations)
+        }
       }
 
       const operationChange = () => {
         const total = Object.keys(state.operations).length
         state.checkAll =
           total > 0 && total === (state.form.operations || []).length
+        if (Number(state.form.sysSelect) === 1 && state.form.name) {
+          upsertMount(state.form.name, state.form.operations || [])
+        }
       }
 
       const fetchData = async () => {
@@ -229,6 +319,7 @@
 
       const showEdit = async (row) => {
         await fetchData()
+        await getOptions()
         if (!row) {
           state.title = '新增菜单'
           state.form = createDefaultForm()
@@ -250,6 +341,7 @@
         if (Number(state.form.sysSelect) === 1) {
           await getOptions()
         }
+        refreshFieldRules()
         state.dialogFormVisible = true
       }
 
@@ -260,16 +352,26 @@
         state.isEdit = false
         state.checkAll = false
         state.nameFlag = false
-        state.custom = false
+        state.custom = true
         state.selectMenu = ''
         state.options = []
         state.operations = {}
         state.showOperation = false
+        state.mountPickCode = ''
       }
 
       const save = () => {
+        refreshFieldRules()
         state.formRef.validate(async (valid) => {
           if (!valid) return
+          // 兼容：系统单模块勾选写入 moduleMounts
+          if (
+            Number(state.form.sysSelect) === 1 &&
+            state.form.name &&
+            (!state.form.moduleMounts || !state.form.moduleMounts.length)
+          ) {
+            upsertMount(state.form.name, state.form.operations || [])
+          }
           const { msg } = await doEdit(state.form)
           $baseMessage(msg, 'success')
           emit('fetchData')
@@ -278,21 +380,19 @@
       }
 
       const isFrameChange = (val, flag) => {
-        if (Number(val) === activeValue.active || state.form.menuType === 'M') {
-          state.rules.component = []
-        } else {
-          state.rules.component = [state.componentValid]
-        }
-        if (!flag) {
-          state.form.sysSelect = Number(val) === 1 ? 0 : 1
+        if (!flag && Number(val) === activeValue.active) {
+          state.form.sysSelect = 0
         }
         sysSelectChange(state.form.sysSelect)
+        refreshFieldRules()
       }
 
-      const setPath = (val) => {
-        if (val && Number(state.form.isFrame) === activeValue.inActive) {
-          state.form.path = val.charAt(0).toLowerCase() + val.slice(1)
-        }
+      const setPath = () => {
+        // 不再根据 name 自动改写 path，避免模块码污染路由
+      }
+
+      const onVisibleChange = () => {
+        refreshFieldRules()
       }
 
       return {
@@ -311,6 +411,12 @@
         menuTypeChange,
         checkAllHandler,
         operationChange,
+        addModuleMount,
+        removeModuleMount,
+        getModuleOpsMap,
+        toggleMountAll,
+        upsertMount,
+        onVisibleChange,
       }
     },
   })
@@ -430,7 +536,10 @@
         </el-col>
         <el-col :span="8">
           <el-form-item label="path" prop="path">
-            <el-input v-model="form.path" placeholder="路由 path" />
+            <el-input
+              v-model="form.path"
+              placeholder="相对段，如 client（拼到父级成 /visual/client）"
+            />
           </el-form-item>
         </el-col>
       </el-row>
@@ -440,18 +549,19 @@
           <span>
             <el-tooltip placement="top">
               <template #content>
-                <div>旧框架：目录填 Layout，页面相对路径自动加 @/views/</div>
-                <div>新框架：目录可留空或 Layout；页面如 setting/menuManagement/index</div>
-                <div>内嵌/外链：可填 InnerLink 或留空，由 isFrame / iframeSrc 决定</div>
+                <div>目录 M / 按钮 F：可留空</div>
+                <div>可见页面 C：填 /visual/client/index（相对 views）</div>
+                <div>隐藏权限桩（visible=关）：component 可留空，不进路由</div>
               </template>
               <el-icon style="vertical-align: middle"><InfoFilled /></el-icon>
             </el-tooltip>
             vue文件路径
           </span>
         </template>
-        <el-input v-model="form.component" placeholder="setting/xxx/index 或 Layout">
-          <template #prepend>@/views/</template>
-        </el-input>
+        <el-input
+          v-model="form.component"
+          placeholder="/visual/client/index 或留空"
+        />
       </el-form-item>
 
       <el-row :gutter="12">
@@ -503,6 +613,7 @@
             v-model="form.visible"
             :active-value="activeValue.active"
             :inactive-value="activeValue.inActive"
+            @change="onVisibleChange"
           />
           <span>无分栏</span>
           <el-switch
@@ -609,28 +720,107 @@
 
       <vab-card shadow="hover">
         <template #header>
-          <span>菜单操作权限</span>
+          <span>接口权限挂载</span>
+          <el-tooltip
+            content="从后端 @Module 勾选操作，挂到本菜单。一个页面可挂多个模块（如客户端挂 DataBaseOperate+SavedQuery）。权限码仍是 Module:op"
+            placement="top"
+          >
+            <el-icon style="margin-left: 6px; vertical-align: middle">
+              <InfoFilled />
+            </el-icon>
+          </el-tooltip>
+        </template>
+
+        <div class="mount-toolbar">
+          <el-select
+            v-model="mountPickCode"
+            clearable
+            filterable
+            placeholder="选择后端模块"
+            style="width: 320px"
+          >
+            <el-option
+              v-for="item in modules"
+              :key="item.code"
+              :label="`${item.name} (${item.code})`"
+              :value="item.code"
+            />
+          </el-select>
+          <el-button type="primary" style="margin-left: 8px" @click="addModuleMount">
+            添加挂载
+          </el-button>
+        </div>
+
+        <el-empty
+          v-if="!(form.moduleMounts && form.moduleMounts.length)"
+          description="尚未挂载接口权限，请从上方选择模块添加"
+          :image-size="48"
+        />
+
+        <div
+          v-for="mount in form.moduleMounts"
+          :key="mount.moduleCode"
+          class="mount-block"
+        >
+          <div class="mount-block-head">
+            <strong>{{ mount.moduleCode }}</strong>
+            <el-space>
+              <el-button
+                link
+                type="primary"
+                @click="toggleMountAll(mount.moduleCode, true)"
+              >
+                全选
+              </el-button>
+              <el-button
+                link
+                @click="toggleMountAll(mount.moduleCode, false)"
+              >
+                清空
+              </el-button>
+              <el-button
+                link
+                type="danger"
+                @click="removeModuleMount(mount.moduleCode)"
+              >
+                移除
+              </el-button>
+            </el-space>
+          </div>
+          <el-checkbox-group v-model="mount.operationCodes">
+            <el-checkbox
+              v-for="(op, key) in getModuleOpsMap(mount.moduleCode)"
+              :key="String(key)"
+              border
+              :label="String(key)"
+            >
+              {{ op.name }}
+              <span class="op-code">({{ key }})</span>
+            </el-checkbox>
+          </el-checkbox-group>
+        </div>
+
+        <!-- 兼容旧：系统菜单单模块快捷勾选 -->
+        <div v-if="showOperation" class="legacy-ops">
+          <el-divider content-position="left">系统菜单快捷勾选（同步到上方挂载）</el-divider>
           <el-checkbox
             v-model="checkAll"
             border
             label="全选"
-            style="margin-left: 20px"
             @change="checkAllHandler"
           />
-        </template>
-        <el-checkbox-group v-if="showOperation" v-model="form.operations">
-          <el-checkbox
-            v-for="(item, key) in operations"
-            :key="String(key)"
-            border
-            :label="String(key)"
-            :value="String(key)"
-            @change="operationChange"
-          >
-            {{ item.name }}
-          </el-checkbox>
-        </el-checkbox-group>
-        <el-empty v-else description="选择系统菜单后可配置操作权限" :image-size="48" />
+          <el-checkbox-group v-model="form.operations" style="margin-top: 8px">
+            <el-checkbox
+              v-for="(item, key) in operations"
+              :key="String(key)"
+              border
+              :label="String(key)"
+              @change="operationChange"
+            >
+              {{ item.name }}
+            </el-checkbox>
+          </el-checkbox-group>
+        </div>
       </vab-card>
     </el-form>
 
@@ -640,3 +830,31 @@
     </template>
   </el-dialog>
 </template>
+
+<style scoped>
+.mount-toolbar {
+  display: flex;
+  align-items: center;
+  margin-bottom: 12px;
+}
+.mount-block {
+  margin-bottom: 14px;
+  padding: 10px 12px;
+  border: 1px solid var(--el-border-color-lighter);
+  border-radius: 6px;
+}
+.mount-block-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+}
+.op-code {
+  margin-left: 4px;
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+}
+.legacy-ops {
+  margin-top: 8px;
+}
+</style>

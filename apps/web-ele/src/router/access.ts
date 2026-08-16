@@ -19,32 +19,78 @@ const comingSoonComponent = '/_core/fallback/coming-soon';
 
 /**
  * 与 generate-routes-backend.normalizeViewPath 保持一致，用于判断页面是否存在
+ * 后端偶发返回非字符串 component（null/数字/对象），必须先兜底，否则登录守卫崩溃回登录页
+ * @author yanch
  */
-function normalizeViewPath(path: string): string {
-  const normalizedPath = path.replace(/^(\.\/|\.\.\/)+/, '');
+function normalizeViewPath(path: unknown): string {
+  const raw = typeof path === 'string' ? path : String(path ?? '');
+  const normalizedPath = raw.replace(/^(\.\/|\.\.\/)+/, '');
   const viewPath = normalizedPath.startsWith('/')
     ? normalizedPath
     : `/${normalizedPath}`;
   return viewPath.replace(/^\/views/, '');
 }
 
-function toPageKey(component: string): string {
+function toPageKey(component: unknown): string {
   const normalized = normalizeViewPath(component);
+  if (!normalized || normalized === '/') {
+    return '';
+  }
   return normalized.endsWith('.vue') ? normalized : `${normalized}.vue`;
 }
 
-function joinRoutePath(parent: string, child: string): string {
-  if (!child) return parent || '/';
-  if (child.startsWith('/')) return child;
+function joinRoutePath(parent: string, child: unknown): string {
+  const childPath = typeof child === 'string' ? child : String(child ?? '');
+  if (!childPath) return parent || '/';
+  if (childPath.startsWith('/')) return childPath;
   const base = parent.endsWith('/') ? parent.slice(0, -1) : parent;
-  const joined = `${base}/${child}`.replace(/\/{2,}/g, '/');
+  const joined = `${base}/${childPath}`.replace(/\/{2,}/g, '/');
   return joined.startsWith('/') ? joined : `/${joined}`;
 }
 
-function isPageComponent(component?: null | string): boolean {
+function isPageComponent(component?: unknown): boolean {
   return (
-    !!component && component !== 'IFrameView' && component !== 'BasicLayout'
+    typeof component === 'string' &&
+    !!component &&
+    component !== 'IFrameView' &&
+    component !== 'BasicLayout'
   );
+}
+
+/**
+ * 清洗后端菜单：component/path 统一成字符串，避免后续 mapTree 里 path.replace 崩溃
+ * @author yanch
+ */
+function sanitizeMenuTree(
+  menus: RouteRecordStringComponent[] | null | undefined,
+): RouteRecordStringComponent[] {
+  if (!Array.isArray(menus)) {
+    return [];
+  }
+  return menus.map((menu) => {
+    const component =
+      menu.component == null || menu.component === ''
+        ? undefined
+        : typeof menu.component === 'string'
+          ? menu.component
+          : String(menu.component);
+
+    const path =
+      typeof menu.path === 'string'
+        ? menu.path
+        : menu.path == null
+          ? ''
+          : String(menu.path);
+
+    return {
+      ...menu,
+      path,
+      component,
+      children: menu.children?.length
+        ? sanitizeMenuTree(menu.children as RouteRecordStringComponent[])
+        : undefined,
+    };
+  });
 }
 
 /**
@@ -209,7 +255,12 @@ function mergeHiddenPageRoutes(
       return false;
     }
     return true;
-  });
+  }).map((route) => ({
+    // 必须深拷贝：convertRoutes 会原地把 component 从字符串改成函数，
+    // 若复用模块常量，退出再登录就会 path.replace is not a function
+    ...route,
+    meta: route.meta ? { ...route.meta } : undefined,
+  }));
   return [...menus, ...extras];
 }
 
@@ -249,7 +300,13 @@ function applyMissingComponentFallback(
 
   return mapTree(menus, (route) => {
     const component = route.component;
-    if (!component || component === 'IFrameView') {
+    // 非字符串（偶发脏数据）或布局组件：不做页面存在性校验
+    if (
+      typeof component !== 'string' ||
+      !component ||
+      component === 'IFrameView' ||
+      component === 'BasicLayout'
+    ) {
       return route;
     }
     // 仍有子路由的目录节点不校验 component
@@ -258,7 +315,23 @@ function applyMissingComponentFallback(
     }
 
     const aliased = COMPONENT_ALIASES[component] || component;
+    if (typeof aliased !== 'string' || !aliased) {
+      return {
+        ...route,
+        component: comingSoonComponent,
+        meta: {
+          ...route.meta,
+          title:
+            route.meta?.title ?? String(route.name ?? route.path ?? '未命名'),
+          note: `invalid-component:${String(component)}`,
+        },
+      };
+    }
+
     const pageKey = toPageKey(aliased);
+    if (!pageKey) {
+      return route;
+    }
 
     if (pageKeys.has(pageKey)) {
       return aliased === component ? route : { ...route, component: aliased };
@@ -293,9 +366,16 @@ async function generateAccess(options: GenerateMenuAndRoutesOptions) {
         message: `${$t('common.loadingMenu')}...`,
       });
       const menus = await getAllMenusApi();
-      const flattened = flattenPageDetailChildren(menus || []);
+      const cleaned = sanitizeMenuTree(menus || []);
+      const flattened = flattenPageDetailChildren(cleaned);
       const withHidden = mergeHiddenPageRoutes(flattened);
-      return applyMissingComponentFallback(withHidden, pageMap);
+      // 再拷贝一层：convertRoutes / mapTree 不得污染本次构建结果之外的引用
+      return applyMissingComponentFallback(
+        structuredClone
+          ? structuredClone(withHidden)
+          : JSON.parse(JSON.stringify(withHidden)),
+        pageMap,
+      );
     },
     forbiddenComponent,
     layoutMap,

@@ -7,6 +7,7 @@ import { startProgress, stopProgress } from '@vben/utils';
 
 import { accessRoutes, coreRouteNames } from '#/router/routes';
 import { useAuthStore } from '#/store';
+import { resolveFirstMenuPath } from '#/utils/first-menu-path';
 
 import { generateAccess } from './access';
 
@@ -108,9 +109,18 @@ function setupAccessGuard(router: Router) {
       accessStore.setAccessMenus(accessibleMenus);
       accessStore.setAccessRoutes(accessibleRoutes);
       accessStore.setIsAccessChecked(true);
+
+      // 登录后默认进角色菜单树中的第一个页面（与 admin-plus 一致），而非固定工作台
+      const firstMenuPath = resolveFirstMenuPath(accessibleMenus as any[]);
+      let homePath = userInfo.homePath || preferences.app.defaultHomePath;
+      if (firstMenuPath) {
+        homePath = firstMenuPath;
+        userStore.setUserInfo({ ...userInfo, homePath: firstMenuPath });
+      }
+
       const redirectPath = (from.query.redirect ??
         (to.path === preferences.app.defaultHomePath
-          ? userInfo.homePath || preferences.app.defaultHomePath
+          ? homePath
           : to.fullPath)) as string;
 
       return {

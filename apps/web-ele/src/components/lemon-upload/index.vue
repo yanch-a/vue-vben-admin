@@ -68,7 +68,16 @@ const data = computed(() => ({
 
 function resolveUrl(url?: string) {
   if (!url) return '';
-  if (url.startsWith('http') || url.startsWith('blob:')) return url;
+  if (url.startsWith('http') || url.startsWith('blob:') || url.startsWith('data:')) {
+    return url;
+  }
+  // public 目录下的站点根静态资源，不要拼 API 前缀（/lemon）
+  if (
+    /^\/(logo|login-bg|favicon)(\.|$)/i.test(url) ||
+    url.startsWith('/assets/')
+  ) {
+    return url;
+  }
   return `${baseURL}${url.startsWith('/') ? '' : '/'}${url}`;
 }
 
@@ -185,7 +194,7 @@ watch(
       {
         id: 'preview',
         name: '图片',
-        url: val.startsWith('http') ? val : `${baseURL}${val}`,
+        url: resolveUrl(val),
         status: 'success',
         uid: Date.now(),
       } as any,
