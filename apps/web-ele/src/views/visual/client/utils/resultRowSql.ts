@@ -80,6 +80,22 @@ export function buildInsertSql(
 }
 
 /**
+ * 批量生成 INSERT（每行一条），用于结果集导出 .sql
+ * @author yanch
+ */
+export function buildInsertSqlBatch(
+  ref: TableRef,
+  rows: Record<string, any>[],
+  columns: string[],
+  dbType = 'MY_SQL',
+): string {
+  if (!rows?.length) {
+    throw new Error('没有可导出的数据行');
+  }
+  return rows.map((row) => buildInsertSql(ref, row, columns, dbType)).join('\n');
+}
+
+/**
  * 生成 UPDATE：SET 用编辑后的值，WHERE 用原始行（优先主键列）
  */
 export function buildUpdateSql(

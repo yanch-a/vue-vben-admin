@@ -34,6 +34,13 @@ export default async function request(config: {
     });
   }
 
+  // 文件流（xlsx / sql 等）直接返回 Blob，切勿包成 { code, data }，
+  // 否则调用方 new Blob([包装对象]) 会得到伪文件，Excel 报「扩展名或格式错误」。
+  // @author yanch
+  if (config.responseType === 'blob') {
+    return body;
+  }
+
   // 已是标准 body。responseReturn:'body' 时拦截器不校验业务码，这里补校验，
   // 否则 code=-1 会被当成成功，调用方拿不到错误信息（结果区空白）。
   if (body && typeof body === 'object' && 'code' in body) {

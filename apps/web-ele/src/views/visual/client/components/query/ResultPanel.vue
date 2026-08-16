@@ -1,7 +1,8 @@
 <script lang="ts" setup>
 /**
  * 查询结果面板
- * - 选中行右键：修改（弹窗）/ 删除 / 拷贝 INSERT / 拷贝 UPDATE
+ * - 工具栏：导出 Excel/SQL、复制全部/选定行（TSV 可粘贴 Excel）
+ * - 选中行右键：修改（弹窗）/ 删除 / 拷贝 INSERT / 拷贝 UPDATE / 复制行
  * @author yanch
  */
 import type { QueryResultState } from '../../composables/useQueryTabs';
@@ -11,6 +12,7 @@ import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 
 import { ElMessage, ElMessageBox } from 'element-plus';
 
+import { buildResultTsv } from '../../utils/resultClipboard';
 import {
   buildDeleteSql,
   buildInsertSql,
@@ -38,15 +40,26 @@ const emit = defineEmits<{
   /** 执行 DML 后由父级刷新结果 */
   'run-dml': [sql: string];
   /** 请求后台重查并导出 xlsx */
-  export: [];
+  'export-excel': [];
+  /** 请求后台重查并按方言导出 INSERT .sql */
+  'export-sql': [];
 }>();
 
 const canExport = computed(
   () => !!(props.result?.sourceSql && String(props.result.sourceSql).trim()),
 );
 
+const canCopyRows = computed(
+  () => !!(props.result?.columns?.length && props.result?.rows?.length),
+);
+
 const selectedRow = ref<Record<string, any> | null>(null);
 const selectedIndex = ref(-1);
+/** 多选行（用于「复制选定行」） */
+const selectedRows = ref<Record<string, any>[]>([]);
+const tableElRef = ref<{ getSelectionRows?: () => Record<string, any>[] } | null>(
+  null,
+);
 
 const ctxMenu = reactive({
   visible: false,
@@ -76,8 +89,8 @@ function onRowContextMenu(row: Record<string, any>, _col: any, event: MouseEvent
   selectedRow.value = row;
   selectedIndex.value = props.result?.rows?.indexOf(row) ?? -1;
   const pad = 8;
-  const menuW = 200;
-  const menuH = 160;
+  const menuW = 220;
+  const menuH = 260;
   let x = event.clientX;
   let y = event.clientY;
   if (x + menuW > window.innerWidth - pad) x = window.innerWidth - menuW - pad;
@@ -90,6 +103,10 @@ function onRowContextMenu(row: Record<string, any>, _col: any, event: MouseEvent
 function onCurrentChange(row: Record<string, any> | undefined) {
   selectedRow.value = row || null;
   selectedIndex.value = row && props.result?.rows ? props.result.rows.indexOf(row) : -1;
+}
+
+function onSelectionChange(rows: Record<string, any>[]) {
+  selectedRows.value = rows || [];
 }
 
 async function copyText(text: string, tip: string) {
@@ -113,6 +130,79 @@ function requireTable(): TableRef {
     throw new Error('无法识别结果对应的表，请使用单表 SELECT（如 SELECT * FROM db.table）');
   }
   return props.tableRef;
+}
+
+/**
+ * 复制结果行到剪切板（TSV + 表头，可粘贴 Excel）
+ * @author yanch
+ */
+function copyRowsToClipboard(rows: Record<string, any>[], tip: string) {
+  if (!columns.value.length) {
+    ElMessage.warning('暂无结果列');
+    return;
+  }
+  if (!rows.length) {
+    ElMessage.warning('没有可复制的行');
+    return;
+  }
+  const tsv = buildResultTsv(columns.value, rows);
+  copyText(tsv, tip);
+}
+
+function onCopyAllRows() {
+  closeCtxMenu();
+  const rows = props.result?.rows || [];
+  copyRowsToClipboard(rows, `已复制全部 ${rows.length} 行（含表头）`);
+}
+
+function onCopySelectedRows() {
+  closeCtxMenu();
+  // 优先用多选；若无多选但有当前高亮行，则复制该行
+  let rows = selectedRows.value.length
+    ? selectedRows.value
+    : tableElRef.value?.getSelectionRows?.() || [];
+  if (!rows.length && selectedRow.value) {
+    rows = [selectedRow.value];
+  }
+  if (!rows.length) {
+    ElMessage.warning('请先勾选或点击选中要复制的行');
+    return;
+  }
+  copyRowsToClipboard(rows, `已复制选定 ${rows.length} 行（含表头）`);
+}
+
+/**
+ * 导出 SQL：交由父级走后台方言生成（多库兼容）
+ * @author yanch
+ */
+function onExportSql() {
+  if (!props.result?.sourceSql?.trim()) {
+    ElMessage.warning('没有可导出的查询 SQL，请先执行查询');
+    return;
+  }
+  try {
+    requireTable();
+  } catch (e: any) {
+    ElMessage.warning(e?.message || '无法识别结果对应的表');
+    return;
+  }
+  emit('export-sql');
+}
+
+function onExportCommand(cmd: string) {
+  if (cmd === 'excel') {
+    emit('export-excel');
+  } else if (cmd === 'sql') {
+    onExportSql();
+  }
+}
+
+function onCopyCommand(cmd: string) {
+  if (cmd === 'all') {
+    onCopyAllRows();
+  } else if (cmd === 'selected') {
+    onCopySelectedRows();
+  }
 }
 
 function onCopyInsert() {
@@ -241,6 +331,7 @@ watch(
   () => {
     selectedRow.value = null;
     selectedIndex.value = -1;
+    selectedRows.value = [];
     closeCtxMenu();
   },
 );
@@ -261,15 +352,41 @@ watch(
         <span v-if="tableRef?.table" class="table-hint">
           表：{{ tableRef.schema ? `${tableRef.schema}.` : '' }}{{ tableRef.table }}
         </span>
-        <ElButton
-          link
-          type="primary"
-          :loading="exporting"
-          :disabled="!canExport || executing"
-          @click="emit('export')"
+        <ElDropdown
+          trigger="click"
+          :disabled="!canCopyRows || executing"
+          @command="onCopyCommand"
         >
-          导出 Excel
-        </ElButton>
+          <ElButton link type="primary" :disabled="!canCopyRows || executing">
+            复制
+          </ElButton>
+          <template #dropdown>
+            <ElDropdownMenu>
+              <ElDropdownItem command="all">复制所有行到剪切板</ElDropdownItem>
+              <ElDropdownItem command="selected">复制选定行到剪切板</ElDropdownItem>
+            </ElDropdownMenu>
+          </template>
+        </ElDropdown>
+        <ElDropdown
+          trigger="click"
+          :disabled="!canExport || executing"
+          @command="onExportCommand"
+        >
+          <ElButton
+            link
+            type="primary"
+            :loading="exporting"
+            :disabled="!canExport || executing"
+          >
+            导出
+          </ElButton>
+          <template #dropdown>
+            <ElDropdownMenu>
+              <ElDropdownItem command="excel">导出 Excel</ElDropdownItem>
+              <ElDropdownItem command="sql">导出 SQL</ElDropdownItem>
+            </ElDropdownMenu>
+          </template>
+        </ElDropdown>
         <ElButton link type="primary" @click="emit('update:visible', false)">隐藏</ElButton>
       </div>
     </div>
@@ -277,6 +394,7 @@ watch(
       <template v-if="activeTab === 'result'">
         <ElTable
           v-if="result?.columns?.length"
+          ref="tableElRef"
           :data="result.rows"
           border
           stripe
@@ -284,8 +402,10 @@ watch(
           size="small"
           highlight-current-row
           @current-change="onCurrentChange"
+          @selection-change="onSelectionChange"
           @row-contextmenu="onRowContextMenu"
         >
+          <ElTableColumn type="selection" width="42" fixed />
           <ElTableColumn
             v-for="col in result.columns"
             :key="col"
@@ -321,6 +441,17 @@ watch(
         </div>
         <div class="item danger" :class="{ disabled: !canMutate }" @click="canMutate && onDelete()">
           删除
+        </div>
+        <div class="divider" />
+        <div class="item" :class="{ disabled: !canCopyRows }" @click="canCopyRows && onCopyAllRows()">
+          复制所有行到剪切板
+        </div>
+        <div
+          class="item"
+          :class="{ disabled: !canCopyRows }"
+          @click="canCopyRows && onCopySelectedRows()"
+        >
+          复制选定行到剪切板
         </div>
         <div class="divider" />
         <div class="item" :class="{ disabled: !canMutate }" @click="canMutate && onCopyInsert()">

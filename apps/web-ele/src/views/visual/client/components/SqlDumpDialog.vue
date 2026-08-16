@@ -115,7 +115,7 @@ async function onExport() {
   }
   exporting.value = true;
   try {
-    const blob: any = await exportSqlDump({
+    const res: any = await exportSqlDump({
       dbConfigId: props.dbConfigId,
       instanceName: props.instanceName,
       tableNames: checkedTables.value,
@@ -130,10 +130,18 @@ async function onExport() {
       convertBlobToHex: form.convertBlobToHex,
       maxRows: visualClientConfig.exportMaxRows,
     });
+    // 兼容直出 Blob 与历史 { data: Blob } 包装，避免伪 .sql 文件
+    // @author yanch
     const fileBlob =
-      blob instanceof Blob
-        ? blob
-        : new Blob([blob], { type: 'application/sql;charset=UTF-8' });
+      res instanceof Blob
+        ? res
+        : res?.data instanceof Blob
+          ? res.data
+          : null;
+    if (!fileBlob) {
+      ElMessage.error('导出失败：未收到有效文件');
+      return;
+    }
     if (fileBlob.type && fileBlob.type.includes('application/json')) {
       const text = await fileBlob.text();
       let msg = '导出失败';

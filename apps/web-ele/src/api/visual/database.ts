@@ -126,6 +126,26 @@ export function exportSqlExcel(data: {
 }
 
 /**
+ * 自由 SQL 导出 INSERT：后台重查后按库方言生成 .sql（blob）
+ * @author yanch
+ */
+export function exportSqlInsert(data: {
+  dbConfigId: number | string
+  instanceName?: string
+  sql: string
+  tableName: string
+  schemaName?: string
+  maxRows?: number
+}) {
+  return request({
+    url: databaseUrl + 'exportSqlInsert',
+    method: 'post',
+    responseType: 'blob',
+    data,
+  })
+}
+
+/**
  * 表结构/数据 SQL 转储导出（blob .sql）
  * @author yanch
  */

@@ -9,7 +9,7 @@
 import { computed, nextTick, onBeforeUnmount, reactive, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
 
-import { executeDml, executeSql, exportSqlExcel, getInstances, getTableColumns, getTableDDL, getTables } from '#/api/visual/database';
+import { executeDml, executeSql, exportSqlExcel, exportSqlInsert, getInstances, getTableColumns, getTableDDL, getTables } from '#/api/visual/database';
 import {
   addSavedQuery,
   deleteSavedQuery,
@@ -615,14 +615,55 @@ async function onExportExcel() {
     ElMessage.warning(`请先选择${instanceLabel.value}实例`);
     return;
   }
-  await downloadExcelBlob(
-    {
-      dbConfigId: activeConnection.value.id,
-      instanceName: activeTab.value.instanceName,
-      sql,
-      maxRows: visualClientConfig.exportMaxRows,
-    },
+  await downloadFileBlob(
+    () =>
+      exportSqlExcel({
+        dbConfigId: activeConnection.value!.id,
+        instanceName: activeTab.value!.instanceName,
+        sql,
+        maxRows: visualClientConfig.exportMaxRows,
+      }),
     `SQL导出_${Date.now()}.xlsx`,
+    '导出成功',
+  );
+}
+
+/**
+ * 导出当前结果为 INSERT .sql：后台重查 + 库方言拼装（多库兼容）
+ * @author yanch
+ */
+async function onExportSqlInsert() {
+  if (!activeConnection.value || !activeTab.value) return;
+  const sql = activeTab.value.result?.sourceSql?.trim();
+  if (!sql) {
+    ElMessage.warning('没有可导出的查询 SQL，请先执行查询');
+    return;
+  }
+  if (!activeTab.value.instanceName) {
+    ElMessage.warning(`请先选择${instanceLabel.value}实例`);
+    return;
+  }
+  const tableRef = resultTableRef.value;
+  if (!tableRef?.table) {
+    ElMessage.warning('无法识别结果对应的表，请使用单表 SELECT（如 SELECT * FROM db.table）');
+    return;
+  }
+  const schemaPart = tableRef.schema ? `${tableRef.schema}_` : '';
+  await downloadFileBlob(
+    () =>
+      exportSqlInsert({
+        dbConfigId: activeConnection.value!.id,
+        instanceName: activeTab.value!.instanceName,
+        sql,
+        tableName: tableRef.table,
+        schemaName: tableRef.schema,
+        maxRows: visualClientConfig.exportMaxRows,
+      }),
+    `${schemaPart}${tableRef.table}_insert_${Date.now()}.sql`.replace(
+      /[\\/:*?"<>|]/g,
+      '_',
+    ),
+    'SQL 导出成功',
   );
 }
 
@@ -646,14 +687,16 @@ async function exportTableAsExcel(
     tableName,
     schemaName,
   );
-  await downloadExcelBlob(
-    {
-      dbConfigId: activeConnection.value.id,
-      instanceName,
-      sql,
-      maxRows: visualClientConfig.exportMaxRows,
-    },
+  await downloadFileBlob(
+    () =>
+      exportSqlExcel({
+        dbConfigId: activeConnection.value!.id,
+        instanceName,
+        sql,
+        maxRows: visualClientConfig.exportMaxRows,
+      }),
     `${instanceName}_${tableName}.xlsx`,
+    '导出成功',
   );
 }
 
@@ -674,24 +717,33 @@ function buildSelectAllSql(
   );
 }
 
-async function downloadExcelBlob(
-  data: {
-    dbConfigId: number | string;
-    instanceName?: string;
-    sql: string;
-    maxRows?: number;
-  },
+/**
+ * 从接口响应中取出真正的 Blob（兼容直出 Blob 与历史 { data: Blob } 包装）
+ * @author yanch
+ */
+function unwrapFileBlob(res: any): Blob | null {
+  if (res instanceof Blob) return res;
+  if (res?.data instanceof Blob) return res.data;
+  return null;
+}
+
+/**
+ * 通用文件流下载（Excel / SQL INSERT 共用）
+ * @author yanch
+ */
+async function downloadFileBlob(
+  fetchBlob: () => Promise<any>,
   downloadName: string,
+  successTip: string,
 ) {
   exporting.value = true;
   try {
-    const blob: any = await exportSqlExcel(data);
-    const fileBlob =
-      blob instanceof Blob
-        ? blob
-        : new Blob([blob], {
-            type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-          });
+    const res: any = await fetchBlob();
+    const fileBlob = unwrapFileBlob(res);
+    if (!fileBlob) {
+      ElMessage.error('导出失败：未收到有效文件');
+      return;
+    }
     if (fileBlob.type && fileBlob.type.includes('application/json')) {
       const text = await fileBlob.text();
       let msg = '导出失败';
@@ -709,7 +761,7 @@ async function downloadExcelBlob(
     link.download = downloadName;
     link.click();
     window.URL.revokeObjectURL(url);
-    ElMessage.success('导出成功');
+    ElMessage.success(successTip);
   } catch (e: any) {
     ElMessage.error(e?.msg || e?.message || '导出失败');
   } finally {
@@ -1097,7 +1149,8 @@ onBeforeUnmount(() => {
               @update:visible="(v) => (activeTab!.resultVisible = v)"
               @update:active-tab="(v) => (activeTab!.resultTab = v)"
               @run-dml="onRunDml"
-              @export="onExportExcel"
+              @export-excel="onExportExcel"
+              @export-sql="onExportSqlInsert"
             />
           </div>
         </section>
