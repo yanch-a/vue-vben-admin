@@ -1,8 +1,14 @@
 <script lang="ts" setup>
+/**
+ * 客户端顶栏工具条
+ * @author yanch
+ */
 defineOptions({ name: 'ClientToolbar' });
 
 defineProps<{
   hasConnection: boolean;
+  /** 运行中的复制任务数（角标） */
+  copyTaskCount?: number;
 }>();
 
 const emit = defineEmits<{
@@ -12,6 +18,7 @@ const emit = defineEmits<{
   group: [];
   relation: [];
   smart: [];
+  copyTasks: [];
 }>();
 </script>
 
@@ -32,6 +39,19 @@ const emit = defineEmits<{
     <ElButton size="small" type="success" :disabled="!hasConnection" @click="emit('smart')">
       智能生成 SQL
     </ElButton>
+    <ElBadge
+      :value="copyTaskCount || 0"
+      :hidden="!copyTaskCount"
+      class="copy-badge"
+    >
+      <ElButton
+        size="small"
+        :type="copyTaskCount ? 'warning' : 'default'"
+        @click="emit('copyTasks')"
+      >
+        复制任务
+      </ElButton>
+    </ElBadge>
   </div>
 </template>
 
@@ -43,5 +63,8 @@ const emit = defineEmits<{
   padding: 6px 10px;
   border-bottom: 1px solid var(--el-border-color);
   background: var(--el-bg-color);
+}
+.copy-badge {
+  margin-left: 4px;
 }
 </style>

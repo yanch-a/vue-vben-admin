@@ -1,9 +1,9 @@
 <script lang="ts" setup>
 /**
  * 对象树右键菜单（SQLyog 风格）
- * - instance(库)：创建库 / 删除库 / 导入(预留) / 执行 SQL 脚本
- * - tables 文件夹：创建表 / 复制到其它主机(预留)
- * - table：打开表 / 删除表 / 改变表 / 复制 DDL
+ * - instance(库)：创建库 / 删除库 / 导入(预留) / 复制到不同主机 / 执行 SQL 脚本
+ * - tables 文件夹：创建表 / 将表复制到不同主机
+ * - table：打开表 / 删除表 / 改变表 / 复制 DDL / 复制到不同主机
  * - savedQuery：打开 / 重命名 / 删除 / 复制 SQL
  * @author yanch
  */
@@ -68,19 +68,19 @@ function onAction(action: TreeCtxAction) {
         <div class="item danger" @click="onAction('dropDatabase')">删除数据库</div>
         <div class="divider" />
         <div class="item muted" @click="onAction('importData')">导入数据（预留）</div>
+        <div class="item" @click="onAction('copyDbToHost')">将数据库复制到不同主机</div>
         <div class="item" @click="onAction('runSqlScript')">执行 SQL 脚本（预览）</div>
       </template>
       <template v-else-if="isTablesFolder()">
         <div class="item" @click="onAction('createTable')">创建表</div>
-        <div class="item muted" @click="onAction('copyDbToHost')">
-          将数据库复制到不同主机（预留）
-        </div>
+        <div class="item" @click="onAction('copyDbToHost')">将表复制到不同主机</div>
       </template>
       <template v-else-if="isTable()">
         <div class="item" @click="onAction('openTable')">打开表</div>
         <div class="item danger" @click="onAction('dropTable')">删除表</div>
         <div class="item" @click="onAction('alterTable')">改变表</div>
         <div class="item" @click="onAction('copyDdl')">复制 DDL</div>
+        <div class="item" @click="onAction('copyDbToHost')">将表复制到不同主机</div>
         <div class="divider" />
         <div class="item" @click="onAction('exportTableExcel')">导出为 Excel</div>
         <div class="item" @click="onAction('exportTableSql')">导出为 SQL</div>

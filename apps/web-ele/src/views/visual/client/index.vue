@@ -30,7 +30,10 @@ import ResultPanel from './components/query/ResultPanel.vue';
 import SqlEditor from './components/query/SqlEditor.vue';
 import SmartQueryDrawer from './components/SmartQueryDrawer.vue';
 import SqlDumpDialog from './components/SqlDumpDialog.vue';
+import CopyDatabaseDialog from './components/CopyDatabaseDialog.vue';
+import CopyTaskProgressPanel from './components/CopyTaskProgressPanel.vue';
 import { useConnectionStore } from './composables/useConnectionStore';
+import { useCopyTasks } from './composables/useCopyTasks';
 import { setupClientSessionPersist } from './composables/useClientSessionPersist';
 import { notifyClientSessionChange } from './composables/clientSessionNotify';
 import {
@@ -62,6 +65,18 @@ const {
 } = useConnectionStore();
 
 const {
+  tasks: copyTasks,
+  activeTask: copyActiveTask,
+  progressVisible: copyProgressVisible,
+  runningCount: copyRunningCount,
+  onTaskStarted,
+  openTask: openCopyTask,
+  hideProgress: hideCopyProgress,
+  cancelActive: cancelCopyTask,
+  refreshList: refreshCopyTasks,
+} = useCopyTasks();
+
+const {
   MAX_TABS,
   tabs,
   activeTabId,
@@ -88,6 +103,13 @@ const exporting = ref(false);
 
 /** SQL 转储对话框 */
 const sqlDump = reactive({
+  visible: false,
+  instanceName: '',
+  preselectedTables: [] as string[],
+});
+
+/** 跨主机复制对话框 */
+const copyDb = reactive({
   visible: false,
   instanceName: '',
   preselectedTables: [] as string[],
@@ -310,9 +332,20 @@ async function onTreeContextAction(payload: {
 
   switch (action) {
     case 'importData':
-    case 'copyDbToHost':
       ElMessage.info('功能预留，后续版本开放');
       return;
+    case 'copyDbToHost': {
+      copyDb.instanceName = instanceName;
+      // 单表右键：预勾选该表；库/tables 文件夹：默认全选（对话框内加载后处理）
+      copyDb.preselectedTables =
+        node?.nodeType === 'table' ? [tableName].filter(Boolean) : [];
+      if (!copyDb.instanceName) {
+        ElMessage.warning('请先选择数据库实例');
+        return;
+      }
+      copyDb.visible = true;
+      return;
+    }
     case 'openTable':
       onOpenTable({ instanceName, tableName });
       return;
@@ -965,6 +998,31 @@ function onSmartSql(sql: string) {
   if (!tab) ElMessage.warning(`同一连接最多 ${MAX_TABS} 个查询编辑器`);
 }
 
+/** 打开复制任务列表面板 */
+async function onOpenCopyTasks() {
+  await refreshCopyTasks();
+  if (!copyTasks.value.length) {
+    ElMessage.info('暂无复制任务');
+    return;
+  }
+  const running = copyTasks.value.find(
+    (t) => t.status === 'PENDING' || t.status === 'RUNNING',
+  );
+  openCopyTask((running || copyTasks.value[0]).taskId);
+}
+
+async function onCancelCopyTask() {
+  try {
+    await ElMessageBox.confirm('确认取消当前复制任务？', '取消确认', {
+      type: 'warning',
+    });
+    await cancelCopyTask();
+    ElMessage.success('已请求取消');
+  } catch {
+    /* 用户取消确认框 */
+  }
+}
+
 /** ---------- 上下拖拽调整编辑器 / 结果区高度 ---------- */
 let resizing = false;
 let startY = 0;
@@ -1013,12 +1071,14 @@ onBeforeUnmount(() => {
     <div class="db-client">
       <ClientToolbar
         :has-connection="hasConnection"
+        :copy-task-count="copyRunningCount"
         @create="onCreateConnection"
         @open="onOpenConnection"
         @refresh="filterText = filterText"
         @group="goGroup"
         @relation="goRelation"
         @smart="smartVisible = true"
+        @copy-tasks="onOpenCopyTasks"
       />
       <ConnectionTabs
         :connections="openConnections"
@@ -1175,6 +1235,24 @@ onBeforeUnmount(() => {
       :db-type="activeConnection?.dbType"
       :instance-name="sqlDump.instanceName"
       :preselected-tables="sqlDump.preselectedTables"
+    />
+
+    <CopyDatabaseDialog
+      v-model="copyDb.visible"
+      :source-connection="activeConnection"
+      :source-instance="copyDb.instanceName"
+      :preselected-tables="copyDb.preselectedTables"
+      :open-connections="openConnections"
+      @started="onTaskStarted"
+    />
+
+    <CopyTaskProgressPanel
+      v-model="copyProgressVisible"
+      :task="copyActiveTask"
+      :tasks="copyTasks"
+      @hide="hideCopyProgress"
+      @cancel="onCancelCopyTask"
+      @select="openCopyTask"
     />
 
     <ElDialog
