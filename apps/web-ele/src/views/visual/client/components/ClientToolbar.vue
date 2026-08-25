@@ -17,6 +17,8 @@ const emit = defineEmits<{
   refresh: [];
   group: [];
   relation: [];
+  /** 已保存查询文件管理 */
+  savedQueries: [];
   smart: [];
   copyTasks: [];
 }>();
@@ -35,6 +37,9 @@ const emit = defineEmits<{
     </ElButton>
     <ElButton size="small" :disabled="!hasConnection" @click="emit('relation')">
       关系画布
+    </ElButton>
+    <ElButton size="small" @click="emit('savedQueries')">
+      查询文件
     </ElButton>
     <ElButton size="small" type="success" :disabled="!hasConnection" @click="emit('smart')">
       智能生成 SQL

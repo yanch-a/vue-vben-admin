@@ -6,7 +6,15 @@
  * - 左：对象树（含 Queries 已保存查询）；右：多查询 Tab + 库下拉 + SQL 编辑器 + 结果区
  * @author yanch
  */
-import { computed, nextTick, onBeforeUnmount, reactive, ref, watch } from 'vue';
+import {
+  computed,
+  nextTick,
+  onBeforeUnmount,
+  onMounted,
+  reactive,
+  ref,
+  watch,
+} from 'vue';
 import { useRouter } from 'vue-router';
 
 import { executeDml, executeSql, exportSqlExcel, exportSqlInsert, getInstances, getTableColumns, getTableDDL, getTables } from '#/api/visual/database';
@@ -15,6 +23,7 @@ import {
   deleteSavedQuery,
   editSavedQuery,
 } from '#/api/visual/savedQuery';
+import { getDbConfigById } from '#/api/visual/vq';
 import { Page } from '@vben/common-ui';
 
 import { ElMessage, ElMessageBox } from 'element-plus';
@@ -36,6 +45,10 @@ import { useConnectionStore } from './composables/useConnectionStore';
 import { useCopyTasks } from './composables/useCopyTasks';
 import { setupClientSessionPersist } from './composables/useClientSessionPersist';
 import { notifyClientSessionChange } from './composables/clientSessionNotify';
+import {
+  consumePendingSavedQueryOpen,
+  peekPendingSavedQueryOpen,
+} from './composables/usePendingSavedQuery';
 import {
   applyQueryTabsSnapshot,
   getQueryTabsSnapshot,
@@ -278,6 +291,88 @@ function goRelation() {
     name: 'RelationCanvas',
     query: { id: String(activeConnection.value.id) },
   });
+}
+
+/** 打开已保存查询文件管理页（分组 / 树 / 搜索） */
+function goSavedQueryManage() {
+  router.push({ name: 'SavedQueryManage' });
+}
+
+/** 防止管理页打开查询时并发重复消费 */
+let consumingPendingSavedQuery = false;
+
+/**
+ * 消费管理页「打开查询」请求：切到目标连接并打开 SQL 编辑器。
+ * 会话 restore 可能覆盖管理页刚 open 的连接，故此处缺连接时会再拉配置打开。
+ */
+async function tryConsumePendingSavedQuery() {
+  if (consumingPendingSavedQuery) return;
+  const pending = peekPendingSavedQueryOpen();
+  if (!pending) return;
+  consumingPendingSavedQuery = true;
+  try {
+    let conn = openConnections.value.find(
+      (c) => String(c.id) === String(pending.dbConfigId),
+    );
+    if (!conn) {
+      try {
+        const res: any = await getDbConfigById({ id: pending.dbConfigId });
+        const cfg = res?.data || res;
+        if (!cfg?.id) {
+          ElMessage.error('目标连接不存在或无权访问');
+          consumePendingSavedQueryOpen();
+          return;
+        }
+        if (cfg.connectionStatus === 0) {
+          ElMessage.warning('目标连接已禁用');
+          consumePendingSavedQueryOpen();
+          return;
+        }
+        const result = openConnection({
+          id: cfg.id,
+          dbName: cfg.dbName,
+          schemaName: cfg.schemaName,
+          dbType: cfg.dbType,
+          dbHost: cfg.dbHost,
+          dbPort: cfg.dbPort,
+          username: cfg.username,
+          description: cfg.description,
+          connectionStatus: cfg.connectionStatus,
+        });
+        if (!result.ok) {
+          if (result.reason === 'max') {
+            ElMessage.warning(
+              `最多同时打开 ${visualClientConfig.maxOpenConnections} 个数据库连接，请先关闭其它连接`,
+            );
+          }
+          return;
+        }
+        conn = openConnections.value.find(
+          (c) => String(c.id) === String(pending.dbConfigId),
+        );
+      } catch (e: any) {
+        ElMessage.error(e?.msg || e?.message || '打开连接失败');
+        consumePendingSavedQueryOpen();
+        return;
+      }
+    }
+    if (!conn) return;
+
+    consumePendingSavedQueryOpen();
+    setActiveConnection(conn.id);
+    await nextTick();
+    const tab = openSqlInNewTab(
+      pending.sqlText || '',
+      pending.queryName,
+      pending.instanceName,
+      pending.id,
+    );
+    if (!tab) {
+      ElMessage.warning(`同一连接最多 ${MAX_TABS} 个查询编辑器`);
+    }
+  } finally {
+    consumingPendingSavedQuery = false;
+  }
 }
 
 /** 双击表：新查询 Tab 预填 SELECT（按方言限行） */
@@ -854,6 +949,30 @@ function onSaveQuery() {
   saveDialog.visible = true;
 }
 
+/**
+ * 拖入 .sql/.txt：内容已写入编辑器，弹出保存对话框并预填文件名，保存到当前库。
+ */
+async function onImportSqlFile(payload: { fileName: string; content: string }) {
+  if (!activeConnection.value || !activeTab.value) return;
+  if (!activeTab.value.instanceName) {
+    ElMessage.warning(`请先选择${instanceLabel.value}后再保存导入的查询`);
+    return;
+  }
+  // 去掉扩展名作为默认查询名
+  const base = (payload.fileName || 'imported')
+    .replace(/\.(sql|txt)$/i, '')
+    .trim()
+    .slice(0, 100);
+  activeTab.value.sql = payload.content;
+  // 导入视为新建保存，不覆盖已有关联
+  activeTab.value.savedQueryId = undefined;
+  activeTab.value.title = base || 'imported';
+  saveDialog.mode = 'create';
+  saveDialog.queryName = base || 'imported';
+  saveDialog.visible = true;
+  ElMessage.success('已导入文件内容，请确认名称后保存到当前库');
+}
+
 /** 另存为：强制新建一条 */
 function onSaveQueryAs() {
   if (!activeConnection.value || !activeTab.value) return;
@@ -1060,6 +1179,21 @@ function onSplitterUp() {
   window.removeEventListener('mouseup', onSplitterUp);
 }
 
+onMounted(() => {
+  // 管理页跳转过来时：等会话恢复后再尝试打开查询
+  nextTick(() => {
+    void tryConsumePendingSavedQuery();
+  });
+});
+
+/** 连接列表变化时再试一次（管理页先开连接再跳转时可能晚一拍） */
+watch(
+  () => openConnections.value.map((c) => c.id).join(','),
+  () => {
+    void tryConsumePendingSavedQuery();
+  },
+);
+
 onBeforeUnmount(() => {
   onSplitterUp();
   sessionPersist.stop();
@@ -1077,6 +1211,7 @@ onBeforeUnmount(() => {
         @refresh="filterText = filterText"
         @group="goGroup"
         @relation="goRelation"
+        @saved-queries="goSavedQueryManage"
         @smart="smartVisible = true"
         @copy-tasks="onOpenCopyTasks"
       />
@@ -1181,6 +1316,7 @@ onBeforeUnmount(() => {
               :load-tables="loadEditorTables"
               @execute="runSql"
               @save="onSaveQuery"
+              @import-file="onImportSqlFile"
             />
           </div>
 

@@ -9,6 +9,7 @@
   import { useRouter } from 'vue-router'
 
   import { getMemberLevelList } from '@/api/member/memberLevelApi'
+  import { getMemberUserGroupList } from '@/api/member/memberUserGroup'
   import { doDelete, getPage } from '@/api/member/memberUserApi'
   import { dictConvertObj } from '@/utils/convert'
   import { Delete, Edit as EditIcon, Plus, Search } from '@element-plus/icons-vue'
@@ -26,10 +27,12 @@
         total: 0,
         selectRows: '',
         userLevelOptions: [],
+        userGroupOptions: [],
         queryForm: {
           pageNum: 1,
           pageSize: 10,
           memberLevelId: undefined,
+          userGroup: undefined,
         },
       })
 
@@ -103,8 +106,20 @@
         const { data } = await getMemberLevelList({})
         state.userLevelOptions = data || []
       }
+      const loadUserGroupOptions = async () => {
+        const { data } = await getMemberUserGroupList({})
+        state.userGroupOptions = data || []
+      }
+      const groupNameOf = (userGroup) => {
+        if (userGroup == null || userGroup === '') return '-'
+        const g = state.userGroupOptions.find(
+          (item) => String(item.id) === String(userGroup),
+        )
+        return g ? g.groupName : userGroup
+      }
       onMounted(() => {
         loadUserLevelOptions()
+        loadUserGroupOptions()
         fetchData()
       })
       return {
@@ -116,6 +131,7 @@
         handleCurrentChange,
         queryData,
         fetchData,
+        groupNameOf,
         Plus,
         Delete,
         EditIcon,
@@ -186,6 +202,21 @@
             </el-select>
           </el-form-item>
           <el-form-item>
+            <el-select
+              v-model="queryForm.userGroup"
+              clearable
+              placeholder="请选择会员分组"
+              style="width: 160px"
+            >
+              <el-option
+                v-for="item in userGroupOptions"
+                :key="item.id"
+                :label="item.groupName"
+                :value="item.id"
+              />
+            </el-select>
+          </el-form-item>
+          <el-form-item>
             <el-button :icon="Search" type="primary" @click="queryData">
               查询
             </el-button>
@@ -225,6 +256,11 @@
         label="会员等级"
         prop="memberLevel.levelName"
       />
+      <el-table-column align="center" label="会员分组" min-width="120">
+        <template #default="{ row }">
+          {{ groupNameOf(row.userGroup) }}
+        </template>
+      </el-table-column>
       <el-table-column align="center" label="性别" prop="sex" />
       <el-table-column
         align="center"

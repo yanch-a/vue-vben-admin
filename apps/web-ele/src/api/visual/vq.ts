@@ -271,11 +271,15 @@ export function saveQueryItems(queryConfigId: string, data: any ) {
 }
 
 /** ********************************** TableRelationshipController *********************************/
-/** 按数据库加载整张关系网（含字段映射），用于关系画布回显 */
-export function loadRelationCanvas(dbConfigId: string) {
+/** 按数据库加载关系网；可选 canvasGroupId */
+export function loadRelationCanvas(
+  dbConfigId: string | number,
+  canvasGroupId?: string | number | null,
+) {
   return request({
     url: tableRelationshipUrl + 'loadCanvas/' + dbConfigId,
     method: 'get',
+    params: canvasGroupId != null && canvasGroupId !== '' ? { canvasGroupId } : undefined,
   })
 }
 
@@ -347,11 +351,15 @@ export function previewQuerySql(configId: string) {
   })
 }
 
-/** 根据勾选字段预览 SQL */
+/** 根据勾选字段或草稿配置项预览 SQL */
 export function previewSqlBySelection(data: {
   dbConfigId: number | string
   groupId?: number | string
-  fieldIds: Array<number | string>
+  fieldIds?: Array<number | string>
+  items?: any[]
+  selectDistinct?: number
+  canvasGroupIds?: Array<number | string>
+  configId?: number | string
 }) {
   return request({
     url: queryExecuteUrl + 'previewSqlBySelection',
@@ -376,5 +384,90 @@ export function exportQueryExcel(configId: string, limit?: number) {
     method: 'post',
     responseType: 'blob',
     data: { configId, limit },
+  })
+}
+
+/** ********************************** DbConfig 授权 / 画布分组 *********************************/
+const dbConfigUserUrl = adminUrl + '/dbConfigUser/'
+const relationCanvasGroupUrl = adminUrl + '/relationCanvasGroup/'
+const memberUserGroupUrl = adminUrl + '/member/memberUserGroup/'
+
+/** 授权列表 */
+export function listDbConfigUsers(dbConfigId: number | string) {
+  return request({
+    url: dbConfigUserUrl + 'list/' + dbConfigId,
+    method: 'get',
+  })
+}
+
+/** 全量替换授权 */
+export function replaceDbConfigUsers(data: {
+  dbConfigId: number | string
+  grants: Array<{ memberUserId: number | string; canUse?: number; canEditCanvas?: number }>
+}) {
+  return request({
+    url: dbConfigUserUrl + 'replace',
+    method: 'post',
+    data,
+  })
+}
+
+/** 画布分组列表（按库可见） */
+export function listRelationCanvasGroups(dbConfigId: number | string) {
+  return request({
+    url: relationCanvasGroupUrl + 'listByDb/' + dbConfigId,
+    method: 'get',
+  })
+}
+
+export function addRelationCanvasGroup(data: any) {
+  return request({
+    url: relationCanvasGroupUrl + 'add',
+    method: 'post',
+    data,
+  })
+}
+
+export function editRelationCanvasGroup(data: any) {
+  return request({
+    url: relationCanvasGroupUrl + 'doEdit',
+    method: 'post',
+    data,
+  })
+}
+
+export function deleteRelationCanvasGroup(id: number | string) {
+  return request({
+    url: relationCanvasGroupUrl + 'del/' + id,
+    method: 'get',
+  })
+}
+
+/** 查询配置选用画布 */
+export function replaceQueryConfigCanvas(data: {
+  configId: number | string
+  canvasGroupIds: Array<number | string>
+}) {
+  return request({
+    url: queryConfigUrl + 'replaceCanvas',
+    method: 'post',
+    data,
+  })
+}
+
+/** 会员组列表 */
+export function listMemberUserGroups(params?: any) {
+  return request({
+    url: memberUserGroupUrl + 'getList',
+    method: 'get',
+    params,
+  })
+}
+
+/** 会员组内用户 */
+export function listMemberUsersByGroup(groupId: number | string) {
+  return request({
+    url: memberUserGroupUrl + 'users/' + groupId,
+    method: 'get',
   })
 }

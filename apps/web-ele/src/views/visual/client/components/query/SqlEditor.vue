@@ -6,6 +6,7 @@
  * - Ctrl+S 保存
  * - F12 格式化当前选区或光标所在语句
  * - 智能补全：写表名用本地表清单；写字段名按需拉列并缓存；Tab 接受建议
+ * - 拖入 .sql / .txt：解析文本写入编辑器，并通知父级保存到当前库
  * @author yanch
  */
 import * as monaco from 'monaco-editor';
@@ -39,6 +40,10 @@ self.MonacoEnvironment = {
 
 defineOptions({ name: 'SqlEditor' });
 
+/** 拖入文件大小上限 2MB，与后端 SQL_TEXT_MAX 对齐 */
+const MAX_IMPORT_BYTES = 2 * 1024 * 1024;
+const ALLOWED_EXT = new Set(['.sql', '.txt']);
+
 const props = defineProps<{
   modelValue: string;
   dbConfigId?: number | string;
@@ -61,15 +66,108 @@ const emit = defineEmits<{
   'update:modelValue': [string];
   execute: [];
   save: [];
+  /**
+   * 从本地文件导入 SQL 后通知父级：
+   * 内容已写入编辑器，父级负责保存到当前连接+库
+   */
+  importFile: [{ fileName: string; content: string }];
 }>();
 
 const { isDark } = usePreferences();
 const container = ref<HTMLDivElement>();
+const wrapEl = ref<HTMLDivElement>();
+const dragOver = ref(false);
 let editor: monaco.editor.IStandaloneCodeEditor | null = null;
 let completionDisposable: monaco.IDisposable | null = null;
 
 function themeName() {
   return isDark.value ? 'vs-dark' : 'vs';
+}
+
+/**
+ * 校验并读取拖入的文本文件
+ */
+async function readImportFile(
+  file: File,
+): Promise<{ fileName: string; content: string } | null> {
+  const name = file.name || '';
+  const dot = name.lastIndexOf('.');
+  const ext = dot >= 0 ? name.slice(dot).toLowerCase() : '';
+  if (!ALLOWED_EXT.has(ext)) {
+    ElMessage.warning('仅支持拖入 .sql 或 .txt 文件');
+    return null;
+  }
+  if (file.size <= 0) {
+    ElMessage.warning('文件为空');
+    return null;
+  }
+  if (file.size > MAX_IMPORT_BYTES) {
+    ElMessage.warning('文件过大（上限 2MB），请拆分后再导入');
+    return null;
+  }
+  // 拒绝明显非文本 MIME（部分系统 type 为空，仍按扩展名放行）
+  if (
+    file.type &&
+    !/^text\//i.test(file.type) &&
+    file.type !== 'application/sql'
+  ) {
+    ElMessage.warning('仅支持文本类 SQL 文件');
+    return null;
+  }
+  try {
+    const content = await file.text();
+    if (!content?.trim()) {
+      ElMessage.warning('文件内容为空');
+      return null;
+    }
+    return { fileName: name, content };
+  } catch {
+    ElMessage.error('读取文件失败');
+    return null;
+  }
+}
+
+function onDragEnter(e: DragEvent) {
+  e.preventDefault();
+  e.stopPropagation();
+  if (e.dataTransfer?.types?.includes('Files')) {
+    dragOver.value = true;
+  }
+}
+
+function onDragOver(e: DragEvent) {
+  e.preventDefault();
+  e.stopPropagation();
+  if (e.dataTransfer) {
+    e.dataTransfer.dropEffect = 'copy';
+  }
+  dragOver.value = true;
+}
+
+function onDragLeave(e: DragEvent) {
+  e.preventDefault();
+  e.stopPropagation();
+  const related = e.relatedTarget as Node | null;
+  if (wrapEl.value && related && wrapEl.value.contains(related)) {
+    return;
+  }
+  dragOver.value = false;
+}
+
+async function onDrop(e: DragEvent) {
+  e.preventDefault();
+  e.stopPropagation();
+  dragOver.value = false;
+  const file = e.dataTransfer?.files?.[0];
+  if (!file) return;
+  const parsed = await readImportFile(file);
+  if (!parsed) return;
+  if (editor) {
+    editor.setValue(parsed.content);
+    editor.focus();
+  }
+  emit('update:modelValue', parsed.content);
+  emit('importFile', parsed);
 }
 
 async function resolveTableNames(schemaHint?: string): Promise<
@@ -79,7 +177,6 @@ async function resolveTableNames(schemaHint?: string): Promise<
   const inst = props.instanceName || '';
   if (dbId == null) return [];
 
-  // 指定了库前缀：优先该库缓存
   if (schemaHint) {
     let list = getRememberedTables(dbId, schemaHint);
     if (!list.length && props.loadTables) {
@@ -89,13 +186,11 @@ async function resolveTableNames(schemaHint?: string): Promise<
     return list;
   }
 
-  // 当前库
   let list = inst ? getRememberedTables(dbId, inst) : [];
   if (!list.length && inst && props.loadTables) {
     const names = await props.loadTables(inst);
     list = names.map((tableName) => ({ tableName, schema: inst }));
   }
-  // 再并入本连接其它已展开库（支持手写其它 db.table）
   const all = getAllRememberedTables(dbId);
   const map = new Map<string, { tableName: string; schema?: string }>();
   [...list, ...all].forEach((t) => {
@@ -140,7 +235,6 @@ function registerCompletion() {
       '(',
     ],
     provideCompletionItems: async (model, position) => {
-      // 只服务当前编辑器 model，避免多 Tab 互相干扰
       if (!editor || model !== editor.getModel()) {
         return { suggestions: [] };
       }
@@ -171,7 +265,6 @@ function registerCompletion() {
               ctx.schema || t.schema !== props.instanceName
                 ? `${t.schema ? t.schema + '.' : ''}${t.tableName}`
                 : t.tableName;
-            // 若用户已输入 schema.，只补全表名段
             const insert = ctx.schema ? t.tableName : label;
             return {
               label,
@@ -185,7 +278,6 @@ function registerCompletion() {
         };
       }
 
-      // column
       if (!ctx.table) {
         return { suggestions: [] };
       }
@@ -216,7 +308,6 @@ onMounted(() => {
     fontSize: 13,
     tabSize: 2,
     scrollBeyondLastLine: false,
-    // Tab 接受补全建议
     tabCompletion: 'on',
     suggestOnTriggerCharacters: true,
     quickSuggestions: { other: true, comments: false, strings: false },
@@ -234,14 +325,12 @@ onMounted(() => {
   editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter, () => {
     emit('execute');
   });
-  // F9：与多数数据库客户端一致的执行快捷键
   editor.addCommand(monaco.KeyCode.F9, () => {
     emit('execute');
   });
   editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => {
     emit('save');
   });
-  // F12：格式化当前选区 / 光标所在语句（与执行切分规则一致）
   editor.addCommand(monaco.KeyCode.F12, () => {
     formatCurrentSql();
   });
@@ -267,7 +356,6 @@ onBeforeUnmount(() => {
   completionDisposable = null;
   editor?.dispose();
   editor = null;
-  // 字段缓存按连接切换清理（见 index），切换 Tab 不清空以便复用
 });
 
 function insertText(text: string) {
@@ -283,9 +371,6 @@ function insertText(text: string) {
   editor.focus();
 }
 
-/**
- * 供父级执行：优先选区，否则光标所在分号语句
- */
 function getExecutableSql(): string {
   if (!editor) return props.modelValue || '';
   const model = editor.getModel();
@@ -304,10 +389,6 @@ function getExecutableSql(): string {
   return extractExecutableSql(value, cursor, selectionRange);
 }
 
-/**
- * 格式化当前选区，或光标所在 SQL 语句，并原地替换。
- * @author yanch
- */
 function formatCurrentSql(): boolean {
   if (!editor) return false;
   const model = editor.getModel();
@@ -355,7 +436,6 @@ function formatCurrentSql(): boolean {
   ]);
   editor.pushUndoStop();
 
-  // 选中格式化后的内容，方便继续编辑 / 确认改动
   const newEnd = model.getPositionAt(target.range.start + formatted.length);
   editor.setSelection(
     new monaco.Selection(
@@ -378,13 +458,47 @@ defineExpose({
 </script>
 
 <template>
-  <div ref="container" class="sql-editor" />
+  <div
+    ref="wrapEl"
+    class="sql-editor-wrap"
+    :class="{ 'is-dragover': dragOver }"
+    @dragenter="onDragEnter"
+    @dragover="onDragOver"
+    @dragleave="onDragLeave"
+    @drop="onDrop"
+  >
+    <div ref="container" class="sql-editor" />
+    <div v-show="dragOver" class="drop-hint">松开以导入 .sql / .txt</div>
+  </div>
 </template>
 
 <style scoped>
+.sql-editor-wrap {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  min-height: 160px;
+}
+.sql-editor-wrap.is-dragover {
+  outline: 2px dashed var(--el-color-primary);
+  outline-offset: -4px;
+}
 .sql-editor {
   width: 100%;
   height: 100%;
   min-height: 160px;
+}
+.drop-hint {
+  pointer-events: none;
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: color-mix(in srgb, var(--el-color-primary) 12%, transparent);
+  color: var(--el-color-primary);
+  font-size: 14px;
+  font-weight: 600;
+  z-index: 2;
 }
 </style>

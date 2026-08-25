@@ -13,3 +13,6 @@ export {
   testConnection,
 } from './database';
 export * from './vq';
+export * from './queryResultFile';
+export * from './savedQuery';
+export * from './dbCopy';

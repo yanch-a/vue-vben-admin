@@ -183,26 +183,6 @@ function collectRouteKeys(menus: RouteRecordStringComponent[]) {
  */
 const HIDDEN_PAGE_ROUTES: RouteRecordStringComponent[] = [
   {
-    name: 'MemberUserDetailRoute',
-    path: '/memberUser/detail',
-    component: '/member/memberUser/MemberUserEdit',
-    meta: {
-      hideInMenu: true,
-      title: '会员详情',
-      activePath: '/member/memberUser',
-    },
-  },
-  {
-    name: 'MemberOrderDetailRoute',
-    path: '/member/memberOrder/detail',
-    component: '/member/memberOrder/MemberOrderView',
-    meta: {
-      hideInMenu: true,
-      title: '订单详情',
-      activePath: '/member/memberOrder',
-    },
-  },
-  {
     name: 'CmsContentInfo',
     path: '/cmsContent/detail',
     component: '/cms/cmsContent/CmsContentEdit',
@@ -241,6 +221,28 @@ const HIDDEN_PAGE_ROUTES: RouteRecordStringComponent[] = [
       title: '数据库客户端',
     },
   },
+  {
+    name: 'SavedQueryManage',
+    path: '/visual/client/savedQueries',
+    component: '/visual/client/savedQueryManage',
+    meta: {
+      hideInMenu: true,
+      title: '查询文件管理',
+      activePath: '/visual/client',
+    },
+  },
+  {
+    name: 'QueryResultShare',
+    path: '/visual/queryResult/share/:shareCode',
+    component: '/visual/visualQuery/share',
+    meta: {
+      hideInMenu: true,
+      hideInTab: true,
+      hideInBreadcrumb: true,
+      noBasicLayout: true,
+      title: '共享查询结果',
+    },
+  },
 ];
 
 function mergeHiddenPageRoutes(
@@ -272,10 +274,14 @@ const COMPONENT_ALIASES: Record<string, string> = {
   '/cmsContent/detail': '/cms/cmsContent/CmsContentEdit',
   '/cms/cmsContent/detail': '/cms/cmsContent/CmsContentEdit',
   '/memberUser/detail': '/member/memberUser/MemberUserEdit',
+  '/member/memberUserGroup': '/member/memberUserGroup/index',
+  '/member/memberUserGroup/index': '/member/memberUserGroup/index',
   '/member/memberOrder/detail': '/member/memberOrder/MemberOrderView',
   '/visual/dbConfig/canvas': '/visual/dbConfig/canvas',
   '/visual/dbConfig/relationCanvas': '/visual/dbConfig/relationCanvas',
   '/visual/client': '/visual/client/index',
+  '/visual/client/savedQueries': '/visual/client/savedQueryManage',
+  '/visual/queryResult/share/:shareCode': '/visual/visualQuery/share',
   '/visual/index': '/visual/client/index',
   '/setting/parameter/index': '/setting/parameter/index',
   '/setting/attachment/index': '/setting/attachment/index',

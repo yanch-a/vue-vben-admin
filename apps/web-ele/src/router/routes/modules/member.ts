@@ -1,9 +1,20 @@
 import type { RouteRecordRaw } from 'vue-router';
 
 /**
- * 会员详情 / 订单详情：列表跳转用，菜单中可能无隐藏路由
+ * 会员详情 / 订单详情 / 会员分组：列表跳转用，菜单中可能无隐藏路由
  */
 const routes: RouteRecordRaw[] = [
+  {
+    name: 'MemberUserGroupRoute',
+    path: '/member/memberUserGroup',
+    // @ts-expect-error Vue SFC
+    component: () => import('#/views/member/memberUserGroup/index.vue'),
+    meta: {
+      hideInMenu: true,
+      title: '会员分组',
+      activePath: '/member/memberUserGroup',
+    },
+  },
   {
     name: 'MemberUserDetailRoute',
     path: '/memberUser/detail',

@@ -29,10 +29,12 @@
 
   import { getInstances, getTables } from '#/api/visual/database'
   import {
+    addRelationCanvasGroup,
     findBestRelationshipPath,
     getCatalogTablesLight,
     getDbConfigById,
     getTablesWithColumnsByIds,
+    listRelationCanvasGroups,
     loadRelationCanvas,
     saveRelationCanvas,
     syncTableToCatalog,
@@ -272,6 +274,11 @@
   const tableFilter = ref('')
   const remoteLoading = ref(false)
   const syncingTableName = ref('')
+
+  /** 画布分组：同一库多套关系网 */
+  const canvasGroups = ref<any[]>([])
+  const currentCanvasGroupId = ref<string | number | null>(null)
+  const creatingCanvasGroup = ref(false)
 
   const schemaOptions = ref<string[]>([])
   const currentSchema = ref('')
@@ -1056,8 +1063,64 @@
     await loadRemoteTables()
   }
 
+  const loadCanvasGroups = async () => {
+    const { data } = await listRelationCanvasGroups(dbConfigId)
+    canvasGroups.value = data || []
+    if (!canvasGroups.value.length) {
+      // 首次进入：自动建默认画布
+      try {
+        const { data: created } = await addRelationCanvasGroup({
+          dbConfigId,
+          groupName: '默认画布',
+          isPublic: 1,
+          orderNum: 0,
+        })
+        if (created?.id) {
+          canvasGroups.value = [created]
+          currentCanvasGroupId.value = created.id
+          return
+        }
+      } catch (e) {
+        console.warn('创建默认画布失败', e)
+      }
+    }
+    if (!currentCanvasGroupId.value && canvasGroups.value.length) {
+      currentCanvasGroupId.value = canvasGroups.value[0].id
+    }
+  }
+
+  const createCanvasGroup = async () => {
+    creatingCanvasGroup.value = true
+    try {
+      const { data } = await addRelationCanvasGroup({
+        dbConfigId,
+        groupName: `画布-${canvasGroups.value.length + 1}`,
+        isPublic: 1,
+        orderNum: canvasGroups.value.length,
+      })
+      await loadCanvasGroups()
+      if (data?.id) {
+        currentCanvasGroupId.value = data.id
+      }
+      await loadData()
+      ElMessage.success('已新建画布分组')
+    } catch (e) {
+      console.error(e)
+      ElMessage.error('新建画布分组失败')
+    } finally {
+      creatingCanvasGroup.value = false
+    }
+  }
+
+  const onCanvasGroupChange = async () => {
+    await loadData()
+  }
+
   const loadData = async () => {
     if (!graph) return
+    if (!canvasGroups.value.length) {
+      await loadCanvasGroups()
+    }
     const [
       { data: config },
       { data: instanceTree },
@@ -1067,7 +1130,7 @@
       getDbConfigById({ id: dbConfigId }),
       getInstances(dbConfigId),
       getCatalogTablesLight(dbConfigId),
-      loadRelationCanvas(dbConfigId),
+      loadRelationCanvas(dbConfigId, currentCanvasGroupId.value),
     ])
     dbConfigName.value = config ? config.dbName : ''
 
@@ -1174,6 +1237,7 @@
     try {
       await saveRelationCanvas({
         dbConfigId,
+        canvasGroupId: currentCanvasGroupId.value,
         nodes: graph.getNodes().map((n) => {
           const pos = n.position()
           const center = topLeftToCenter(pos.x, pos.y)
@@ -1208,6 +1272,9 @@
     const { data } = await findBestRelationshipPath({
       dbConfigId,
       tableIds,
+      canvasGroupIds: currentCanvasGroupId.value
+        ? [currentCanvasGroupId.value]
+        : undefined,
     })
     pathResult.value = data
     pathDialogVisible.value = true
@@ -1252,7 +1319,30 @@
     <div class="canvas-toolbar">
       <div class="toolbar-left">
         <el-button :icon="ArrowLeft" @click="goBack">返回</el-button>
-        <span class="db-title">{{ dbConfigName }} - 关系画布（一张网）</span>
+        <span class="db-title">{{ dbConfigName }} - 关系画布</span>
+        <el-select
+          v-model="currentCanvasGroupId"
+          placeholder="画布分组"
+          size="small"
+          filterable
+          style="width: 180px; margin-left: 12px"
+          @change="onCanvasGroupChange"
+        >
+          <el-option
+            v-for="g in canvasGroups"
+            :key="g.id"
+            :label="g.groupName"
+            :value="g.id"
+          />
+        </el-select>
+        <el-button
+          size="small"
+          :loading="creatingCanvasGroup"
+          style="margin-left: 8px"
+          @click="createCanvasGroup"
+        >
+          新建画布
+        </el-button>
         <span class="canvas-hint">
           空白拖动画布 · 拖节点移动 · 边缘圆点拉线 · 双击表查看信息 · Ctrl+滚轮缩放 ·
           Shift 框选

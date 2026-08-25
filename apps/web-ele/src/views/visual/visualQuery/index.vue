@@ -12,7 +12,13 @@
     watch,
   } from 'vue'
 
-  import { deleteQueryConfig, editQueryConfig, executeQueryConfig, exportQueryExcel, getDbConfigList, getGroupTablesWithColumns, getQueryConfigItems, getQueryConfigList, getTableGroupList, getVqDict, previewQuerySql, saveQueryItems } from '@/api/visual/vq'
+  import { Page } from '@vben/common-ui'
+
+  import { usePreferences } from '@vben/preferences'
+
+  import { deleteQueryConfig, editQueryConfig, executeQueryConfig, exportQueryExcel, getDbConfigList, getGroupTablesWithColumns, getQueryConfigById, getQueryConfigItems, getQueryConfigList, getTableGroupList, getVqDict, listRelationCanvasGroups, previewSqlBySelection, saveQueryItems } from '@/api/visual/vq'
+  import { getLatestQueryResultByConfig, saveQueryResultFile, shareQueryResultFile } from '@/api/visual/queryResultFile'
+  import { formatSqlByDialect } from '../client/utils/formatSql'
   // Univer 0.25+
   import { LocaleType, mergeLocales, Univer } from "@univerjs/core";
   import { FUniver } from "@univerjs/core/facade";
@@ -53,9 +59,11 @@
   
   export default defineComponent({
     name: 'VisualQuery',
+    components: { Page },
     setup() {
       const $baseConfirm = inject('$baseConfirm')
       const $baseMessage = inject('$baseMessage')
+      const { isDark } = usePreferences()
       const univerContainer = ref(null)
       const dbTree = ref(null);
       const configFormRef = ref(null);
@@ -84,12 +92,86 @@
       const hasSelectedFields = computed(() => {
         return state.columnList.length > 0
       })
+
+      /** 当前会话是否有可保存/分享的执行结果 */
+      const hasSessionResult = computed(() => {
+        return !!(state.lastQueryResult?.columns?.length && state.lastQueryResult?.rows?.length)
+      })
+
+      /**
+       * 下拉选项文案：表名.字段名（表别名.字段名）
+       * @author yanch
+       */
+      const buildFieldOptionLabel = (table, field) => {
+        const tableName = table?.tableName || table?.displayName || ''
+        const fieldName = field?.fieldName || field?.displayName || ''
+        const tableAlias = table?.alias || tableName
+        return `${tableName}.${fieldName}（${tableAlias}.${fieldName}）`
+      }
+
+      /** 条件/分组/排序下拉：仅已勾选字段 */
+      const selectedFieldOptions = computed(() => {
+        return state.columnList.map((field) => {
+          const table = findTableMeta(field.tableId) || field
+          return {
+            id: field.id,
+            name: buildFieldOptionLabel(
+              {
+                tableName: field.tableName || table.tableName,
+                alias: field.tableAlias || table.alias,
+                displayName: field.tableDisplayName || table.displayName,
+              },
+              field,
+            ),
+          }
+        })
+      })
+
+      /** 已选字段所属表展示文案 */
+      const formatSelectedFieldTable = (field) => {
+        const table = findTableMeta(field.tableId) || field
+        const tableName = field.tableName || table?.tableName || '未知表'
+        const tableDisplay = field.tableDisplayName || table?.displayName || ''
+        return tableDisplay && tableDisplay !== tableName ? `${tableName}（${tableDisplay}）` : tableName
+      }
+
+      /** 表名着色：同一 tableId 固定颜色，便于区分多表字段 */
+      const TABLE_TAG_COLORS = [
+        '#5470c6', '#91cc75', '#fac858', '#ee6666', '#73c0de',
+        '#3ba272', '#fc8452', '#9a60b4', '#ea7ccc', '#2ec7c9',
+      ]
+
+      const hashTableId = (tableId) => {
+        const str = String(tableId ?? '')
+        let hash = 0
+        for (let i = 0; i < str.length; i++) {
+          hash = ((hash << 5) - hash) + str.charCodeAt(i)
+          hash |= 0
+        }
+        return Math.abs(hash)
+      }
+
+      const getTableTagStyle = (tableId) => {
+        if (tableId == null) {
+          return { color: 'var(--el-text-color-regular)' }
+        }
+        const color = TABLE_TAG_COLORS[hashTableId(tableId) % TABLE_TAG_COLORS.length]
+        return { color, fontWeight: 600 }
+      }
+
+      /** 根据 tableId 从目录取表元数据 */
+      const findTableMeta = (tableId) => {
+        return state.dbTables.find((t) => t.id === tableId) || null
+      }
       
+      /** 左右面板占比 localStorage 键；默认 7:3 */
+      const PANEL_RATIO_STORAGE_KEY = 'visualQueryPanelRatioV2'
+
       // 响应式状态
       const state = reactive({
-        // 面板宽度控制
-        leftPanelWidth: '20%',
-        rightPanelWidth: '80%',
+        // 面板宽度控制（默认左 70% / 右 30%，启动时再从 localStorage 覆盖）
+        leftPanelWidth: '70%',
+        rightPanelWidth: '30%',
         isResizing: false,
         
         // 树形控件相关
@@ -103,7 +185,6 @@
         
         // 已选字段和条件
         columnList: [],
-        allFields: [],
         whereList: [],
         
         // 对话框控制
@@ -115,12 +196,15 @@
         
         // 分组相关
         groupList: [],
+        // HAVING 条件
+        havingList: [],
         // 排序相关
         orderList: [],
         
         // QueryConfigItem对象列表
         columnItems: [], // 对应COLUMN类型的QueryConfigItem
         whereItems: [],  // 对应WHERE类型的QueryConfigItem
+        havingItems: [], // 对应HAVING类型的QueryConfigItem
         groupItems: [],  // 对应GROUP类型的QueryConfigItem
         orderItems: [],  // 对应ORDER类型的QueryConfigItem
         
@@ -150,17 +234,35 @@
           groupId: null,
           description: '',
           isPublic: 0,
-          orderNum: 0
+          selectDistinct: 0,
+          orderNum: 0,
+          /** 选用画布分组；空=全库画布寻路 */
+          canvasGroupIds: [],
         },
+        /** 当前库下可选画布分组 */
+        canvasGroupOptions: [],
         currentConfigItems: null, // 暂存当前查询的字段配置
         selectConfig: null, // 暂存当前查询的数据
 
         // 真实执行相关
         executing: false,
         exporting: false,
+        savingResult: false,
+        sharingResult: false,
+        loadingLatestResult: false,
         sqlPreviewVisible: false,
         sqlPreview: null,
-        lastQueryResult: null
+        lastQueryResult: null,
+        /** 最近一次保存的结果文件 ID（分享可复用） */
+        lastResultFileId: null,
+        shareLinkDialogVisible: false,
+        shareLink: '',
+        /** 分享前选项 */
+        shareFormVisible: false,
+        shareForm: {
+          shareMode: 'READ',
+          shareExpireTime: null,
+        },
       })
       
       // 监听过滤文本变化
@@ -188,6 +290,20 @@
           conditionValue: extraProps.conditionValue || '',
           orderNum: extraProps.orderNum || 0
         }
+      }
+
+      /**
+       * 按当前 columnList 顺序重写 columnItems.orderNum，保证保存顺序与 UI 一致
+       * @author yanch
+       */
+      const syncColumnItemsOrder = () => {
+        state.columnItems = state.columnList.map((field, idx) => {
+          const existing = state.columnItems.find((item) => item.fieldId === field.id)
+          if (existing) {
+            return { ...existing, orderNum: idx + 1 }
+          }
+          return createQueryConfigItem(field, 'COLUMN', { orderNum: idx + 1 })
+        })
       }
       
       // 同步字段到columnItems
@@ -233,40 +349,72 @@
         })
       }
       
-      // 处理树节点勾选
+      // 处理树节点勾选（保留用户已调整的字段顺序，新勾选追加到末尾）
       const handleCheck = (data, checked) => {
         const { checkedNodes } = checked;
-        
-        // 获取新选中的字段节点
-        const newColumnList = checkedNodes.filter(node => {
-          if(!node.fieldName){
-            return false
-          }else{
-            return true
+        const selectedMap = new Map()
+        checkedNodes.filter(node => node.fieldName).forEach(node => {
+          const table = findTableMeta(node.tableId)
+          selectedMap.set(node.id, {
+            ...node,
+            tableName: table?.tableName || node.tableName,
+            tableAlias: table?.alias || node.tableAlias,
+            tableDisplayName: table?.displayName || node.tableDisplayName,
+          })
+        })
+
+        const newFieldIds = new Set(selectedMap.keys())
+        const keptFields = state.columnList.filter(field => newFieldIds.has(field.id))
+        const keptIds = new Set(keptFields.map(field => field.id))
+
+        keptFields.forEach(field => {
+          const latest = selectedMap.get(field.id)
+          if (latest) {
+            field.tableName = latest.tableName
+            field.tableAlias = latest.tableAlias
+            field.tableDisplayName = latest.tableDisplayName
           }
-        }).map(node => ({ ...node }));
-        
-        // 找出新增和移除的字段
-        const oldFieldIds = new Set(state.columnList.map(field => field.id))
-        const newFieldIds = new Set(newColumnList.map(field => field.id))
-        
-        // 处理新增的字段
-        newColumnList.forEach(field => {
-          if (!oldFieldIds.has(field.id)) {
+        })
+
+        selectedMap.forEach((field, fieldId) => {
+          if (!keptIds.has(fieldId)) {
+            keptFields.push(field)
             syncFieldToColumnItems(field, 'add')
           }
         })
-        
-        // 处理移除的字段
-        state.columnList.forEach(field => {
-          if (!newFieldIds.has(field.id)) {
-            syncFieldToColumnItems(field, 'remove')
-          }
+
+        state.columnList.filter(field => !newFieldIds.has(field.id)).forEach(field => {
+          syncFieldToColumnItems(field, 'remove')
+          purgeFieldFromConditions(field.id)
         })
-        
-        // 更新columnList
-        state.columnList = newColumnList;
+
+        state.columnList = keptFields
+        syncColumnItemsOrder()
       };
+
+      /** 取消勾选字段时，同步清理条件/分组/排序/HAVING 中的引用 */
+      const purgeFieldFromConditions = (fieldId) => {
+        for (let i = state.whereList.length - 1; i >= 0; i--) {
+          if (state.whereList[i].field === fieldId) {
+            removeCondition(i)
+          }
+        }
+        for (let i = state.havingList.length - 1; i >= 0; i--) {
+          if (state.havingList[i].field === fieldId) {
+            removeHaving(i)
+          }
+        }
+        for (let i = state.groupList.length - 1; i >= 0; i--) {
+          if (state.groupList[i].fieldId === fieldId) {
+            removeGroup(i)
+          }
+        }
+        for (let i = state.orderList.length - 1; i >= 0; i--) {
+          if (state.orderList[i].fieldId === fieldId) {
+            removeOrder(i)
+          }
+        }
+      }
       
       // 设置别名
       const setAlias = (data) => {
@@ -302,33 +450,39 @@
         state.customizeDialogVisible = false;
       };
       
-      // 上移字段
+      /** 上移字段（在扁平 columnList 上移动，支持跨表交叉排序） */
       const moveFieldUp = (index) => {
         if (index > 0) {
           const temp = state.columnList[index];
           state.columnList.splice(index, 1);
           state.columnList.splice(index - 1, 0, temp);
-          
-          // 同步orderNum到columnItems
-          state.columnItems.forEach((item, idx) => {
-            item.orderNum = idx + 1
-          })
+          syncColumnItemsOrder()
         }
       };
       
       // 下移字段
       const moveFieldDown = (index) => {
-        if (index < state.columnList.length - 1) {
+        if (index >= 0 && index < state.columnList.length - 1) {
           const temp = state.columnList[index];
           state.columnList.splice(index, 1);
           state.columnList.splice(index + 1, 0, temp);
-          
-          // 同步orderNum到columnItems
-          state.columnItems.forEach((item, idx) => {
-            item.orderNum = idx + 1
-          })
+          syncColumnItemsOrder()
         }
       };
+
+      /** 将字段移动到指定序号（1-based） */
+      const moveFieldToOrder = (fromIndex, targetOrder) => {
+        if (targetOrder == null || targetOrder === '') {
+          return
+        }
+        const toIndex = Math.max(0, Math.min(state.columnList.length - 1, Number(targetOrder) - 1))
+        if (fromIndex === toIndex || Number.isNaN(toIndex)) {
+          return
+        }
+        const [field] = state.columnList.splice(fromIndex, 1)
+        state.columnList.splice(toIndex, 0, field)
+        syncColumnItemsOrder()
+      }
       
       // 添加分组
       const addGroup = () => {
@@ -383,23 +537,60 @@
         })
       };
       
-      // 添加查询条件
+      // 添加查询条件（运算符必须用枚举名 EQ，不能传 "="）
       const addCondition = () => {
         const condition = {
           field: '',
-          operator: '=',
+          operator: 'EQ',
           value: ''
         }
         state.whereList.push(condition);
         
         // 同步到whereItems
         const whereItem = createQueryConfigItem({ id: null }, 'WHERE', { 
-          conditionOperator: '=',
+          conditionOperator: 'EQ',
           conditionValue: '',
           orderNum: state.whereItems.length + 1 
         })
         state.whereItems.push(whereItem)
       };
+
+      /** 运算符是否需要填写条件值 */
+      const operatorNeedsValue = (op) => {
+        return op !== 'IS_NULL' && op !== 'IS_NOT_NULL'
+      }
+
+      /** 条件值占位提示 */
+      const conditionValuePlaceholder = (op) => {
+        if (op === 'BETWEEN') return '最小值,最大值'
+        if (op === 'IN' || op === 'NOT_IN') return '值1,值2,值3'
+        if (op === 'Like' || op === 'NOT_LIKE') return '关键字（自动加%）'
+        return '值'
+      }
+      
+      // 添加 HAVING 条件
+      const addHaving = () => {
+        state.havingList.push({ field: '', operator: 'EQ', value: '' })
+        state.havingItems.push(createQueryConfigItem({ id: null }, 'HAVING', {
+          conditionOperator: 'EQ',
+          conditionValue: '',
+          orderNum: state.havingItems.length + 1,
+        }))
+      }
+
+      const removeHaving = (index) => {
+        state.havingList.splice(index, 1)
+        state.havingItems.splice(index, 1)
+        state.havingItems.forEach((item, idx) => {
+          item.orderNum = idx + 1
+        })
+      }
+
+      const updateHavingItem = (index, property, value) => {
+        if (state.havingItems[index]) {
+          state.havingItems[index][property] = value
+        }
+      }
       
       // 移除查询条件
       const removeCondition = (index) => {
@@ -437,7 +628,48 @@
         }
       }
       
-      // 校验当前是否已保存配置（真实执行都基于后端配置）
+      // 保存查询配置项前规范化（与后端枚举一致）
+      const normalizeConfigItemForApi = (item) => {
+        const copy = { ...item }
+        if (copy.conditionOperator === '') {
+          copy.conditionOperator = null
+        }
+        if (copy.conditionOperator === '=') copy.conditionOperator = 'EQ'
+        if (copy.conditionOperator === '!=' || copy.conditionOperator === '<>') copy.conditionOperator = 'NEQ'
+        if (copy.conditionOperator === '>') copy.conditionOperator = 'GT'
+        if (copy.conditionOperator === '>=') copy.conditionOperator = 'GTE'
+        if (copy.conditionOperator === '<') copy.conditionOperator = 'LT'
+        if (copy.conditionOperator === '<=') copy.conditionOperator = 'LTE'
+        if (copy.conditionOperator === 'LIKE') copy.conditionOperator = 'Like'
+        if (copy.functionType === '') {
+          copy.functionType = null
+        }
+        return copy
+      }
+
+      /** 组装 SQL 预览/保存用的配置项 */
+      const buildDraftConfigItems = () => {
+        syncColumnItemsOrder()
+        return [
+          ...state.columnItems,
+          ...state.whereItems,
+          ...state.havingItems,
+          ...state.groupItems,
+          ...state.orderItems,
+        ].map(normalizeConfigItemForApi)
+      }
+
+      /** 组装 SQL 预览请求体（始终反映当前界面配置） */
+      const buildPreviewPayload = () => ({
+        dbConfigId: state.currentDbConfig,
+        groupId: state.currentTableGroup || undefined,
+        selectDistinct: state.currentConfig.selectDistinct ? 1 : 0,
+        canvasGroupIds: state.currentConfig.canvasGroupIds?.length
+          ? state.currentConfig.canvasGroupIds
+          : undefined,
+        items: buildDraftConfigItems(),
+        configId: state.currentConfig?.id || undefined,
+      })
       const ensureConfigSaved = () => {
         if (!state.currentConfig || !state.currentConfig.id) {
           $baseMessage('请先保存查询配置（新建配置并保存字段项），再执行查询', 'warning');
@@ -446,6 +678,10 @@
         return true;
       };
 
+      // 提取接口错误文案（utils/request 用 responseReturn:body 时不会走全局 ElMessage）
+      const getRequestErrorMessage = (error, fallback) =>
+        error?.msg || error?.message || fallback
+
       // 执行查询（调后端 /queryExecute/execute）
       const executeQuery = async () => {
         if (!ensureConfigSaved()) return;
@@ -453,31 +689,67 @@
         try {
           const { data } = await executeQueryConfig(state.currentConfig.id);
           state.lastQueryResult = data;
-          if (!data || !data.rows || data.rows.length === 0) {
+          state.lastResultFileId = null;
+          // 空结果：只提示，不渲染表格（避免 Univer 报「渲染失败」）
+          if (!data?.rows?.length) {
+            clearUniverSheet();
             $baseMessage('查询成功，但没有数据', 'warning');
+            return;
           }
           renderUniver(data.columns || [], data.rows || []);
-          if (data.path && data.path.intermediateTableIds && data.path.intermediateTableIds.length) {
+          if (data.path?.intermediateTableIds?.length) {
             $baseMessage(`已自动引入 ${data.path.intermediateTableIds.length} 张中间表完成关联`, 'info');
           }
         } catch (error) {
           console.error('执行查询失败:', error);
+          $baseMessage(getRequestErrorMessage(error, '执行查询失败'), 'error');
         } finally {
           state.executing = false;
         }
       };
 
-      // SQL 预览（不执行）
+      // SQL 预览：按当前界面配置即时生成（含 WHERE/GROUP/HAVING/ORDER/DISTINCT）
       const previewSql = async () => {
-        if (!ensureConfigSaved()) return;
         try {
-          const { data } = await previewQuerySql(state.currentConfig.id);
-          state.sqlPreview = data;
-          state.sqlPreviewVisible = true;
+          if (!state.currentDbConfig) {
+            $baseMessage('请先选择数据库', 'warning')
+            return
+          }
+          if (!state.columnList.length) {
+            $baseMessage('请先勾选要查询的字段，再预览 SQL', 'warning')
+            return
+          }
+          const res = await previewSqlBySelection(buildPreviewPayload())
+          let data = res.data
+          if (data) {
+            data.previewSql = formatPreviewSql(data.previewSql, data.dbType)
+            if (data.lastExecutedSql) {
+              data.lastExecutedSql = formatPreviewSql(data.lastExecutedSql, data.dbType)
+            }
+          }
+          state.sqlPreview = data
+          state.sqlPreviewVisible = true
         } catch (error) {
-          console.error('SQL预览失败:', error);
+          console.error('SQL预览失败:', error)
+          $baseMessage(getRequestErrorMessage(error, 'SQL 预览失败'), 'error')
         }
-      };
+      }
+
+      /**
+       * 预览 SQL：按方言格式化，并去掉反引号（用户可读性优先）
+       * @author yanch
+       */
+      const formatPreviewSql = (sql, dbType) => {
+        if (!sql) return sql
+        let out = sql
+        try {
+          out = formatSqlByDialect(sql, dbType)
+        } catch (e) {
+          console.warn('SQL 格式化失败，使用原文', e)
+        }
+        // 明确去掉反引号，不引入该符号
+        return String(out).replace(/`/g, '')
+      }
       
       // 初始化Univer实例
       const initUniver = () => {
@@ -495,6 +767,7 @@
           }
 
           univerInstance = new Univer({
+            darkMode: !!isDark.value,
             locale: LocaleType.ZH_CN,
             locales: {
               [LocaleType.ZH_CN]: mergeLocales(
@@ -533,14 +806,57 @@
           $baseMessage('初始化表格组件失败，请刷新页面重试', 'error');
         }
       };
+
+      // 主题切换时同步 Univer 暗色模式
+      watch(isDark, (dark) => {
+        try {
+          univerAPI?.toggleDarkMode?.(!!dark);
+        } catch (e) {
+          console.warn('切换 Univer 主题失败:', e);
+        }
+      });
       
       // 上次渲染的区域大小（用于覆盖清空）
       let lastRenderRows = 0;
       let lastRenderCols = 0;
 
-      // 将数据渲染到Univer（columns: 列标签数组，rows: 行对象数组）
-      const renderUniver = (columns, rows) => {
+      /** 清空结果区表格内容（不销毁实例） */
+      const clearUniverSheet = () => {
         try {
+          if (!univerAPI || lastRenderRows <= 0 || lastRenderCols <= 0) {
+            lastRenderRows = 0;
+            lastRenderCols = 0;
+            return;
+          }
+          const workbook = univerAPI.getActiveWorkbook();
+          const sheet = workbook?.getActiveSheet();
+          if (!sheet) return;
+          const emptyValues = Array.from({ length: lastRenderRows }, () =>
+            Array.from({ length: lastRenderCols }, () => null),
+          );
+          sheet.getRange(0, 0, lastRenderRows, lastRenderCols).setValues(emptyValues);
+        } catch (e) {
+          console.warn('清空结果表格失败:', e);
+        } finally {
+          lastRenderRows = 0;
+          lastRenderCols = 0;
+        }
+      };
+
+      /** 切换配置时重置右侧本次会话结果（不自动加载历史保存文件） */
+      const resetResultPanel = () => {
+        state.lastQueryResult = null;
+        state.lastResultFileId = null;
+        clearUniverSheet();
+      };
+
+      // 将数据渲染到Univer（columns: 列标签数组，rows: 行对象数组）
+      const renderUniver = (columns, rows, options = {}) => {
+        try {
+          if (!columns?.length || !rows?.length) {
+            clearUniverSheet();
+            return;
+          }
           if (!univerAPI) {
             initUniver();
           }
@@ -563,12 +879,6 @@
             sheet.getRange(0, 0, lastRenderRows, lastRenderCols).setValues(emptyValues);
           }
 
-          if (!columns.length) {
-            lastRenderRows = 0;
-            lastRenderCols = 0;
-            return;
-          }
-
           // 表头 + 数据组成二维数组，一次性写入
           const values = [columns.map(c => String(c))];
           rows.forEach(rowData => {
@@ -581,7 +891,9 @@
 
           lastRenderRows = values.length;
           lastRenderCols = columns.length;
-          $baseMessage(`数据加载成功，共 ${rows.length} 行`, 'success');
+          if (!options.silent) {
+            $baseMessage(`数据加载成功，共 ${rows.length} 行`, 'success');
+          }
         } catch (error) {
           console.error('渲染数据到Univer时出错:', error);
           $baseMessage('渲染表格数据失败', 'error');
@@ -609,9 +921,135 @@
         }
       };
       
-      // 保存查询（等同保存当前配置的字段项）
-      const saveQuery = () => {
-        saveQueryConfigItems();
+      /**
+       * 将当前查询结果保存为服务器文件（不再等同于保存配置）
+       * @author yanch
+       */
+      const saveQuery = async () => {
+        if (!hasSessionResult.value) {
+          $baseMessage('请先执行查询并得到结果，再保存结果文件', 'warning');
+          return;
+        }
+        state.savingResult = true;
+        try {
+          const title = state.currentConfig?.configName
+            ? `${state.currentConfig.configName}-结果`
+            : '查询结果';
+          const { data, msg } = await saveQueryResultFile({
+            configId: state.currentConfig?.id,
+            title,
+            columns: state.lastQueryResult.columns,
+            rows: state.lastQueryResult.rows || [],
+          });
+          state.lastResultFileId = data?.id || null;
+          $baseMessage(msg || '结果已保存到服务器', 'success');
+        } catch (error) {
+          console.error('保存结果文件失败:', error);
+          $baseMessage(getRequestErrorMessage(error, '保存结果失败'), 'error');
+        } finally {
+          state.savingResult = false;
+        }
+      };
+
+      /**
+       * 显式打开当前配置「最近一次保存」的结果（切换配置不会自动加载）
+       * @author yanch
+       */
+      const openLatestSavedResult = async () => {
+        if (!state.currentConfig?.id) {
+          $baseMessage('请先选择或保存查询配置', 'warning');
+          return;
+        }
+        state.loadingLatestResult = true;
+        try {
+          const { data } = await getLatestQueryResultByConfig(state.currentConfig.id);
+          if (!data?.meta?.id) {
+            $baseMessage('该配置还没有保存过结果，请先执行查询并点击「保存结果」', 'info');
+            return;
+          }
+          const columns = data.columns || [];
+          const rows = data.rows || [];
+          state.lastResultFileId = data.meta.id;
+          state.lastQueryResult = {
+            columns,
+            rows,
+            rowCount: data.meta.rowCount ?? rows.length,
+            limit: rows.length,
+          };
+          if (!rows.length) {
+            clearUniverSheet();
+            $baseMessage('已打开最近保存结果，但内容为空', 'warning');
+            return;
+          }
+          renderUniver(columns, rows, { silent: true });
+          $baseMessage(`已打开最近保存结果「${data.meta.title || ''}」（${rows.length} 行）`, 'success');
+        } catch (error) {
+          console.error('打开最近保存结果失败:', error);
+          $baseMessage(getRequestErrorMessage(error, '打开最近保存结果失败'), 'error');
+        } finally {
+          state.loadingLatestResult = false;
+        }
+      };
+
+      /**
+       * 打开分享选项（模式/过期），确认后再真正分享
+       * @author yanch
+       */
+      const openShareForm = () => {
+        if (!hasSessionResult.value && !state.lastResultFileId) {
+          $baseMessage('请先执行查询并保存结果，或先打开最近保存结果后再分享', 'warning');
+          return;
+        }
+        state.shareForm = { shareMode: 'READ', shareExpireTime: null };
+        state.shareFormVisible = true;
+      };
+
+      const shareQueryResult = async () => {
+        state.sharingResult = true;
+        try {
+          const title = state.currentConfig?.configName
+            ? `${state.currentConfig.configName}-分享`
+            : '查询结果分享';
+          const payload = {
+            resultFileId: state.lastResultFileId || undefined,
+            configId: state.currentConfig?.id,
+            title,
+            shareMode: state.shareForm.shareMode || 'READ',
+            shareExpireTime: state.shareForm.shareExpireTime || null,
+          };
+          if (state.lastQueryResult?.columns?.length) {
+            payload.columns = state.lastQueryResult.columns;
+            payload.rows = state.lastQueryResult.rows || [];
+          }
+          const { data } = await shareQueryResultFile(payload);
+          if (data?.meta?.id) {
+            state.lastResultFileId = data.meta.id;
+          }
+          const path = data?.shareUrl || (data?.meta?.shareCode
+            ? `/visual/queryResult/share/${data.meta.shareCode}`
+            : '');
+          if (!path) {
+            $baseMessage('生成分享链接失败', 'error');
+            return;
+          }
+          state.shareFormVisible = false;
+          state.shareLink = `${window.location.origin}${path}`;
+          state.shareLinkDialogVisible = true;
+        } catch (error) {
+          console.error('分享失败:', error);
+          $baseMessage('分享失败', 'error');
+        } finally {
+          state.sharingResult = false;
+        }
+      };
+
+      const copyShareLink = async () => {
+        try {
+          await navigator.clipboard.writeText(state.shareLink);
+          $baseMessage('链接已复制', 'success');
+        } catch {
+          $baseMessage('复制失败，请手动选择链接', 'warning');
+        }
       };
       
       // === 查询配置相关方法 ===
@@ -624,7 +1062,7 @@
       }
       
       // 显示配置对话框
-      const showConfigDialog = (mode, config = null) => {
+      const showConfigDialog = async (mode, config = null) => {
         state.configDialogMode = mode
         
         if (mode === 'add') {
@@ -634,10 +1072,26 @@
             groupId: state.currentTableGroup || null,
             description: '',
             isPublic: 0,
-            orderNum: 0
+            selectDistinct: 0,
+            orderNum: 0,
+            canvasGroupIds: [],
           }
         } else if (mode === 'edit' && config) {
-          state.currentConfig = { ...config }
+          // 详情带上 canvasGroupIds
+          if (config.id) {
+            try {
+              const { data } = await getQueryConfigById({ id: config.id })
+              state.currentConfig = {
+                ...config,
+                ...(data || {}),
+                canvasGroupIds: data?.canvasGroupIds || [],
+              }
+            } catch {
+              state.currentConfig = { ...config, canvasGroupIds: config.canvasGroupIds || [] }
+            }
+          } else {
+            state.currentConfig = { ...config, canvasGroupIds: [] }
+          }
         }
         
         state.configDialogVisible = true
@@ -665,11 +1119,11 @@
           }
         } catch (error) {
           console.error('保存查询配置失败:', error)
-          $baseMessage('保存配置失败', 'error')
+          $baseMessage(getRequestErrorMessage(error, '保存配置失败'), 'error')
         }
       }
 
-      // 保存查询配置
+      // 保存查询配置项
       const saveQueryConfigItems = async () => {
         if (!state.currentConfig.id) {
           // 新数据，打开新增配置对话框
@@ -677,19 +1131,17 @@
           return
         }
         try {
-          const configData = [
-            ...state.columnItems,
-            ...state.whereItems,
-            ...state.groupItems,
-            ...state.orderItems
-          ]
-          for (const item of configData) {
-            // 做转换，后台是枚举类型
-            if(item.conditionOperator === '') {
-              item.conditionOperator = null
-            }
-            if(item.functionType === '') {
-              item.functionType = null
+          const configData = buildDraftConfigItems()
+
+          // 同步 DISTINCT 开关到配置主表
+          if (state.currentConfig.id) {
+            try {
+              await editQueryConfig({
+                ...state.currentConfig,
+                selectDistinct: state.currentConfig.selectDistinct ? 1 : 0,
+              })
+            } catch (e) {
+              console.warn('更新 DISTINCT 开关失败（字段项仍会保存）:', e)
             }
           }
 
@@ -700,7 +1152,7 @@
           
         } catch (error) {
           console.error('保存查询配置失败:', error)
-          $baseMessage('保存配置失败', 'error')
+          $baseMessage(getRequestErrorMessage(error, '保存配置失败'), 'error')
         }
       }
       
@@ -708,7 +1160,10 @@
       const selectQueryConfig = async (config) => {
         state.selectConfig = config
         // 后续执行/预览/导出/保存字段项都基于该配置
-        state.currentConfig = { ...config }
+        state.currentConfig = {
+          ...config,
+          selectDistinct: config.selectDistinct ? 1 : 0,
+        }
         try {
           // 调用后端API获取完整的配置信息
           const { data } = await getQueryConfigItems(config.id)
@@ -717,7 +1172,7 @@
           // 切换到对应的分组
           if (config.groupId !== state.currentTableGroup) {
             state.currentTableGroup = config.groupId
-            await handleGroupChange()
+            await handleGroupChange(config.groupId)
           }
           
           // 等待数据加载完成后再进行回显
@@ -725,11 +1180,13 @@
           
           // 清空当前所有选择和配置
           clearAllSelections()
+          // 切换配置只加载「查询定义」，不自动带回上次会话/保存结果
+          resetResultPanel()
           
           // 回显数据
           await restoreFromConfigVo(fullConfigVo)
           
-          $baseMessage(`已加载配置"${config.configName}"`, 'success')
+          $baseMessage(`已加载配置「${config.configName}」。右侧结果已清空，请重新执行查询；如需历史结果请点「打开最近保存结果」`, 'success')
           
         } catch (error) {
           console.error('加载查询配置失败:', error)
@@ -747,12 +1204,14 @@
         // 清空所有列表
         state.columnList = []
         state.whereList = []
+        state.havingList = []
         state.groupList = []
         state.orderList = []
         
         // 清空所有items
         state.columnItems = []
         state.whereItems = []
+        state.havingItems = []
         state.groupItems = []
         state.orderItems = []
       }
@@ -767,6 +1226,11 @@
         // 恢复查询条件
         if (configVo.whereItems && configVo.whereItems.length > 0) {
           restoreWhereItems(configVo.whereItems)
+        }
+
+        // 恢复 HAVING
+        if (configVo.havingItems && configVo.havingItems.length > 0) {
+          restoreHavingItems(configVo.havingItems)
         }
         
         // 恢复分组
@@ -796,12 +1260,16 @@
             fieldNode.functionType = item.functionType
             fieldNode.customSql = item.customSql || ''
             
-            // 添加到选中字段列表
+            // 添加到选中字段列表（补齐表元数据，供树表父级展示）
+            const table = findTableMeta(fieldNode.tableId)
             state.columnList.push({
               ...fieldNode,
               alias: item.alias || '',
               functionType: item.functionType,
-              customSql: item.customSql || ''
+              customSql: item.customSql || '',
+              tableName: table?.tableName || fieldNode.tableName,
+              tableAlias: table?.alias || fieldNode.tableAlias,
+              tableDisplayName: table?.displayName || fieldNode.tableDisplayName,
             })
             
             fieldsToCheck.push(item.fieldId)
@@ -823,11 +1291,40 @@
         
         state.whereList = sortedItems.map(item => ({
           field: item.fieldId,
-          operator: item.conditionOperator || '=',
+          operator: normalizeOperator(item.conditionOperator),
           value: item.conditionValue || ''
         }))
         
-        state.whereItems = [...whereItems]
+        state.whereItems = sortedItems.map(item => ({
+          ...item,
+          conditionOperator: normalizeOperator(item.conditionOperator),
+        }))
+      }
+
+      /** 把历史符号运算符规范为枚举名 */
+      const normalizeOperator = (op) => {
+        if (!op) return 'EQ'
+        const map = {
+          '=': 'EQ', '==': 'EQ',
+          '!=': 'NEQ', '<>': 'NEQ',
+          '>': 'GT', '>=': 'GTE',
+          '<': 'LT', '<=': 'LTE',
+          LIKE: 'Like',
+        }
+        return map[op] || op
+      }
+
+      const restoreHavingItems = (havingItems) => {
+        const sortedItems = [...havingItems].sort((a, b) => a.orderNum - b.orderNum)
+        state.havingList = sortedItems.map(item => ({
+          field: item.fieldId,
+          operator: normalizeOperator(item.conditionOperator),
+          value: item.conditionValue || '',
+        }))
+        state.havingItems = sortedItems.map(item => ({
+          ...item,
+          conditionOperator: normalizeOperator(item.conditionOperator),
+        }))
       }
       
       // 恢复分组
@@ -898,6 +1395,8 @@
       // 开始调整面板大小
       const startResize = (e) => {
         state.isResizing = true;
+        document.body.style.cursor = 'col-resize';
+        document.body.style.userSelect = 'none';
         document.addEventListener('mousemove', handleResize);
         document.addEventListener('mouseup', stopResize);
       };
@@ -908,6 +1407,7 @@
         
         // 获取容器相对于视口的位置信息
         const container = document.querySelector('.visual-query-container');
+        if (!container) return;
         const containerRect = container.getBoundingClientRect();
         
         // 计算鼠标位置相对于容器左边界的距离
@@ -924,12 +1424,48 @@
         state.rightPanelWidth = `${100 - clampedPercentage}%`;
       };
       
-      // 停止调整面板大小
+      /**
+       * 停止拖拽：持久化占比，并触发表格重算宽度（解决左侧 table 不随容器伸缩）
+       * @author yanch
+       */
       const stopResize = () => {
         state.isResizing = false;
+        document.body.style.cursor = '';
+        document.body.style.userSelect = '';
         document.removeEventListener('mousemove', handleResize);
         document.removeEventListener('mouseup', stopResize);
+        try {
+          const leftPct = parseFloat(state.leftPanelWidth)
+          if (!Number.isNaN(leftPct)) {
+            localStorage.setItem(PANEL_RATIO_STORAGE_KEY, String(leftPct))
+          }
+        } catch (e) {
+          console.warn('保存面板占比失败:', e)
+        }
+        // 下一帧触发布局重算，让 el-table 跟随父容器宽度
+        nextTick(() => {
+          window.dispatchEvent(new Event('resize'))
+        })
       };
+
+      /** 从 localStorage 恢复左右面板占比，缺省 70:30 */
+      const restorePanelRatio = () => {
+        try {
+          const saved = localStorage.getItem(PANEL_RATIO_STORAGE_KEY)
+          if (saved != null) {
+            const leftPct = Math.max(10, Math.min(80, parseFloat(saved)))
+            if (!Number.isNaN(leftPct)) {
+              state.leftPanelWidth = `${leftPct}%`
+              state.rightPanelWidth = `${100 - leftPct}%`
+              return
+            }
+          }
+        } catch (e) {
+          console.warn('读取面板占比失败:', e)
+        }
+        state.leftPanelWidth = '70%'
+        state.rightPanelWidth = '30%'
+      }
 
       // 选择数据
       const selectData = (config) => {
@@ -998,14 +1534,6 @@
           // 转换数据格式为树形结构
           state.dbTables = data
           
-          // 提取所有字段用于选择条件
-          state.allFields = state.dbTables.flatMap(table => 
-            table.columns.map(field => ({ 
-              ...field,
-              name: `${table.displayName}.${field.displayName}`
-            }))
-          )
-          
           $baseMessage('加载表和字段成功', 'success')
         } catch (error) {
           console.error('加载表和字段失败:', error)
@@ -1018,18 +1546,25 @@
         state.currentTableGroup = ''
         state.tableGroupList = []
         state.dbTables = []
-        state.allFields = []
         state.columnList = []
+        state.canvasGroupOptions = []
+        resetResultPanel()
         
-        // 加载新选择的数据库的表分组
+        // 加载新选择的数据库的表分组与画布分组
         await loadTableGroupList(dbConfigId)
+        try {
+          const { data } = await listRelationCanvasGroups(dbConfigId)
+          state.canvasGroupOptions = data || []
+        } catch (e) {
+          console.warn('加载画布分组失败', e)
+        }
       }
       
       // 处理分组变更
       const handleGroupChange = async (groupId) => {
         state.dbTables = []
-        state.allFields = []
         state.columnList = []
+        resetResultPanel()
         
         // 加载新选择的分组的表和字段
         await loadTablesWithColumns(state.currentDbConfig, groupId)
@@ -1040,7 +1575,8 @@
       
       // 初始化
       onMounted(() => {
-        // 从localStorage恢复配置区域的显示状态
+        // 从 localStorage 恢复左右占比（默认 1:1）与配置区折叠状态
+        restorePanelRatio()
         const savedConfigVisible = localStorage.getItem('queryConfigVisible')
         if (savedConfigVisible !== null) {
           state.configVisible = savedConfigVisible === 'true'
@@ -1074,6 +1610,10 @@
         configFormRef,
         configRules,
         hasSelectedFields,
+        hasSessionResult,
+        selectedFieldOptions,
+        formatSelectedFieldTable,
+        getTableTagStyle,
         filterNode,
         handleCheck,
         setAlias,
@@ -1082,12 +1622,18 @@
         saveCustomize,
         moveFieldUp,
         moveFieldDown,
+        moveFieldToOrder,
         addGroup,
         removeGroup,
         addOrder,
         removeOrder,
         addCondition,
         removeCondition,
+        operatorNeedsValue,
+        conditionValuePlaceholder,
+        addHaving,
+        removeHaving,
+        updateHavingItem,
         updateWhereItem,
         updateGroupItem,
         updateOrderItem,
@@ -1095,6 +1641,10 @@
         previewSql,
         exportExcel,
         saveQuery,
+        openLatestSavedResult,
+        openShareForm,
+        shareQueryResult,
+        copyShareLink,
         startResize,
         handleDbChange,
         handleGroupChange,
@@ -1112,6 +1662,7 @@
 </script>
 
 <template>
+  <Page auto-content-height content-class="!p-0">
   <div class="visual-query-container">
     <!-- 左侧配置区域 -->
     <div class="left-panel" :style="{ width: leftPanelWidth }">
@@ -1166,6 +1717,14 @@
                 <vab-icon icon="save-line" />
                 保存/更新当前配置
               </el-button>
+              <el-checkbox
+                v-model="currentConfig.selectDistinct"
+                :true-value="1"
+                :false-value="0"
+                style="margin-left: 12px"
+              >
+                SELECT DISTINCT
+              </el-checkbox>
             </div>
             
             <div class="config-list">
@@ -1222,7 +1781,16 @@
           >
             <template #default="{ data }">
               <span class="custom-tree-node">
-                <span>{{ data.tableName ? data.tableName : `${data.fieldName }  (${ data.displayName })` }}</span>
+                <span v-if="data.tableName">
+                  {{ data.tableName }}
+                  <el-tag v-if="data.schemaName" size="small" type="info" style="margin-left: 4px;">
+                    {{ data.schemaName }}
+                  </el-tag>
+                  <span v-if="data.displayName && data.displayName !== data.tableName" class="node-comment">
+                    ({{ data.displayName }})
+                  </span>
+                </span>
+                <span v-else>{{ `${data.fieldName }  (${ data.displayName })` }}</span>
                 <span class="node-actions" v-if="data.sourceFieldId != null">
                   <el-tooltip content="自定义设置" placement="top">
                     <el-button link size="small" @click.stop="customizeField(data)">
@@ -1239,16 +1807,41 @@
         <el-tab-pane label="排序和条件" name="conditions">
           <div class="condition-group">
             <h4>已选字段</h4>
-            <el-table :data="columnList" size="small" row-key="id">
-              <el-table-column label="字段" prop="fieldName" />
-              <el-table-column label="字段名" prop="displayName" />
+            <p class="hint-text">「排序」列可直接输入目标序号；字段顺序即 SELECT 输出顺序，可跨表自由调整。</p>
+            <el-table
+              :data="columnList"
+              size="small"
+              row-key="id"
+              class="selected-fields-table"
+            >
+              <el-table-column label="排序" width="96" align="center">
+                <template #default="{ $index }">
+                  <el-input-number
+                    :model-value="$index + 1"
+                    :min="1"
+                    :max="columnList.length"
+                    :controls="true"
+                    size="small"
+                    controls-position="right"
+                    class="field-order-input"
+                    @change="(val) => moveFieldToOrder($index, val)"
+                  />
+                </template>
+              </el-table-column>
+              <el-table-column label="表" min-width="120" show-overflow-tooltip>
+                <template #default="{ row }">
+                  <span :style="getTableTagStyle(row.tableId)">{{ formatSelectedFieldTable(row) }}</span>
+                </template>
+              </el-table-column>
+              <el-table-column label="字段" prop="fieldName" min-width="100" show-overflow-tooltip />
+              <el-table-column label="名称" prop="displayName" min-width="120" show-overflow-tooltip />
               <el-table-column label="操作" width="140">
                 <template #default="{ row, $index }">
                   <el-button-group>
                     <el-button link size="small" @click="moveFieldUp($index)" :disabled="$index === 0">
                       <vab-icon icon="arrow-up-line" />
                     </el-button>
-                    <el-button link size="small" @click="moveFieldDown($index)" :disabled="$index === columnList.length - 1">
+                    <el-button link size="small" @click="moveFieldDown($index)" :disabled="$index >= columnList.length - 1">
                       <vab-icon icon="arrow-down-line" />
                     </el-button>
                     <el-button link size="small" @click="customizeField(row)">
@@ -1261,11 +1854,14 @@
           </div>
           
           <div class="condition-group">
-            <h4>查询条件</h4>
+            <div class="group-header condition-title-row">
+              <h4>查询条件</h4>
+              <el-button type="primary" size="small" @click="addCondition">添加条件</el-button>
+            </div>
             <div v-for="(condition, index) in whereList" :key="index" class="condition-item">
               <el-select v-model="condition.field" placeholder="选择字段" filterable @change="updateWhereItem(index, 'fieldId', condition.field)">
                 <el-option 
-                  v-for="field in allFields" 
+                  v-for="field in selectedFieldOptions" 
                   :key="field.id" 
                   :label="field.name" 
                   :value="field.id" 
@@ -1279,10 +1875,47 @@
                   :value="item.code"
                 />
               </el-select>
-              <el-input v-model="condition.value" placeholder="值" @input="updateWhereItem(index, 'conditionValue', condition.value)" />
+              <el-input
+                v-if="operatorNeedsValue(condition.operator)"
+                v-model="condition.value"
+                :placeholder="conditionValuePlaceholder(condition.operator)"
+                @input="updateWhereItem(index, 'conditionValue', condition.value)"
+              />
               <el-button type="danger" icon="delete-bin-line" circle @click="removeCondition(index)" />
             </div>
-            <el-button type="primary" @click="addCondition">添加条件</el-button>
+          </div>
+
+          <div class="condition-group">
+            <div class="group-header condition-title-row">
+              <h4>HAVING 条件</h4>
+              <el-button type="primary" size="small" @click="addHaving">添加 HAVING</el-button>
+            </div>
+            <p class="hint-text">用于聚合后过滤；通常需先配置分组字段。IN/BETWEEN 多个值用英文逗号分隔。</p>
+            <div v-for="(condition, index) in havingList" :key="'h'+index" class="condition-item">
+              <el-select v-model="condition.field" placeholder="选择字段" filterable @change="updateHavingItem(index, 'fieldId', condition.field)">
+                <el-option
+                  v-for="field in selectedFieldOptions"
+                  :key="field.id"
+                  :label="field.name"
+                  :value="field.id"
+                />
+              </el-select>
+              <el-select v-model="condition.operator" placeholder="条件" @change="updateHavingItem(index, 'conditionOperator', condition.operator)">
+                <el-option
+                  v-for="item in conditionOperator"
+                  :key="item.code"
+                  :label="item.label"
+                  :value="item.code"
+                />
+              </el-select>
+              <el-input
+                v-if="operatorNeedsValue(condition.operator)"
+                v-model="condition.value"
+                :placeholder="conditionValuePlaceholder(condition.operator)"
+                @input="updateHavingItem(index, 'conditionValue', condition.value)"
+              />
+              <el-button type="danger" icon="delete-bin-line" circle @click="removeHaving(index)" />
+            </div>
           </div>
           
           <div class="condition-group">
@@ -1297,7 +1930,7 @@
                   <template #default="{ row, $index }">
                     <el-select v-model="row.fieldId" placeholder="选择字段" filterable @change="updateGroupItem($index, 'fieldId', row.fieldId)">
                       <el-option 
-                        v-for="field in allFields" 
+                        v-for="field in selectedFieldOptions" 
                         :key="field.id" 
                         :label="field.name" 
                         :value="field.id" 
@@ -1329,7 +1962,7 @@
                   <template #default="{ row, $index }">
                     <el-select v-model="row.fieldId" placeholder="选择字段" filterable @change="updateOrderItem($index, 'fieldId', row.fieldId)">
                       <el-option 
-                        v-for="field in allFields" 
+                        v-for="field in selectedFieldOptions" 
                         :key="field.id" 
                         :label="field.name" 
                         :value="field.id" 
@@ -1378,18 +2011,53 @@
     <!-- 右侧Univer表格区域 -->
     <div class="right-panel" :style="{ width: rightPanelWidth }">
       <div class="panel-header">
-        <h3>查询结果 <span v-if="lastQueryResult" class="result-count">（{{ lastQueryResult.rowCount }} 行，上限 {{ lastQueryResult.limit }}）</span></h3>
+        <h3>
+          查询结果
+          <span v-if="lastQueryResult" class="result-count">
+            （{{ lastQueryResult.rowCount }} 行<span v-if="lastQueryResult.limit">，上限 {{ lastQueryResult.limit }}</span>）
+          </span>
+        </h3>
         <el-button-group>
-          <el-button size="small" :loading="exporting" @click="exportExcel">导出Excel</el-button>
-          <el-button size="small" @click="saveQuery">保存查询</el-button>
+          <el-button
+            size="small"
+            :loading="loadingLatestResult"
+            :disabled="!currentConfig?.id"
+            @click="openLatestSavedResult"
+          >
+            打开最近保存结果
+          </el-button>
+          <el-button size="small" :loading="exporting" :disabled="!currentConfig?.id" @click="exportExcel">
+            导出Excel
+          </el-button>
+          <el-button size="small" :loading="savingResult" :disabled="!hasSessionResult" @click="saveQuery">
+            保存结果
+          </el-button>
+          <el-button
+            size="small"
+            type="success"
+            :loading="sharingResult"
+            :disabled="!hasSessionResult && !lastResultFileId"
+            @click="openShareForm"
+          >
+            分享
+          </el-button>
         </el-button-group>
       </div>
       <div ref="univerContainer" class="univer-container"></div>
     </div>
 
-    <!-- SQL 预览对话框 -->
-    <el-dialog v-model="sqlPreviewVisible" title="SQL 预览" width="720px">
+    <!-- SQL 预览对话框（含与上次执行对比） -->
+    <el-dialog v-model="sqlPreviewVisible" title="SQL 预览" width="900px">
       <template v-if="sqlPreview">
+        <el-alert
+          v-if="sqlPreview.dialectHint"
+          type="success"
+          :closable="false"
+          show-icon
+          style="margin-bottom: 10px"
+          :title="`按目标库方言生成：${sqlPreview.dbType || '-'} / ${sqlPreview.dialectFamily || '-'}`"
+          :description="sqlPreview.dialectHint"
+        />
         <el-alert
           v-if="sqlPreview.path && sqlPreview.path.intermediateTableIds && sqlPreview.path.intermediateTableIds.length"
           type="info"
@@ -1398,8 +2066,72 @@
           style="margin-bottom: 10px"
           :title="`自动引入了 ${sqlPreview.path.intermediateTableIds.length} 张中间表参与 JOIN`"
         />
-        <pre class="sql-preview">{{ sqlPreview.previewSql }}</pre>
+        <el-alert
+          v-if="sqlPreview.sqlChanged === true && sqlPreview.lastExecutedSql"
+          type="warning"
+          :closable="false"
+          show-icon
+          style="margin-bottom: 10px"
+          title="当前预览 SQL 与上次执行不一致"
+          :description="sqlPreview.lastExecutedTime ? `上次执行时间：${sqlPreview.lastExecutedTime}` : ''"
+        />
+        <el-alert
+          v-else-if="sqlPreview.sqlChanged === false"
+          type="success"
+          :closable="false"
+          show-icon
+          style="margin-bottom: 10px"
+          title="与上次执行 SQL 一致"
+        />
+        <el-row :gutter="12">
+          <el-col :span="sqlPreview.lastExecutedSql ? 12 : 24">
+            <div class="sql-pane-title">当前预览</div>
+            <pre class="sql-preview">{{ sqlPreview.previewSql }}</pre>
+          </el-col>
+          <el-col v-if="sqlPreview.lastExecutedSql" :span="12">
+            <div class="sql-pane-title">上次执行</div>
+            <pre class="sql-preview">{{ sqlPreview.lastExecutedSql }}</pre>
+          </el-col>
+        </el-row>
       </template>
+    </el-dialog>
+
+    <!-- 分享选项 -->
+    <el-dialog v-model="shareFormVisible" title="分享设置" width="480px">
+      <el-form label-width="100px">
+        <el-form-item label="权限模式">
+          <el-radio-group v-model="shareForm.shareMode">
+            <el-radio label="READ">只读</el-radio>
+            <el-radio label="WRITE">可编辑</el-radio>
+          </el-radio-group>
+        </el-form-item>
+        <el-form-item label="过期时间">
+          <el-date-picker
+            v-model="shareForm.shareExpireTime"
+            type="datetime"
+            value-format="YYYY-MM-DD HH:mm:ss"
+            placeholder="不选则不过期"
+            clearable
+            style="width: 100%"
+          />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="shareFormVisible = false">取消</el-button>
+        <el-button type="primary" :loading="sharingResult" @click="shareQueryResult">生成链接</el-button>
+      </template>
+    </el-dialog>
+
+    <!-- 分享链接对话框 -->
+    <el-dialog v-model="shareLinkDialogVisible" title="分享链接" width="560px">
+      <p style="margin-bottom: 8px; color: var(--el-text-color-secondary); font-size: 13px;">
+        对方需登录后打开。只读分享不可改内容；可编辑分享允许协同修改（乐观锁）。
+      </p>
+      <el-input v-model="shareLink" readonly>
+        <template #append>
+          <el-button @click="copyShareLink">复制</el-button>
+        </template>
+      </el-input>
     </el-dialog>
     
     <!-- 设置别名对话框 -->
@@ -1483,12 +2215,40 @@
           />
         </el-form-item>
         
+        <el-form-item label="寻路画布">
+          <el-select
+            v-model="currentConfig.canvasGroupIds"
+            multiple
+            clearable
+            filterable
+            placeholder="不选则使用该库全部画布"
+            style="width: 100%"
+          >
+            <el-option
+              v-for="item in canvasGroupOptions"
+              :key="item.id"
+              :label="item.groupName"
+              :value="item.id"
+            />
+          </el-select>
+          <div class="form-tip">可多选；空=全库画布并集寻路</div>
+        </el-form-item>
+
         <el-form-item label="是否公开" prop="isPublic">
           <el-radio-group v-model="currentConfig.isPublic">
             <el-radio :label="1">公开</el-radio>
             <el-radio :label="0">私有</el-radio>
           </el-radio-group>
           <div class="form-tip">公开的配置其他用户也可以查看和使用</div>
+        </el-form-item>
+
+        <el-form-item label="去重">
+          <el-switch
+            v-model="currentConfig.selectDistinct"
+            :active-value="1"
+            :inactive-value="0"
+            active-text="SELECT DISTINCT"
+          />
         </el-form-item>
         
         <el-form-item label="排序" prop="orderNum">
@@ -1501,6 +2261,7 @@
       </template>
     </el-dialog>
   </div>
+  </Page>
 </template>
 
 <style lang="scss" scoped>
@@ -1511,24 +2272,35 @@
     font-family: Consolas, Monaco, monospace;
     font-size: 13px;
     line-height: 1.6;
-    color: #2d3748;
+    color: var(--el-text-color-primary);
     word-break: break-all;
     white-space: pre-wrap;
-    background: #f5f7fa;
+    background: var(--el-fill-color-light);
+    border: 1px solid var(--el-border-color-light);
     border-radius: 6px;
+  }
+
+  .sql-pane-title {
+    margin-bottom: 6px;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--el-text-color-primary);
   }
 
   .visual-query-container {
     position: relative;
     display: flex;
     width: 100%;
-    height: calc(100vh - 130px);
+    height: 100%;
     overflow: hidden;
     
     .left-panel {
       position: relative;
       display: flex;
       flex-direction: column;
+      // 允许 flex 子项在百分比宽度变化时收缩，否则表格会锁死旧宽度
+      min-width: 0;
+      overflow: hidden;
       background-color: var(--el-bg-color);
       border-right: 1px solid var(--el-border-color-light);
       
@@ -1666,9 +2438,46 @@
       
       .condition-group {
         margin-bottom: 20px;
+        // 保证拖拽改宽后，内部表格随容器伸缩
+        overflow-x: hidden;
         
         h4 {
           margin: 10px 0;
+        }
+
+        .condition-title-row {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          margin-bottom: 10px;
+
+          h4 {
+            margin: 0;
+          }
+        }
+
+        .hint-text {
+          margin: 0 0 10px;
+          font-size: 12px;
+          color: var(--el-text-color-secondary);
+        }
+
+        .selected-fields-table {
+          width: 100%;
+
+          .field-order-input {
+            width: 72px;
+          }
+
+          :deep(.field-order-input .el-input__wrapper) {
+            padding-left: 4px;
+            padding-right: 24px;
+          }
+
+          :deep(.el-table__body),
+          :deep(.el-table__header) {
+            width: 100% !important;
+          }
         }
         
         .condition-item {
@@ -1736,12 +2545,15 @@
     .right-panel {
       display: flex;
       flex-direction: column;
+      min-width: 0;
+      background-color: var(--el-bg-color);
       
       .panel-header {
         display: flex;
         align-items: center;
         justify-content: space-between;
         padding: 10px 15px;
+        background-color: var(--el-bg-color);
         border-bottom: 1px solid var(--el-border-color-light);
         
         h3 {
@@ -1758,15 +2570,15 @@
       .univer-container {
         position: relative;
         flex: 1;
-        background-color: #fff;
+        background-color: var(--el-bg-color);
         
         &:empty::before {
           position: absolute;
           top: 50%;
           left: 50%;
           font-size: 14px;
-          color: #999;
-          content: "请在左侧选择表和字段，然后点击执行查询按钮";
+          color: var(--el-text-color-secondary);
+          content: "执行查询后显示结果；切换配置不会自动加载历史结果";
           transform: translate(-50%, -50%);
         }
       }

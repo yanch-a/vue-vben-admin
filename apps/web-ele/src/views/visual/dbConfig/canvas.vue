@@ -1,4 +1,8 @@
 <script>
+/**
+ * 表分组画布：左侧分组草稿 + 右侧远端表勾选，按 sourceTableId 合并去重后保存
+ * @author yanch
+ */
 import { computed, defineComponent, inject, nextTick, onMounted, reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
@@ -71,13 +75,15 @@ export default defineComponent({
           continue
         }
         
-        // 构建表节点
+        // 构建表节点（带 schema，支持多库合并进分组）
         const tableNode = {
           id: table.id,
           name: table.tableName,
+          tableName: table.tableName,
           comment: table.displayName || '',
           isTable: true,
-          instanceName: table.schemaName,
+          instanceName: table.schemaName || selectedInstance.value?.instanceName,
+          schemaName: table.schemaName || selectedInstance.value?.instanceName,
           children: []
         }
         
@@ -111,8 +117,11 @@ export default defineComponent({
     
     // 判断是否有选中可添加的表或字段
     const hasSelectedItemsToAdd = computed(() => {
-      return selectgroup.value.length > 0 || groupSelectedColumns.value.length > 0
+      return selectedTables.value.length > 0 || selectedColumns.value.length > 0
     })
+
+    /** 恢复右侧勾选时忽略 check-change，避免把已有表再推进 selectedTables */
+    const syncingTreeCheck = ref(false)
     
     // 过滤数据库列表
     const filteredDbList = computed(() => {
@@ -153,13 +162,13 @@ export default defineComponent({
       groupName: '',
       schemaName: '',
       description: '',
-      orderNum: 0
+      orderNum: 0,
+      isPublic: 1,
     })
     
-    // 分组表单校验规则
+    // 分组表单校验规则（默认浏览库可选，分组可跨多实例）
     const groupRules = {
       groupName: [{ required: true, message: '请输入分组名称', trigger: 'blur' }],
-      schemaName: [{ required: true, message: '请选择所属数据库', trigger: 'change' }]
     }
 
     // 可选数据库实例列表
@@ -167,25 +176,159 @@ export default defineComponent({
       const root = dbList.value?.[0]
       return root?.instances || []
     })
+
+    /** 远端表 id 与目录 sourceTableId 均为 schema-dbConfigId-tableName */
+    const resolveTableName = (table) => table?.tableName || table?.name || ''
+
+    const resolveSourceTableId = (table) => {
+      if (table?.sourceTableId) {
+        return String(table.sourceTableId)
+      }
+      if (table?.id != null && String(table.id).includes('-')) {
+        return String(table.id)
+      }
+      const name = resolveTableName(table)
+      const schema = table?.schemaName || table?.instanceName || selectedGroup.value?.schemaName || ''
+      if (!name) {
+        return table?.id != null ? String(table.id) : ''
+      }
+      return `${schema}-${route.query.id}-${name}`
+    }
+
+    const groupTableKey = (table) => resolveSourceTableId(table) || `name:${resolveTableName(table)}`
+
+    /**
+     * 统一成左侧「当前组的表」结构，避免 tableName / name、id / sourceTableId 混用导致重复行
+     */
+    const toGroupTableRow = (table) => {
+      const sourceTableId = resolveSourceTableId(table)
+      const schema = table.schemaName || table.instanceName || selectedGroup.value?.schemaName
+      const tableIdForCols = table.sourceTableId || table.id
+      const rawCols = (table.columns && table.columns.length)
+        ? table.columns
+        : selectedColumns.value.filter(
+            (c) => String(c.tableId) === String(tableIdForCols) || String(c.tableId) === String(table.id),
+          )
+      return {
+        sourceTableId,
+        dbConfigId: route.query.id,
+        tableName: resolveTableName(table),
+        schemaName: schema,
+        displayName: table.displayName || table.comment || '',
+        alias: table.alias,
+        orderNum: table.orderNum || 0,
+        columns: (rawCols || []).map((column, idx) => ({
+          sourceFieldId: column.sourceFieldId || column.id,
+          sourceTableId,
+          fieldName: column.fieldName || column.columnName,
+          displayName: column.displayName || '',
+          dataType: column.dataType,
+          isPrimary: column.isPrimary,
+          isNullable: column.isNullable,
+          orderNum: column.orderNum != null ? column.orderNum : idx,
+        })),
+      }
+    }
+
+    const mergeGroupTables = (existing, incoming) => {
+      const map = new Map()
+      for (const t of existing || []) {
+        map.set(groupTableKey(t), toGroupTableRow(t))
+      }
+      for (const t of incoming || []) {
+        const row = toGroupTableRow(t)
+        const key = groupTableKey(row)
+        const old = map.get(key)
+        if (old) {
+          const colMap = new Map()
+          for (const c of old.columns || []) {
+            colMap.set(String(c.sourceFieldId), c)
+          }
+          for (const c of row.columns || []) {
+            colMap.set(String(c.sourceFieldId || c.id), c)
+          }
+          row.columns = [...colMap.values()]
+          row.tableName = row.tableName || old.tableName
+          row.displayName = row.displayName || old.displayName
+          row.alias = old.alias || row.alias
+        }
+        map.set(key, row)
+      }
+      return [...map.values()].map((t, i) => ({ ...t, orderNum: i }))
+    }
+
+    const applyGroupTablesToRightTree = () => {
+      if (!tableTreeRef.value) {
+        return
+      }
+      syncingTreeCheck.value = true
+      try {
+        tableTreeRef.value.setCheckedKeys([], false)
+        for (const table of groupSelectedTables.value) {
+          const tid = table.sourceTableId
+          if (tid != null) {
+            tableTreeRef.value.setChecked(tid, true, false)
+          }
+          for (const col of table.columns || []) {
+            const cid = col.sourceFieldId || col.id
+            if (cid != null) {
+              tableTreeRef.value.setChecked(cid, true, false)
+            }
+          }
+        }
+      } finally {
+        nextTick(() => {
+          syncingTreeCheck.value = false
+        })
+      }
+    }
+
+    const reloadGroupTables = async (groupId) => {
+      const { data } = await getGroupTablesWithColumns(groupId)
+      groupSelectedTables.value = data || []
+      selectedTables.value = (data || []).map((t) => ({
+        id: t.sourceTableId,
+        name: t.tableName,
+        tableName: t.tableName,
+        comment: t.displayName,
+        displayName: t.displayName,
+        instanceName: t.schemaName,
+        schemaName: t.schemaName,
+        alias: t.alias,
+        sourceTableId: t.sourceTableId,
+        columns: t.columns,
+      }))
+      selectedColumns.value = (data || []).flatMap((t) =>
+        (t.columns || []).map((c) => ({
+          id: c.sourceFieldId,
+          columnName: c.fieldName,
+          displayName: c.displayName,
+          tableId: t.sourceTableId,
+          dataType: c.dataType,
+          isPrimary: c.isPrimary,
+          isNullable: c.isNullable,
+        })),
+      )
+      nextTick(() => applyGroupTablesToRightTree())
+    }
     
     // 当前DDL
     const currentDDL = ref('')
     
-    // 处理表和字段的选择
+    // 处理表和字段的选择（check-strictly：勾选字段时同步勾选父表，才能加入分组）
     const handleTreeCheck = (data, checked) => {
+      if (syncingTreeCheck.value) {
+        return
+      }
       if (data.isTable) {
-        // 处理表选择
         if (checked) {
-          // 选中表时，同时选中所有字段
-          selectedTables.value.push(data)
-          
-          // 自动选中该表下所有字段
+          if (!selectedTables.value.some((t) => String(t.id) === String(data.id))) {
+            selectedTables.value.push(data)
+          }
           if (data.children && data.children.length > 0) {
-            // 在UI上选中所有子节点
             nextTick(() => {
               data.children.forEach(child => {
                 tableTreeRef.value.setChecked(child.id, true, false)
-                // 添加到已选字段中
                 const columnInfo = {
                   id: child.columnId,
                   tableId: child.tableId || data.id,
@@ -196,9 +339,7 @@ export default defineComponent({
                   isPrimary: child.isPrimary,
                   isNullable: child.isNullable
                 }
-                
-                // 避免重复添加
-                if (!selectedColumns.value.some(c => c.id === columnInfo.id && c.tableId === columnInfo.tableId)) {
+                if (!selectedColumns.value.some(c => String(c.id) === String(columnInfo.id) && String(c.tableId) === String(columnInfo.tableId))) {
                   selectedColumns.value.push(columnInfo)
                 }
               })
@@ -206,7 +347,7 @@ export default defineComponent({
           }
         } else {
           // 取消选择表时，同时取消所有字段
-          selectedTables.value = selectedTables.value.filter(t => t.id !== data.id)
+          selectedTables.value = selectedTables.value.filter(t => String(t.id) !== String(data.id))
           
           // 在UI上取消选中所有子节点
           if (data.children && data.children.length > 0) {
@@ -216,7 +357,7 @@ export default defineComponent({
               })
               
               // 从已选字段中移除
-              selectedColumns.value = selectedColumns.value.filter(c => c.tableId !== data.id)
+              selectedColumns.value = selectedColumns.value.filter(c => String(c.tableId) !== String(data.id))
             })
           }
         }
@@ -225,17 +366,58 @@ export default defineComponent({
         const columnInfo = {
           id: data.columnId,
           tableId: data.tableId,
-          tableName: tableList.value.find(t => t.id === data.tableId)?.tableName || '',
+          tableName: tableList.value.find(t => String(t.id) === String(data.tableId))?.tableName || '',
           columnName: data.name,
-          displayName: data.comment || ''
+          displayName: data.comment || '',
+          dataType: data.dataType,
+          isPrimary: data.isPrimary,
+          isNullable: data.isNullable,
         }
         
         if (checked) {
-          selectedColumns.value.push(columnInfo)
+          if (!selectedColumns.value.some((c) => String(c.id) === String(columnInfo.id) && String(c.tableId) === String(columnInfo.tableId))) {
+            selectedColumns.value.push(columnInfo)
+          }
+          // 只勾字段时也要把父表勾上，否则无法「添加到分组」
+          const parentNode = transformedTables.value.find((t) => String(t.id) === String(data.tableId))
+          if (parentNode) {
+            if (!selectedTables.value.some((t) => String(t.id) === String(parentNode.id))) {
+              selectedTables.value.push(parentNode)
+            }
+            nextTick(() => {
+              if (tableTreeRef.value && !syncingTreeCheck.value) {
+                syncingTreeCheck.value = true
+                try {
+                  tableTreeRef.value.setChecked(parentNode.id, true, false)
+                } finally {
+                  nextTick(() => {
+                    syncingTreeCheck.value = false
+                  })
+                }
+              }
+            })
+          }
         } else {
           selectedColumns.value = selectedColumns.value.filter(c => 
-            !(c.id === columnInfo.id && c.tableId === columnInfo.tableId)
+            !(String(c.id) === String(columnInfo.id) && String(c.tableId) === String(columnInfo.tableId))
           )
+          // 该表已无勾选字段时，取消父表勾选
+          const remain = selectedColumns.value.some((c) => String(c.tableId) === String(data.tableId))
+          if (!remain) {
+            selectedTables.value = selectedTables.value.filter((t) => String(t.id) !== String(data.tableId))
+            nextTick(() => {
+              if (tableTreeRef.value) {
+                syncingTreeCheck.value = true
+                try {
+                  tableTreeRef.value.setChecked(data.tableId, false, false)
+                } finally {
+                  nextTick(() => {
+                    syncingTreeCheck.value = false
+                  })
+                }
+              }
+            })
+          }
         }
       }
     }
@@ -264,7 +446,7 @@ export default defineComponent({
       }
     }
     
-    // 点击数据库节点（手动浏览时，若与当前分组库不一致则给出提示）
+    // 点击数据库节点：切换浏览实例后，恢复当前分组在该库下已选表的勾选
     const handleDbClick = async (data) => {
       selectedInstance.value = data
       
@@ -274,19 +456,15 @@ export default defineComponent({
         }
       })
 
-      if (
-        selectedGroup.value?.schemaName &&
-        data.instanceName &&
-        data.instanceName !== selectedGroup.value.schemaName
-      ) {
-        ElMessage.info(
-          `当前分组绑定【${selectedGroup.value.schemaName}】，浏览【${data.instanceName}】时不能直接添加到该分组`
-        )
+      const finishLoad = () => {
+        // 切库会重建右侧树，需把当前分组草稿里属于本库的表重新勾上
+        nextTick(() => applyGroupTablesToRightTree())
       }
-      
+
       if (data.tables) {
         tableList.value = data.tables
         loading.value = false
+        finishLoad()
       } else {
         loading.value = true
         await getTablesWithColumns(route.query.id, data.instanceName).then(res => {
@@ -301,6 +479,7 @@ export default defineComponent({
               }
             }
           }
+          finishLoad()
         }).catch(error => {
           console.error('获取表列表失败:', error)
           ElMessage.error('获取表列表失败')
@@ -355,7 +534,7 @@ export default defineComponent({
       selectedColumns.value = []
     }
     
-    // 点击分组节点：自动切到该分组绑定的数据库实例
+    // 点击分组节点：切到默认浏览库（若有），并加载分组已选项；支持跨实例表
     const handleGroupNodeClick = async (data) => {
       if (data.id == selectedGroup.value?.id) {
         return
@@ -365,62 +544,38 @@ export default defineComponent({
       selectedTables.value = []
       selectedColumns.value = []
 
-      if (!data.schemaName) {
-        ElMessage.warning('该分组未绑定数据库，请重新创建分组')
-        return
-      }
-
-      // 切换到分组所属库
       const instances = dbList.value?.[0]?.instances || []
-      const matched = instances.filter(it => it.instanceName === data.schemaName)
-      if (matched.length > 0) {
-        await handleDbClick(matched[0])
-        nextTick(() => {
-          if (dbTree.value) {
-            try {
-              dbTree.value.setCurrentKey(data.schemaName, true)
-            } catch (error) {
-              console.warn('设置数据库树高亮失败:', error)
-            }
-          }
-        })
-      } else {
-        ElMessage.warning(`未找到分组所属数据库实例：${data.schemaName}`)
-        tableList.value = []
+      // 优先默认浏览库；否则用分组内已有表的第一个 schema；再否则当前浏览实例
+      let preferSchema = data.schemaName
+      try {
+        await reloadGroupTables(data.id)
+        if (!preferSchema && groupSelectedTables.value.length > 0) {
+          preferSchema = groupSelectedTables.value[0].schemaName
+        }
+      } catch (error) {
+        console.error('加载分组表失败:', error)
+        ElMessage.error('加载分组已选项失败')
       }
 
-      // 加载分组已勾选的表字段
-      getGroupTablesWithColumns(data.id).then(res => {
-        groupSelectedTables.value = res.data || []
-        selectedTables.value = groupSelectedTables.value.map(t => ({
-          id: t.sourceTableId,
-          tableName: t.tableName,
-          displayName: t.displayName,
-          instanceName: t.schemaName,
-          alias: t.alias
-        }))
-
-        selectedColumns.value = groupSelectedTables.value.map(t => t.columns || []).flatMap(cols => cols.map(c => ({
-          id: c.sourceFieldId,
-          columnName: c.fieldName,
-          displayName: c.displayName,
-          tableId: c.sourceTableId,
-          dataType: c.dataType,
-          isPrimary: c.isPrimary,
-          isNullable: c.isNullable
-        })))
-
-        nextTick(() => {
-          if (!tableTreeRef.value) return
-          tableTreeRef.value.setCheckedKeys([], false)
-          for (const table of selectedTables.value) {
-            tableTreeRef.value.setChecked(table.id, true, false)
-          }
-          for (const column of selectedColumns.value) {
-            tableTreeRef.value.setChecked(column.id, true, false)
-          }
-        })
-      })
+      if (preferSchema) {
+        const matched = instances.filter(it => it.instanceName === preferSchema)
+        if (matched.length > 0) {
+          await handleDbClick(matched[0])
+          nextTick(() => {
+            if (dbTree.value) {
+              try {
+                dbTree.value.setCurrentKey(preferSchema, true)
+              } catch (error) {
+                console.warn('设置数据库树高亮失败:', error)
+              }
+            }
+          })
+        } else {
+          ElMessage.warning(`未找到数据库实例：${preferSchema}，请在「数据库」中手动切换`)
+        }
+      } else if (selectedInstance.value) {
+        nextTick(() => applyGroupTablesToRightTree())
+      }
     }
     
     // 点击分组中的表
@@ -441,10 +596,7 @@ export default defineComponent({
           type: 'warning'
         }).then(async () => {
           try {
-            // TODO: 调用后端API移除表
-            // await removeTableFromGroup(selectedGroup.value.id, data.id)
-            
-            // 更新本地数据
+            // 仅改本地草稿，点「保存分组」后才落库
             const index = groupSelectedTables.value.findIndex(t => t.sourceTableId === data.sourceTableId)
             if (index > -1) {
               groupSelectedTables.value.splice(index, 1)
@@ -459,7 +611,7 @@ export default defineComponent({
             selectedTables.value = selectedTables.value.filter(t => t.id !== data.sourceTableId)
             // 更新选中的列
             selectedColumns.value = selectedColumns.value.filter(c => c.tableId !== data.sourceTableId)
-            ElMessage.success('移除成功')
+            ElMessage.success('已从分组草稿移除该表，请点击「保存分组」写入数据库')
           } catch (error) {
             console.error('移除表失败:', error)
             ElMessage.error('移除表失败')
@@ -491,7 +643,7 @@ export default defineComponent({
               )
             }
             
-            ElMessage.success('移除成功')
+            ElMessage.success('已从分组草稿移除该字段，请点击「保存分组」写入数据库')
           } catch (error) {
             console.error('移除字段失败:', error)
             ElMessage.error('移除字段失败')
@@ -508,12 +660,13 @@ export default defineComponent({
         groupName: '',
         schemaName: selectedInstance.value?.instanceName || '',
         description: '',
-        orderNum: 0
+        orderNum: 0,
+        isPublic: 1,
       })
       groupDialogVisible.value = true
     }
     
-    // 编辑分组（所属库不可改）
+    // 编辑分组
     const handleEditGroup = (row) => {
       groupDialogType.value = 'edit'
       Object.assign(groupForm, {
@@ -521,7 +674,8 @@ export default defineComponent({
         groupName: row.groupName,
         schemaName: row.schemaName,
         description: row.description,
-        orderNum: row.orderNum
+        orderNum: row.orderNum,
+        isPublic: row.isPublic == null ? 1 : row.isPublic,
       })
       groupDialogVisible.value = true
     }
@@ -563,20 +717,28 @@ export default defineComponent({
                 schemaName: groupForm.schemaName,
                 description: groupForm.description,
                 orderNum: groupForm.orderNum,
+                isPublic: groupForm.isPublic,
                 dbConfigId: route.query.id
               })
             } else {
-              // 编辑时不提交 schemaName / dbConfigId 变更（后端也会强制保留原值）
               await editTableGroup({
                 id: groupForm.id,
                 groupName: groupForm.groupName,
+                schemaName: groupForm.schemaName,
                 description: groupForm.description,
-                orderNum: groupForm.orderNum
+                orderNum: groupForm.orderNum,
+                isPublic: groupForm.isPublic,
               })
             }
             ElMessage.success(groupDialogType.value === 'add' ? '新增成功' : '更新成功')
             groupDialogVisible.value = false
-            getGroupList()
+            await getGroupList()
+            if (groupDialogType.value === 'edit' && selectedGroup.value?.id === groupForm.id) {
+              const refreshed = groupList.value.find((g) => g.id === groupForm.id)
+              if (refreshed) {
+                selectedGroup.value = refreshed
+              }
+            }
           } catch (error) {
             console.error('保存分组失败:', error)
             ElMessage.error(error?.msg || error?.message || '保存分组失败')
@@ -613,99 +775,116 @@ export default defineComponent({
         fallbackPath: '/visual/dbConfig',
       })
     }
+
+    /** 跳转查询视图（可带当前连接与已选分组） */
+    const handleGoQueryView = () => {
+      const query = {}
+      if (route.query.id) {
+        query.dbConfigId = String(route.query.id)
+      }
+      if (selectedGroup.value?.id != null) {
+        query.groupId = String(selectedGroup.value.id)
+      }
+      router.push({
+        name: 'QueryConfig',
+        query,
+      })
+    }
     
-    // 直接添加到当前选中的分组（仅允许分组绑定库中的表）
+    /**
+     * 将右侧勾选的表合并进当前分组草稿（按 sourceTableId 去重；支持跨实例）
+     * 仅勾选部分字段时，也会把父表一并加入（字段列表以勾选为准）
+     */
     const handleDirectAddToGroup = () => {
       if (!selectedGroup.value) {
         ElMessage.warning('请先在左侧选择一个分组')
         leftActiveTab.value = 'groups'
         return
       }
-      if (!selectedGroup.value.schemaName) {
-        ElMessage.warning('该分组未绑定数据库，请重新创建分组')
+
+      const checkedNodes = tableTreeRef.value?.getCheckedNodes?.(false) || []
+      let tableNodes = checkedNodes.filter((n) => n.isTable)
+
+      // 兜底：若只有字段被勾选（父表未进 checked），从字段反推父表
+      if (!tableNodes.length && selectedColumns.value.length > 0) {
+        const tableIdSet = new Set(selectedColumns.value.map((c) => String(c.tableId)))
+        tableNodes = transformedTables.value.filter((t) => tableIdSet.has(String(t.id)))
+      } else if (!tableNodes.length) {
+        tableNodes = selectedTables.value.filter((t) => t?.isTable || t?.tableName || t?.name)
+      }
+
+      if (!tableNodes.length) {
+        ElMessage.warning('请先在右侧勾选要加入分组的表或字段')
         return
       }
 
-      const currentSchema = selectedInstance.value?.instanceName
-      if (currentSchema && currentSchema !== selectedGroup.value.schemaName) {
-        ElMessage.warning(`分组【${selectedGroup.value.groupName}】仅允许添加数据库【${selectedGroup.value.schemaName}】中的表，当前浏览的是【${currentSchema}】`)
-        return
-      }
+      // 按当前勾选字段裁剪：只勾了部分字段时，合并进分组的也只带这些字段
+      const incomingTables = tableNodes.map((table) => {
+        const colsOfTable = selectedColumns.value.filter(
+          (c) => String(c.tableId) === String(table.id) || String(c.tableId) === String(table.sourceTableId),
+        )
+        const base = {
+          ...table,
+          schemaName: table.schemaName || table.instanceName || selectedInstance.value?.instanceName,
+          instanceName: table.instanceName || table.schemaName || selectedInstance.value?.instanceName,
+        }
+        if (colsOfTable.length > 0) {
+          return {
+            ...base,
+            columns: colsOfTable.map((c, idx) => ({
+              id: c.id,
+              sourceFieldId: c.id,
+              fieldName: c.columnName || c.fieldName,
+              displayName: c.displayName || '',
+              dataType: c.dataType,
+              isPrimary: c.isPrimary,
+              isNullable: c.isNullable,
+              orderNum: idx,
+            })),
+          }
+        }
+        return base
+      })
 
-      const hasSelectedTables = selectedTables.value.length > 0
-      const hasSelectedColumns = selectedColumns.value.length > 0
-      
-      if (!hasSelectedTables && !hasSelectedColumns) {
-        groupSelectedTables.value = []
-        return
-      }
-
-      const tablesToAdd = []
-      groupSelectedTables.value = []
-      let count = 0
-      for (const table of selectedTables.value) {
-        const tableSchema = table.instanceName || selectedGroup.value.schemaName
-        if (tableSchema && tableSchema !== selectedGroup.value.schemaName) {
-          ElMessage.warning(`表【${table.name}】属于【${tableSchema}】，不能加入绑定【${selectedGroup.value.schemaName}】的分组`)
-          return
-        }
-        const tableData = {
-          sourceTableId: table.id,
-          dbConfigId: route.query.id,
-          tableName: table.name,
-          schemaName: selectedGroup.value.schemaName,
-          displayName: table.comment,
-          orderNum: count++,
-          columns: []
-        }
-        const selectedColumnsForTable = selectedColumns.value.filter(c => c.tableId === table.id)
-        if (selectedColumnsForTable.length > 0) {
-          let countField = 0
-          selectedColumnsForTable.forEach(column => {
-            tableData.columns.push({
-              sourceFieldId: column.id,
-              sourceTableId: table.id,
-              fieldName: column.columnName,
-              displayName: column.displayName || '',
-              dataType: column.dataType,
-              isPrimary: column.isPrimary,
-              isNullable: column.isNullable,
-              orderNum: countField++
-            })
-          })
-        }
-        tablesToAdd.push(tableData)
-      }
-      groupSelectedTables.value = tablesToAdd
-      ElMessage.success(`已成功添加到分组 ${selectedGroup.value.groupName}，请保存分组到数据库`)
+      const beforeCount = groupSelectedTables.value.length
+      groupSelectedTables.value = mergeGroupTables(groupSelectedTables.value, incomingTables)
+      const added = Math.max(0, groupSelectedTables.value.length - beforeCount)
+      ElMessage.success(
+        added > 0
+          ? `已合并 ${added} 张新表到「${selectedGroup.value.groupName}」，请保存分组`
+          : `已按勾选更新字段，未新增重复表，请保存分组`,
+      )
     }
 
-    // 保存分组到数据库
-    const saveGroup2DB = () => {
+    const saveGroup2DB = async () => {
       if (!selectedGroup.value) {
         ElMessage.warning('请先选择分组')
         return
       }
-      const mismatch = groupSelectedTables.value.find(
-        t => t.schemaName && t.schemaName !== selectedGroup.value.schemaName
-      )
-      if (mismatch) {
-        ElMessage.warning(`分组仅允许【${selectedGroup.value.schemaName}】中的表`)
+      const missingSchema = groupSelectedTables.value.find((t) => !t.schemaName)
+      if (missingSchema) {
+        ElMessage.warning(`表【${missingSchema.tableName}】缺少所属数据库信息，请重新添加`)
         return
       }
-      saveGroupTables2DB(selectedGroup.value.id, groupSelectedTables.value).then(() => {
+      try {
+        await saveGroupTables2DB(selectedGroup.value.id, groupSelectedTables.value)
+        await reloadGroupTables(selectedGroup.value.id)
         ElMessage.success('保存成功')
-      }).catch(error => {
+      } catch (error) {
         console.error('保存失败:', error)
         ElMessage.error(error?.msg || error?.message || '保存失败')
-      })
+      }
     }
     
-    // 查看DDL
+    // 查看DDL（使用表所属实例名）
     const handleViewDDL = async (row) => {
       try {
-        // 调用后端API获取DDL
-        const { data } = await getTableDDL(route.query.id, row.instanceName, row.name)
+        const schema = row.instanceName || row.schemaName || selectedInstance.value?.instanceName
+        if (!schema) {
+          ElMessage.warning('无法确定表所属数据库实例')
+          return
+        }
+        const { data } = await getTableDDL(route.query.id, schema, row.name)
         currentDDL.value = data.ddl
 
         ddlDialogVisible.value = true
@@ -791,6 +970,7 @@ export default defineComponent({
       handleGroupSubmit,
       handleRefresh,
       handleBack,
+      handleGoQueryView,
       handleDirectAddToGroup,
       handleViewDDL,
       handleCopyDDL,
@@ -844,14 +1024,14 @@ export default defineComponent({
                     </el-button>
                     <el-tooltip
                       effect="dark"
-                      content="每个分组绑定一个数据库实例，创建后不可更改；切换分组前请先保存"
+                      content="分组可跨多个数据库实例混入表；默认浏览库用于选中分组时自动切库"
                       placement="top"
                     >
                       <vab-icon icon="information-line" class="info-icon" />
                     </el-tooltip>
                   </div>
                   <el-alert
-                    title="先选分组 → 自动切到所属库 → 勾选表字段 → 添加到分组并保存"
+                    title="先选分组 → 切换数据库勾选表字段 → 添加到分组并保存（支持多库表）"
                     type="info"
                     :closable="false"
                     show-icon
@@ -874,6 +1054,9 @@ export default defineComponent({
                             <el-tag v-if="data.schemaName" size="small" type="info" class="schema-tag">
                               {{ data.schemaName }}
                             </el-tag>
+                            <el-tag v-if="data.isPublic === 0" size="small" type="warning" class="schema-tag">
+                              私有
+                            </el-tag>
                           </span>
                           <span class="actions">
                             <el-button link @click.stop="handleEditGroup(data)">
@@ -894,9 +1077,9 @@ export default defineComponent({
                   <h4>
                     {{ selectedGroup.groupName }}
                     <el-tag v-if="selectedGroup.schemaName" size="small" type="warning" style="margin-left: 6px;">
-                      {{ selectedGroup.schemaName }}
+                      默认：{{ selectedGroup.schemaName }}
                     </el-tag>
-                    <small>已选项</small>
+                    <small>已选项（可含多库）</small>
                   </h4>
                   <el-tree
                     :data="groupSelectedTables"
@@ -909,6 +1092,14 @@ export default defineComponent({
                     <template #default="{ node, data }">
                       <div class="group-tree-node">
                         <span>{{ data.tableName || data.fieldName || data.name }}</span>
+                        <el-tag
+                          v-if="data.schemaName && (data.tableName || data.sourceTableId)"
+                          size="small"
+                          type="info"
+                          style="margin-left: 4px;"
+                        >
+                          {{ data.schemaName }}
+                        </el-tag>
                         <span class="node-comment" v-if="data.displayName">({{ data.displayName }})</span>
                         <el-button
                           type="danger"
@@ -951,10 +1142,10 @@ export default defineComponent({
                   </div>
                   <el-collapse-transition>
                     <div v-show="tipVisible" class="tip-content">
-                      <p>1. 在「分组」中选择或新建分组（绑定一个库）</p>
-                      <p>2. 选中分组后会自动加载该库的表</p>
-                      <p>3. 勾选表字段 → 添加到分组 → 保存</p>
-                      <p>4. 一个分组只能包含其绑定库中的表</p>
+                      <p>1. 在「分组」中选择或新建分组（可跨多库混入表）</p>
+                      <p>2. 在「数据库」中切换实例，勾选表/字段</p>
+                      <p>3. 点击「添加到分组」合并到草稿，再「保存分组」</p>
+                      <p>4. 切换库后回切，已加入分组的表会自动勾选</p>
                     </div>
                   </el-collapse-transition>
                 </div>
@@ -991,8 +1182,11 @@ export default defineComponent({
             <div class="card-header">
               <div class="header-title">
                 <span>数据表</span>
+                <el-tag v-if="selectedGroup" size="small" type="success" style="margin-left: 8px;">
+                  支持多库表
+                </el-tag>
                 <el-tag v-if="selectedGroup?.schemaName" size="small" type="warning" style="margin-left: 8px;">
-                  当前分组库：{{ selectedGroup.schemaName }}
+                  默认浏览：{{ selectedGroup.schemaName }}
                 </el-tag>
                 <el-tag v-else-if="selectedInstance?.instanceName" size="small" type="info" style="margin-left: 8px;">
                   当前浏览：{{ selectedInstance.instanceName }}
@@ -1105,11 +1299,11 @@ export default defineComponent({
         <el-form-item label="分组名称" prop="groupName">
           <el-input v-model="groupForm.groupName" placeholder="请输入分组名称" />
         </el-form-item>
-        <el-form-item label="所属数据库" prop="schemaName">
+        <el-form-item label="默认浏览库" prop="schemaName">
           <el-select
             v-model="groupForm.schemaName"
-            placeholder="选择数据库实例（一个分组只能绑一个库）"
-            :disabled="groupDialogType === 'edit'"
+            placeholder="选中分组时自动切换到该库（可选，仍可跨库加表）"
+            clearable
             style="width: 100%"
           >
             <el-option
@@ -1119,7 +1313,16 @@ export default defineComponent({
               :value="item.instanceName"
             />
           </el-select>
-          <div v-if="groupDialogType === 'edit'" class="form-tip">所属库创建后不可修改</div>
+          <div class="form-tip">仅影响打开分组时的默认浏览库，分组内可包含多个实例的表</div>
+        </el-form-item>
+        <el-form-item label="可见范围">
+          <el-switch
+            v-model="groupForm.isPublic"
+            :active-value="1"
+            :inactive-value="0"
+            active-text="公开"
+            inactive-text="仅自己"
+          />
         </el-form-item>
         <el-form-item label="描述" prop="description">
           <el-input v-model="groupForm.description" type="textarea" :rows="3" placeholder="请输入描述" />
@@ -1175,8 +1378,9 @@ export default defineComponent({
     min-height: 0;
     
     .el-card-padding-0 {
-      .el-card__body {
+      :deep(.el-card__body) {
         padding: 10px;
+        background-color: var(--el-bg-color);
       }
     }
 
@@ -1193,6 +1397,23 @@ export default defineComponent({
     .left-panel {
       flex-shrink: 0;
       width: 25%;
+      background-color: transparent;
+
+      :deep(.el-card),
+      :deep(.el-tabs),
+      :deep(.el-tabs__content),
+      :deep(.el-tab-pane) {
+        background-color: var(--el-bg-color);
+      }
+
+      :deep(.el-tabs__header) {
+        background-color: var(--el-bg-color);
+      }
+
+      :deep(.el-tree) {
+        background-color: transparent;
+        color: var(--el-text-color-primary);
+      }
       
       .info-icon {
         margin-left: 8px;
@@ -1218,10 +1439,9 @@ export default defineComponent({
         .group-tree-body {
           height: 220px;
           overflow: auto;
-          background-color: #fff;
-          // padding: 8px;
+          background-color: var(--el-fill-color-blank);
+          border: 1px solid var(--el-border-color-lighter);
           border-radius: 4px;
-          box-shadow: 0 1px 3px rgb(0 0 0 / 10%);
         }
       }
       
@@ -1266,10 +1486,10 @@ export default defineComponent({
         padding: 12px;
         margin-top: 12px;
         overflow-y: auto;
-        background-color: #fff;
+        background-color: var(--el-fill-color-blank);
+        border: 1px solid var(--el-border-color-lighter);
         border-top: 1px solid var(--el-border-color-light);
         border-radius: 4px;
-        box-shadow: 0 1px 3px rgb(0 0 0 / 10%);
 
         h4 {
           margin: 0 0 10px;
@@ -1341,7 +1561,7 @@ export default defineComponent({
           padding: 10px 15px;
           font-size: 12px;
           line-height: 1.5;
-          background-color: #fff;
+          background-color: var(--el-fill-color-blank);
           border-top: 1px solid var(--el-border-color-light);
           
           p {

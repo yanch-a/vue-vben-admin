@@ -11,6 +11,7 @@
   import { useTabbarStore } from '@vben/stores'
 
   import { getMemberLevelList } from '@/api/member/memberLevelApi'
+  import { getMemberUserGroupList } from '@/api/member/memberUserGroup'
   import {
     checkUsername,
     doEdit,
@@ -105,10 +106,7 @@
       }
       const state = reactive({
         elForm: null,
-        userGroupOptions: {
-          1: '会员',
-          2: '超级会员',
-        },
+        userGroupOptions: [],
         userLevelOptions: [],
         sexOptions: getDictData('sex').data,
         userStatusOptions: getDictData('userStatus').data,
@@ -182,7 +180,9 @@
 
       const fetchData = async () => {
         const { data } = await getMemberLevelList({})
-        state.userLevelOptions = data
+        state.userLevelOptions = data || []
+        const groupRes = await getMemberUserGroupList({})
+        state.userGroupOptions = groupRes.data || []
         if (route.query.id) {
           const { data } = await getById({ id: route.query.id })
           state.form = data
@@ -358,12 +358,17 @@
         </el-col>
         <el-col :span="8">
           <el-form-item label="会员组" prop="userGroup">
-            <el-select v-model="form.userGroup" style="width: 100%">
+            <el-select
+              v-model="form.userGroup"
+              clearable
+              placeholder="请选择会员分组"
+              style="width: 100%"
+            >
               <el-option
-                v-for="(key, value) in userGroupOptions"
-                :key="value"
-                :label="key"
-                :value="value"
+                v-for="item in userGroupOptions"
+                :key="item.id"
+                :label="item.groupName"
+                :value="item.id"
               />
             </el-select>
           </el-form-item>

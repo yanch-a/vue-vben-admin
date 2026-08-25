@@ -1,14 +1,24 @@
 <script>
+  /**
+   * 数据库连接配置：公开性、密码留空不改、会员授权分配
+   * @author yanch
+   */
   import { defineComponent, inject, onMounted, reactive, ref } from 'vue'
   import { useRouter } from 'vue-router'
 
+  import { getMemberUser, searchMemberUser } from '@/api/member/memberUser'
   import { testConnection } from '@/api/visual/database'
   import {
     deleteDbConfig,
     editDbConfig,
     getDbConfigPage,
     getVqDict,
+    listDbConfigUsers,
+    listMemberUserGroups,
+    listMemberUsersByGroup,
+    replaceDbConfigUsers,
   } from '@/api/visual/vq'
+  import { Plus, Search } from '@element-plus/icons-vue'
   import { ElMessage, ElMessageBox } from 'element-plus'
 
   export default defineComponent({
@@ -21,15 +31,13 @@
       const formRef = ref(null)
       const totalNum = ref(0)
       const tableData = ref([])
-
-      // 数据库类型选项
       const dataBaseType = ref([])
-
       const $baseMessage = inject('$baseMessage')
-      // 表单数据
+
       const form = reactive({
         id: undefined,
         dbName: '',
+        schemaName: '',
         dbType: '',
         dbHost: '',
         dbPort: 3306,
@@ -38,6 +46,7 @@
         password: '',
         description: '',
         orderNum: 0,
+        isPublic: 0,
       })
 
       const queryForm = reactive({
@@ -46,7 +55,6 @@
         dbName: '',
       })
 
-      // 表单校验规则
       const rules = {
         dbName: [
           { required: true, message: '请输入数据库名称', trigger: 'blur' },
@@ -61,18 +69,39 @@
           { required: true, message: '请输入主机地址', trigger: 'blur' },
         ],
         dbPort: [{ required: true, message: '请输入端口', trigger: 'blur' }],
-        // jdbcUrl: [{ required: true, message: '请输入JDBC连接URL', trigger: 'blur' }],
         username: [
           { required: true, message: '请输入用户名', trigger: 'blur' },
         ],
-        password: [{ required: true, message: '请输入密码', trigger: 'blur' }],
+        // 新增必填；编辑留空表示不改密码
+        password: [
+          {
+            validator: (_r, v, cb) => {
+              if (dialogType.value === 'add' && !v) {
+                cb(new Error('请输入密码'))
+              } else {
+                cb()
+              }
+            },
+            trigger: 'blur',
+          },
+        ],
       }
 
-      // 获取列表数据
+      // ---------- 授权弹窗 ----------
+      const authVisible = ref(false)
+      const authSaving = ref(false)
+      const authDbConfigId = ref(null)
+      const authDbName = ref('')
+      const memberGroups = ref([])
+      const selectedGroupId = ref(null)
+      const groupUsers = ref([])
+      /** { memberUserId, userName, realName, canUse, canEditCanvas } */
+      const grants = ref([])
+      const searchKeyword = ref('')
+
       const getList = async () => {
         loading.value = true
         try {
-          // 调用后端API获取数据
           const { list, total } = await getDbConfigPage(queryForm)
           tableData.value = list
           totalNum.value = total
@@ -80,19 +109,19 @@
           $baseMessage(
             '获取数据库配置列表失败',
             'error',
-            'vab-hey-message-error'
+            'vab-hey-message-error',
           )
         } finally {
           loading.value = false
         }
       }
 
-      // 新增配置
       const handleAdd = () => {
         dialogType.value = 'add'
         Object.assign(form, {
           id: undefined,
           dbName: '',
+          schemaName: '',
           dbType: '',
           dbHost: '',
           dbPort: 3306,
@@ -101,14 +130,19 @@
           password: '',
           description: '',
           orderNum: 0,
+          isPublic: 0,
         })
         dialogVisible.value = true
       }
 
-      // 编辑配置
       const handleEdit = (row) => {
         dialogType.value = 'edit'
-        Object.assign(form, row)
+        Object.assign(form, {
+          ...row,
+          // 密码不回显；留空提交则后端保留原密码
+          password: '',
+          isPublic: row.isPublic == null ? 0 : row.isPublic,
+        })
         dialogVisible.value = true
       }
 
@@ -121,7 +155,6 @@
         }
       }
 
-      // 删除配置
       const handleDelete = (row) => {
         ElMessageBox.confirm('确认删除该数据库配置吗？', '提示', {
           type: 'warning',
@@ -137,31 +170,26 @@
         })
       }
 
-      // 进入表分组画布
       const handleCanvas = (row) => {
-        router.push({
-          name: 'DbConfigCanvas',
-          query: { id: row.id },
-        })
+        router.push({ name: 'DbConfigCanvas', query: { id: row.id } })
       }
 
-      // 进入关系画布（一张网）
       const handleRelationCanvas = (row) => {
-        router.push({
-          name: 'RelationCanvas',
-          query: { id: row.id },
-        })
+        router.push({ name: 'RelationCanvas', query: { id: row.id } })
       }
 
-      // 提交表单
       const handleSubmit = async () => {
         if (!formRef.value) return
-
         await formRef.value.validate(async (valid) => {
           if (valid) {
             try {
               dialogVisible.value = false
-              const { msg } = await editDbConfig(form)
+              const payload = { ...form }
+              // 编辑且密码为空：不传 password，避免误清空
+              if (dialogType.value === 'edit' && !payload.password) {
+                delete payload.password
+              }
+              const { msg } = await editDbConfig(payload)
               $baseMessage(msg, 'success', 'vab-hey-message-success')
               getList()
             } catch (error) {
@@ -172,18 +200,161 @@
         })
       }
 
+      const openAuthDialog = async (row) => {
+        authDbConfigId.value = row.id
+        authDbName.value = row.dbName || ''
+        authVisible.value = true
+        selectedGroupId.value = null
+        groupUsers.value = []
+        searchKeyword.value = ''
+        try {
+          const [{ data: groups }, { data: existing }] = await Promise.all([
+            listMemberUserGroups(),
+            listDbConfigUsers(row.id),
+          ])
+          memberGroups.value = groups || []
+          grants.value = (existing || []).map((g) => ({
+            memberUserId: g.memberUserId,
+            userName: g.userName || '',
+            realName: g.realName || '',
+            canUse: g.canUse == null ? 1 : g.canUse,
+            canEditCanvas: g.canEditCanvas == null ? 0 : g.canEditCanvas,
+          }))
+          await enrichGrantNames(grants.value)
+        } catch (e) {
+          console.error(e)
+          ElMessage.error('加载授权信息失败')
+        }
+      }
+
+      /** 授权表只有会员ID时，补全用户名/姓名便于识别 */
+      const enrichGrantNames = async (list) => {
+        const need = (list || []).filter((g) => g.memberUserId && !g.userName)
+        if (!need.length) return
+        await Promise.all(
+          need.map(async (g) => {
+            try {
+              const { data } = await getMemberUser(g.memberUserId)
+              if (data) {
+                g.userName = data.userName || String(g.memberUserId)
+                g.realName = data.realName || ''
+              }
+            } catch {
+              g.userName = g.userName || String(g.memberUserId)
+            }
+          }),
+        )
+      }
+
+      const onSelectGroup = async (groupId) => {
+        selectedGroupId.value = groupId
+        if (!groupId) {
+          groupUsers.value = []
+          return
+        }
+        try {
+          const { data } = await listMemberUsersByGroup(groupId)
+          groupUsers.value = data || []
+        } catch (e) {
+          console.error(e)
+          groupUsers.value = []
+        }
+      }
+
+      const upsertGrant = (user, defaults = {}) => {
+        const id = user.id || user.memberUserId
+        if (!id) return
+        const idx = grants.value.findIndex((g) => String(g.memberUserId) === String(id))
+        const row = {
+          memberUserId: id,
+          userName: user.userName || user.username || String(id),
+          realName: user.realName || '',
+          canUse: defaults.canUse != null ? defaults.canUse : 1,
+          canEditCanvas: defaults.canEditCanvas != null ? defaults.canEditCanvas : 0,
+        }
+        if (idx >= 0) {
+          grants.value[idx] = { ...grants.value[idx], ...row }
+        } else {
+          grants.value.push(row)
+        }
+      }
+
+      const addGroupAllUsers = () => {
+        if (!groupUsers.value.length) {
+          ElMessage.warning('该分组下没有会员，请先在会员管理中分配分组')
+          return
+        }
+        for (const u of groupUsers.value) {
+          upsertGrant(u)
+        }
+        ElMessage.success(`已勾选本组 ${groupUsers.value.length} 名用户`)
+      }
+
+      const addSingleUser = (user) => {
+        upsertGrant(user)
+      }
+
+      const searchAndAddUser = async () => {
+        const kw = (searchKeyword.value || '').trim()
+        if (!kw) {
+          ElMessage.warning('请输入用户名 / 姓名 / 手机号')
+          return
+        }
+        try {
+          const res = await searchMemberUser({ userName: kw })
+          const list = res?.data || res?.list || []
+          if (!list.length) {
+            ElMessage.warning('未找到用户')
+            return
+          }
+          for (const u of list) {
+            upsertGrant(u)
+          }
+          ElMessage.success(`已加入 ${list.length} 名用户`)
+        } catch (e) {
+          console.error(e)
+          ElMessage.error('搜索用户失败')
+        }
+      }
+
+      const removeGrant = (memberUserId) => {
+        grants.value = grants.value.filter(
+          (g) => String(g.memberUserId) !== String(memberUserId),
+        )
+      }
+
+      const saveAuth = async () => {
+        if (!authDbConfigId.value) return
+        authSaving.value = true
+        try {
+          await replaceDbConfigUsers({
+            dbConfigId: authDbConfigId.value,
+            grants: grants.value.map((g) => ({
+              memberUserId: g.memberUserId,
+              canUse: g.canUse ? 1 : 0,
+              canEditCanvas: g.canEditCanvas ? 1 : 0,
+            })),
+          })
+          ElMessage.success('授权已保存')
+          authVisible.value = false
+        } catch (e) {
+          console.error(e)
+          ElMessage.error('保存授权失败')
+        } finally {
+          authSaving.value = false
+        }
+      }
+
       const queryData = () => {
         queryForm.pageNum = 1
         getList()
       }
 
-      // 分页大小改变
       const handleSizeChange = (val) => {
         queryForm.pageSize = val
         getList()
       }
 
-      // 当前页改变
       const handleCurrentChange = (val) => {
         queryForm.pageNum = val
         getList()
@@ -219,6 +390,24 @@
         handleSubmit,
         handleSizeChange,
         handleCurrentChange,
+        queryData,
+        openAuthDialog,
+        authVisible,
+        authSaving,
+        authDbName,
+        memberGroups,
+        selectedGroupId,
+        groupUsers,
+        grants,
+        searchKeyword,
+        onSelectGroup,
+        addGroupAllUsers,
+        addSingleUser,
+        searchAndAddUser,
+        removeGrant,
+        saveAuth,
+        Plus,
+        Search,
       }
     },
   })
@@ -263,6 +452,13 @@
           <el-tag>{{ row.dbType }}</el-tag>
         </template>
       </el-table-column>
+      <el-table-column label="公开" width="80">
+        <template #default="{ row }">
+          <el-tag :type="row.isPublic === 1 ? 'success' : 'info'" size="small">
+            {{ row.isPublic === 1 ? '公开' : '私有' }}
+          </el-tag>
+        </template>
+      </el-table-column>
       <el-table-column prop="dbHost" label="主机地址" min-width="120" />
       <el-table-column prop="dbPort" label="端口" width="100" />
       <el-table-column prop="username" label="用户名" min-width="120" />
@@ -289,23 +485,16 @@
         min-width="200"
         show-overflow-tooltip
       />
-      <el-table-column label="操作" width="300" fixed="right">
+      <el-table-column label="操作" width="380" fixed="right">
         <template #default="{ row }">
           <el-button-group>
-            <el-button
-              type="primary"
-              link
-              @click="handleEdit(row)"
-              title="编辑"
-            >
+            <el-button type="primary" link @click="handleEdit(row)" title="编辑">
               <vab-icon icon="edit-line" style="font-size: 20px" />
             </el-button>
-            <el-button
-              type="primary"
-              link
-              @click="handleCanvas(row)"
-              title="表分组"
-            >
+            <el-button type="primary" link @click="openAuthDialog(row)" title="权限分配">
+              权限
+            </el-button>
+            <el-button type="primary" link @click="handleCanvas(row)" title="表分组">
               <vab-icon icon="layout-line" style="font-size: 20px" />
               表分组
             </el-button>
@@ -318,12 +507,7 @@
               <vab-icon icon="node-tree" style="font-size: 20px" />
               关系画布
             </el-button>
-            <el-button
-              type="danger"
-              link
-              @click="handleDelete(row)"
-              title="删除"
-            >
+            <el-button type="danger" link @click="handleDelete(row)" title="删除">
               <vab-icon icon="delete-bin-line" style="font-size: 20px" />
             </el-button>
             <el-button
@@ -339,7 +523,6 @@
       </el-table-column>
     </el-table>
 
-    <!-- 分页 -->
     <el-pagination
       :current-page="queryForm.pageNum"
       layout="total, sizes, prev, pager, next, jumper"
@@ -349,7 +532,6 @@
       @size-change="handleSizeChange"
     />
 
-    <!-- 新增/编辑对话框 -->
     <el-dialog
       v-model="dialogVisible"
       :title="dialogType === 'add' ? '新增配置' : '编辑配置'"
@@ -389,9 +571,21 @@
           <el-input
             v-model="form.password"
             type="password"
-            placeholder="请输入密码"
+            :placeholder="dialogType === 'edit' ? '留空则不修改密码' : '请输入密码'"
             show-password
           />
+        </el-form-item>
+        <el-form-item label="是否公开">
+          <el-switch
+            v-model="form.isPublic"
+            :active-value="1"
+            :inactive-value="0"
+            active-text="公开库"
+            inactive-text="私有库"
+          />
+          <div style="font-size: 12px; color: var(--el-text-color-secondary)">
+            公开：登录用户可使用（默认不可改画布）；私有：仅所有者/管理员与授权用户
+          </div>
         </el-form-item>
         <el-form-item label="描述" prop="description">
           <el-input
@@ -410,6 +604,109 @@
         <el-button type="primary" @click="handleSubmit">确定</el-button>
       </template>
     </el-dialog>
+
+    <!-- 权限分配：会员组批量勾选 + 授权表 -->
+    <el-dialog
+      v-model="authVisible"
+      :title="`权限分配 — ${authDbName}`"
+      width="920px"
+      destroy-on-close
+    >
+      <div class="auth-layout">
+        <div class="auth-left">
+          <div class="auth-section-title">会员组</div>
+          <el-select
+            v-model="selectedGroupId"
+            placeholder="选择会员组"
+            filterable
+            clearable
+            style="width: 100%; margin-bottom: 8px"
+            @change="onSelectGroup"
+          >
+            <el-option
+              v-for="g in memberGroups"
+              :key="g.id"
+              :label="g.groupName"
+              :value="g.id"
+            />
+          </el-select>
+          <el-button
+            type="primary"
+            size="small"
+            :disabled="!groupUsers.length"
+            @click="addGroupAllUsers"
+          >
+            勾选本组全部用户（{{ groupUsers.length }}）
+          </el-button>
+          <el-table
+            v-if="groupUsers.length"
+            :data="groupUsers"
+            border
+            size="small"
+            max-height="220"
+            style="margin-top: 8px"
+          >
+            <el-table-column prop="userName" label="用户名" min-width="90" />
+            <el-table-column prop="realName" label="姓名" min-width="80" />
+            <el-table-column label="" width="56" align="center">
+              <template #default="{ row }">
+                <el-button link type="primary" @click="addSingleUser(row)">加入</el-button>
+              </template>
+            </el-table-column>
+          </el-table>
+          <el-empty
+            v-else-if="selectedGroupId"
+            description="该组暂无会员"
+            :image-size="48"
+          />
+          <el-divider />
+          <div class="auth-section-title">搜索用户加入</div>
+          <el-input
+            v-model="searchKeyword"
+            placeholder="用户名 / 姓名 / 手机号"
+            size="small"
+            clearable
+            @keyup.enter="searchAndAddUser"
+          >
+            <template #append>
+              <el-button @click="searchAndAddUser">搜索</el-button>
+            </template>
+          </el-input>
+        </div>
+        <div class="auth-right">
+          <div class="auth-section-title">已授权用户</div>
+          <el-table :data="grants" border size="small" max-height="420">
+            <el-table-column prop="userName" label="用户名" min-width="100" />
+            <el-table-column prop="realName" label="姓名" min-width="90" />
+            <el-table-column label="可用" width="80" align="center">
+              <template #default="{ row }">
+                <el-switch v-model="row.canUse" :active-value="1" :inactive-value="0" />
+              </template>
+            </el-table-column>
+            <el-table-column label="可改画布" width="100" align="center">
+              <template #default="{ row }">
+                <el-switch
+                  v-model="row.canEditCanvas"
+                  :active-value="1"
+                  :inactive-value="0"
+                />
+              </template>
+            </el-table-column>
+            <el-table-column label="操作" width="70" align="center">
+              <template #default="{ row }">
+                <el-button link type="danger" @click="removeGrant(row.memberUserId)">
+                  移除
+                </el-button>
+              </template>
+            </el-table-column>
+          </el-table>
+        </div>
+      </div>
+      <template #footer>
+        <el-button @click="authVisible = false">取消</el-button>
+        <el-button type="primary" :loading="authSaving" @click="saveAuth">保存授权</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -417,13 +714,30 @@
   .db-config-container {
     padding: 20px;
 
-    .header-actions {
-      margin-bottom: 20px;
-    }
-
     :deep(.el-pagination) {
       justify-content: flex-end;
       margin-top: 20px;
     }
+  }
+
+  .auth-layout {
+    display: flex;
+    gap: 16px;
+    min-height: 360px;
+  }
+
+  .auth-left {
+    width: 280px;
+    flex-shrink: 0;
+  }
+
+  .auth-right {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .auth-section-title {
+    margin-bottom: 8px;
+    font-weight: 600;
   }
 </style>
