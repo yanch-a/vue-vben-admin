@@ -9,18 +9,22 @@ import { resolveSqlDialect, type SqlDialectFamily } from '../dialect/sqlDialect'
 
 /** sql-formatter 支持的语言标识 */
 type FormatterLanguage =
-  | 'mysql'
   | 'mariadb'
-  | 'postgresql'
+  | 'mysql'
   | 'plsql'
-  | 'transactsql'
-  | 'sql';
+  | 'postgresql'
+  | 'sql'
+  | 'sqlite'
+  | 'transactsql';
 
 const FAMILY_LANGUAGE: Record<SqlDialectFamily, FormatterLanguage> = {
   MYSQL_LIKE: 'mysql',
   POSTGRES_LIKE: 'postgresql',
   ORACLE_LIKE: 'plsql',
   SQLSERVER_LIKE: 'transactsql',
+  SQLITE_LIKE: 'sqlite',
+  // sql-formatter 无 H2 专属规则，标准 SQL 最接近
+  H2_LIKE: 'sql',
 };
 
 /**

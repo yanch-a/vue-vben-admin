@@ -3,14 +3,31 @@
  * 连接弹窗
  * - create：新建连接表单
  * - open：已有连接列表，支持打开 / 编辑 / 测试
+ *
+ * 表单按 dbTypes.ts 的产品档案动态渲染：文件型库不显示主机端口，
+ * 切换类型自动带出默认端口，URL 预览与服务端 DbTypeProfile 同源。
+ *
  * @author yanch
  */
-import { computed, reactive, ref, watch } from 'vue';
-
-import { editDbConfig, getDbConfigById, getDbConfigList, getVqDict } from '#/api/visual/vq';
-import { testConnection } from '#/api/visual/database';
+import { computed, nextTick, reactive, ref, watch } from 'vue';
 
 import { ElMessage } from 'element-plus';
+
+import {
+  getDbTypeProfiles,
+  previewJdbcUrl,
+  testConnection,
+  testConnectionDraft,
+} from '#/api/visual/database';
+import { editDbConfig, getDbConfigById, getDbConfigList } from '#/api/visual/vq';
+
+import {
+  applyServerProfiles,
+  buildJdbcUrl,
+  DB_TYPE_REGISTRY,
+  type DbTypeDescriptor,
+  resolveDbType,
+} from '../dialect/dbTypes';
 
 defineOptions({ name: 'ConnectionDialog' });
 
@@ -38,11 +55,24 @@ const openView = ref<'list' | 'form'>('list');
 
 const loading = ref(false);
 const saving = ref(false);
+const testing = ref(false);
 const formRef = ref();
-const dataBaseType = ref<any[]>([]);
 const existingList = ref<any[]>([]);
 const selectedId = ref<number | string>();
 const selectedRow = ref<any>(null);
+/** 服务端档案是否已拉取，用于展示驱动缺失提示 */
+const profilesLoaded = ref(false);
+/**
+ * 表单回填/重置期间抑制端口自动跟随，避免冲掉已保存连接的端口。
+ * dbType 的 watch 是 pre-flush，会先于 nextTick 执行，故此处用 nextTick 复位。
+ */
+let syncingForm = false;
+function beginFormSync() {
+  syncingForm = true;
+  nextTick(() => {
+    syncingForm = false;
+  });
+}
 
 const form = reactive({
   id: undefined as number | string | undefined,
@@ -58,15 +88,99 @@ const form = reactive({
   orderNum: 0,
 });
 
-const rules = {
-  dbName: [{ required: true, message: '请输入名称', trigger: 'blur' }],
-  schemaName: [{ required: true, message: '请输入默认数据库', trigger: 'blur' }],
-  dbType: [{ required: true, message: '请选择类型', trigger: 'change' }],
-  dbHost: [{ required: true, message: '请输入主机', trigger: 'blur' }],
-  dbPort: [{ required: true, message: '请输入端口', trigger: 'blur' }],
-  username: [{ required: true, message: '请输入用户名', trigger: 'blur' }],
-  password: [{ required: true, message: '请输入密码', trigger: 'blur' }],
+const descriptor = computed<DbTypeDescriptor>(() => resolveDbType(form.dbType));
+/** 文件型（SQLite / H2 嵌入式）：无主机端口，库名即文件路径 */
+const isFileForm = computed(() => descriptor.value.connectionForm === 'FILE');
+const needsHost = computed(() => !isFileForm.value);
+const credentialRequired = computed(() => descriptor.value.credentialRequired);
+const isSchemaKind = computed(() => descriptor.value.instanceKind === 'SCHEMA');
+
+/** 默认库/模式字段的标签随产品变化，避免 Oracle 下写「默认数据库」误导 */
+const schemaLabel = computed(() => {
+  if (isFileForm.value) return '数据库文件';
+  return isSchemaKind.value ? '默认模式' : '默认数据库';
+});
+
+const schemaPlaceholder = computed(() => {
+  const d = descriptor.value;
+  if (isFileForm.value) return d.fileExample || '数据库文件绝对路径';
+  return d.maintenanceDatabase
+    ? `留空则连接 ${d.maintenanceDatabase}`
+    : '默认连接的库名';
+});
+
+/** 驱动未部署时给出可执行的提示，而不是等到测试连接才报 ClassNotFound */
+const driverWarning = computed(() => {
+  const d = descriptor.value;
+  if (!profilesLoaded.value || d.driverAvailable !== false) return '';
+  return d.driverHint || `服务端未部署 ${d.label} 驱动（${d.driverClassName}）`;
+});
+
+/** 未手填 jdbcUrl 时，展示按模板拼出的 URL */
+const urlPreview = computed(() => {
+  if (form.jdbcUrl?.trim()) return form.jdbcUrl.trim();
+  return buildJdbcUrl(form.dbType, {
+    host: form.dbHost,
+    port: form.dbPort,
+    database: form.schemaName,
+  });
+});
+
+/** 按方言族分组的下拉项，便于在十几种产品里快速定位 */
+const FAMILY_GROUP_LABEL: Record<string, string> = {
+  MYSQL_LIKE: 'MySQL 及兼容',
+  POSTGRES_LIKE: 'PostgreSQL 及兼容（含高斯/金仓/瀚高）',
+  ORACLE_LIKE: 'Oracle 及兼容（含达梦）',
+  SQLSERVER_LIKE: 'SQL Server',
+  SQLITE_LIKE: '嵌入式 - SQLite',
+  H2_LIKE: '嵌入式 - H2',
 };
+
+const dbTypeGroups = computed(() => {
+  const groups = new Map<string, DbTypeDescriptor[]>();
+  for (const d of Object.values(DB_TYPE_REGISTRY)) {
+    const list = groups.get(d.family) || [];
+    list.push(d);
+    groups.set(d.family, list);
+  }
+  return [...groups.entries()].map(([family, items]) => ({
+    family,
+    label: FAMILY_GROUP_LABEL[family] || family,
+    items,
+  }));
+});
+
+const rules = computed(() => ({
+  dbName: [{ required: true, message: '请输入名称', trigger: 'blur' }],
+  schemaName: [
+    {
+      required: isFileForm.value,
+      message: '请输入数据库文件路径',
+      trigger: 'blur',
+    },
+  ],
+  dbType: [{ required: true, message: '请选择类型', trigger: 'change' }],
+  dbHost: [
+    { required: needsHost.value, message: '请输入主机', trigger: 'blur' },
+  ],
+  dbPort: [
+    { required: needsHost.value, message: '请输入端口', trigger: 'blur' },
+  ],
+  username: [
+    {
+      required: credentialRequired.value,
+      message: '请输入用户名',
+      trigger: 'blur',
+    },
+  ],
+  password: [
+    {
+      required: credentialRequired.value,
+      message: '请输入密码',
+      trigger: 'blur',
+    },
+  ],
+}));
 
 const dialogTitle = computed(() => {
   if (props.mode === 'create') return '新建连接';
@@ -75,13 +189,14 @@ const dialogTitle = computed(() => {
 });
 
 function resetForm() {
+  beginFormSync();
   Object.assign(form, {
     id: undefined,
     dbName: '',
     schemaName: '',
     dbType: 'MY_SQL',
     dbHost: '',
-    dbPort: 3306,
+    dbPort: DB_TYPE_REGISTRY.MY_SQL?.defaultPort ?? 3306,
     jdbcUrl: '',
     username: '',
     password: '',
@@ -91,32 +206,56 @@ function resetForm() {
 }
 
 function fillForm(row: any) {
+  beginFormSync();
   Object.assign(form, {
     id: row.id,
     dbName: row.dbName || '',
     schemaName: row.schemaName || '',
     dbType: row.dbType || 'MY_SQL',
     dbHost: row.dbHost || '',
-    dbPort: row.dbPort != null ? Number(row.dbPort) : 3306,
+    dbPort:
+      row.dbPort == null
+        ? resolveDbType(row.dbType).defaultPort
+        : Number(row.dbPort),
     jdbcUrl: row.jdbcUrl || '',
     username: row.username || '',
     password: row.password || '',
     description: row.description || '',
-    orderNum: row.orderNum != null ? Number(row.orderNum) : 0,
+    orderNum: row.orderNum == null ? 0 : Number(row.orderNum),
   });
 }
 
-async function loadDict() {
+/**
+ * 切换产品：端口跟随默认值。
+ * 只在端口仍是「上一个产品的默认值」或为空时覆盖，避免冲掉用户手填的端口。
+ */
+function onDbTypeChange(next: string, previous?: string) {
+  if (syncingForm) return;
+  const nextProfile = resolveDbType(next);
+  const prevDefault = previous ? resolveDbType(previous).defaultPort : null;
+  const untouched =
+    !form.dbPort || form.dbPort === 0 || form.dbPort === prevDefault;
+  if (untouched) {
+    form.dbPort = nextProfile.defaultPort;
+  }
+  if (nextProfile.connectionForm === 'FILE') {
+    form.dbHost = '';
+  }
+  formRef.value?.clearValidate?.(['dbHost', 'dbPort', 'username', 'password']);
+}
+
+/** 拉取服务端档案，回填驱动可用性 / URL 模板 */
+async function loadProfiles() {
   try {
-    const res: any = await getVqDict();
-    dataBaseType.value = res?.data?.dataBaseType || res?.dataBaseType || [];
+    const res: any = await getDbTypeProfiles();
+    const list = res?.data || res || [];
+    if (Array.isArray(list) && list.length > 0) {
+      applyServerProfiles(list);
+      profilesLoaded.value = true;
+    }
   } catch {
-    dataBaseType.value = [
-      { code: 'MY_SQL', label: 'MySQL' },
-      { code: 'POSTGRE_SQL', label: 'PostgreSQL' },
-      { code: 'ORACLE', label: 'Oracle' },
-      { code: 'SQL_SERVER', label: 'SQL Server' },
-    ];
+    // 服务端不可用时退回本地注册表，连接表单仍可使用
+    profilesLoaded.value = false;
   }
 }
 
@@ -201,10 +340,10 @@ async function handleSubmit() {
       await editDbConfig({ ...form });
       ElMessage.success(form.id ? '保存成功' : '创建成功');
       await loadList();
-      const saved =
-        existingList.value.find((r) => r.id === form.id) ||
-        existingList.value.find((r) => r.dbName === form.dbName) ||
-        { ...form };
+      const saved = existingList.value.find((r) => r.id === form.id) ||
+        existingList.value.find((r) => r.dbName === form.dbName) || {
+          ...form,
+        };
 
       if (isOpenMode.value && form.id) {
         // 编辑后回到列表，并通知父级刷新已打开连接信息
@@ -218,31 +357,77 @@ async function handleSubmit() {
 
       emit('created', saved);
       visible.value = false;
-    } catch (e: any) {
-      ElMessage.error(e?.msg || e?.message || '保存失败');
+    } catch (error: any) {
+      ElMessage.error(error?.msg || error?.message || '保存失败');
     } finally {
       saving.value = false;
     }
   });
 }
 
+/**
+ * 测试连接。
+ * 列表态测已保存连接；表单态直接用当前录入内容测试草稿，无需先保存。
+ */
 async function handleTest() {
-  const id = form.id || selectedId.value;
-  if (!id) {
-    ElMessage.info(
-      isOpenMode.value && openView.value === 'list'
-        ? '请先选择连接'
-        : '请先保存连接后再测试',
-    );
+  if (isOpenMode.value && openView.value === 'list') {
+    if (!selectedId.value) {
+      ElMessage.info('请先选择连接');
+      return;
+    }
+    await runTest(() => testConnection(selectedId.value as number | string));
     return;
   }
+  await runTest(() =>
+    testConnectionDraft({
+      id: form.id,
+      dbType: form.dbType,
+      dbHost: form.dbHost,
+      dbPort: form.dbPort,
+      schemaName: form.schemaName,
+      jdbcUrl: form.jdbcUrl,
+      username: form.username,
+      password: form.password,
+    }),
+  );
+}
+
+async function runTest(invoke: () => Promise<any>) {
+  testing.value = true;
   try {
-    const res: any = await testConnection(id);
+    const res: any = await invoke();
     const data = res?.data ?? res;
-    if (data?.success) ElMessage.success('连接成功');
-    else ElMessage.error(data?.message || '连接失败');
-  } catch (e: any) {
-    ElMessage.error(e?.msg || e?.message || '连接失败');
+    if (data?.success) {
+      ElMessage.success(data?.message || '连接成功');
+    } else {
+      ElMessage.error(data?.message || '连接失败');
+    }
+  } catch (error: any) {
+    ElMessage.error(error?.msg || error?.message || '连接失败');
+  } finally {
+    testing.value = false;
+  }
+}
+
+/** 用服务端拼好的 URL 填入输入框，便于用户在此基础上加参数 */
+async function fillUrlFromServer() {
+  try {
+    const res: any = await previewJdbcUrl({
+      dbType: form.dbType,
+      dbHost: form.dbHost,
+      dbPort: form.dbPort,
+      schemaName: form.schemaName,
+      jdbcUrl: form.jdbcUrl,
+    });
+    const url = res?.data?.jdbcUrl ?? res?.data ?? res?.jdbcUrl;
+    if (typeof url === 'string' && url) {
+      form.jdbcUrl = url;
+      return;
+    }
+    form.jdbcUrl = urlPreview.value;
+  } catch {
+    // 服务端不可用时用本地模板兜底
+    form.jdbcUrl = urlPreview.value;
   }
 }
 
@@ -255,6 +440,11 @@ function handleCancel() {
 }
 
 watch(
+  () => form.dbType,
+  (next, previous) => onDbTypeChange(next, previous),
+);
+
+watch(
   () => props.modelValue,
   async (val) => {
     if (!val) return;
@@ -262,19 +452,14 @@ watch(
     selectedId.value = undefined;
     selectedRow.value = null;
     resetForm();
-    await loadDict();
+    await loadProfiles();
     if (isOpenMode.value) await loadList();
   },
 );
 </script>
 
 <template>
-  <ElDialog
-    v-model="visible"
-    :title="dialogTitle"
-    width="720px"
-    destroy-on-close
-  >
+  <ElDialog v-model="visible" :title="dialogTitle" width="720px" destroy-on-close>
     <!-- 打开连接：列表 -->
     <div v-if="isOpenMode && openView === 'list'" v-loading="loading">
       <ElTable
@@ -285,7 +470,11 @@ watch(
         @row-dblclick="(row: any) => openByRow(row)"
       >
         <ElTableColumn prop="dbName" label="名称" min-width="120" />
-        <ElTableColumn prop="dbType" label="类型" width="110" />
+        <ElTableColumn label="类型" width="150">
+          <template #default="{ row }">
+            {{ resolveDbType(row.dbType).label }}
+          </template>
+        </ElTableColumn>
         <ElTableColumn prop="dbHost" label="主机" min-width="120" />
         <ElTableColumn prop="schemaName" label="默认库" min-width="100" />
         <ElTableColumn label="操作" width="100" fixed="right">
@@ -311,33 +500,63 @@ watch(
       <ElFormItem label="连接名称" prop="dbName">
         <ElInput v-model="form.dbName" placeholder="显示名称" />
       </ElFormItem>
-      <ElFormItem label="默认数据库" prop="schemaName">
-        <ElInput v-model="form.schemaName" />
-      </ElFormItem>
       <ElFormItem label="数据库类型" prop="dbType">
-        <ElSelect v-model="form.dbType" class="w-full">
-          <ElOption
-            v-for="item in dataBaseType"
-            :key="item.code"
-            :label="item.label"
-            :value="item.code"
-          />
+        <ElSelect v-model="form.dbType" class="w-full" filterable>
+          <ElOptionGroup
+            v-for="group in dbTypeGroups"
+            :key="group.family"
+            :label="group.label"
+          >
+            <ElOption
+              v-for="item in group.items"
+              :key="item.code"
+              :label="item.label"
+              :value="item.code"
+            />
+          </ElOptionGroup>
         </ElSelect>
+        <div v-if="driverWarning" class="warn">{{ driverWarning }}</div>
       </ElFormItem>
-      <ElFormItem label="主机" prop="dbHost">
-        <ElInput v-model="form.dbHost" />
+      <ElFormItem :label="schemaLabel" prop="schemaName">
+        <ElInput v-model="form.schemaName" :placeholder="schemaPlaceholder" />
       </ElFormItem>
-      <ElFormItem label="端口" prop="dbPort">
-        <ElInputNumber v-model="form.dbPort" :min="1" :max="65535" />
-      </ElFormItem>
+      <template v-if="needsHost">
+        <ElFormItem label="主机" prop="dbHost">
+          <ElInput v-model="form.dbHost" placeholder="127.0.0.1" />
+        </ElFormItem>
+        <ElFormItem label="端口" prop="dbPort">
+          <ElInputNumber
+            v-model="form.dbPort"
+            :min="1"
+            :max="65535"
+            controls-position="right"
+          />
+          <span class="tip">默认 {{ descriptor.defaultPort }}</span>
+        </ElFormItem>
+      </template>
       <ElFormItem label="JDBC URL" prop="jdbcUrl">
-        <ElInput v-model="form.jdbcUrl" placeholder="可选，优先使用" />
+        <div class="url-row">
+          <ElInput
+            v-model="form.jdbcUrl"
+            placeholder="留空按类型自动生成，填写后优先使用"
+          />
+          <ElButton @click="fillUrlFromServer">按当前配置生成</ElButton>
+        </div>
+        <div class="tip preview">实际使用：{{ urlPreview }}</div>
       </ElFormItem>
       <ElFormItem label="用户名" prop="username">
-        <ElInput v-model="form.username" />
+        <ElInput
+          v-model="form.username"
+          :placeholder="credentialRequired ? '' : '可留空'"
+        />
       </ElFormItem>
       <ElFormItem label="密码" prop="password">
-        <ElInput v-model="form.password" type="password" show-password />
+        <ElInput
+          v-model="form.password"
+          type="password"
+          show-password
+          :placeholder="credentialRequired ? '' : '可留空'"
+        />
       </ElFormItem>
       <ElFormItem label="描述" prop="description">
         <ElInput v-model="form.description" type="textarea" :rows="2" />
@@ -355,7 +574,7 @@ watch(
       >
         编辑
       </ElButton>
-      <ElButton @click="handleTest">测试连接</ElButton>
+      <ElButton :loading="testing" @click="handleTest">测试连接</ElButton>
       <ElButton type="primary" :loading="saving" @click="handleSubmit">
         <template v-if="isOpenMode && openView === 'list'">打开</template>
         <template v-else-if="form.id">保存</template>
@@ -371,6 +590,33 @@ watch(
   font-size: 12px;
   color: var(--el-text-color-secondary);
 }
+
+.tip {
+  margin-left: 8px;
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+}
+
+.preview {
+  width: 100%;
+  margin-left: 0;
+  overflow-wrap: anywhere;
+  line-height: 1.5;
+}
+
+.warn {
+  width: 100%;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--el-color-warning);
+}
+
+.url-row {
+  display: flex;
+  gap: 8px;
+  width: 100%;
+}
+
 .w-full {
   width: 100%;
 }

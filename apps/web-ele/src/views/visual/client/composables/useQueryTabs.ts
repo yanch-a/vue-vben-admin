@@ -33,6 +33,11 @@ export interface QueryTab {
   instanceName?: string;
   /** 已关联的保存查询 ID（有则 Ctrl+S 可覆盖更新） */
   savedQueryId?: number | string;
+  /**
+   * 最近一次从库加载 / 保存成功时的 SQL。
+   * 有 savedQueryId 且 sql !== savedSqlBaseline 时视为未保存修改。
+   */
+  savedSqlBaseline?: string;
 }
 
 /** 可序列化的编辑器 Tab（不含 rows / executing） */
@@ -44,6 +49,15 @@ export interface PersistedQueryTab {
   resultTab: 'result' | 'messages';
   instanceName?: string;
   savedQueryId?: number | string;
+  savedSqlBaseline?: string;
+}
+
+/** 已关联保存查询且内容相对上次保存有改动 */
+export function isQueryTabDirty(tab: QueryTab | null | undefined): boolean {
+  if (!tab || tab.savedQueryId == null) return false;
+  const baseline =
+    tab.savedSqlBaseline != null ? tab.savedSqlBaseline : tab.sql;
+  return tab.sql !== baseline;
 }
 
 /** 每个连接最多 SQL 编辑器数（来自配置文件） */
@@ -76,6 +90,8 @@ function createTab(
     result: null,
     instanceName,
     savedQueryId,
+    // 从已保存查询打开时，基线=当前内容（干净）
+    savedSqlBaseline: savedQueryId != null ? sql : undefined,
   };
 }
 
@@ -118,18 +134,29 @@ export function applyQueryTabsSnapshot(data: {
   }
 
   for (const [key, list] of Object.entries(data.tabsByConnection || {})) {
-    const tabs: QueryTab[] = (list || []).map((t) => ({
-      id: t.id,
-      title: t.title || 'Query',
-      sql: t.sql || '',
-      resultVisible: !!t.resultVisible,
-      resultTab: t.resultTab === 'messages' ? 'messages' : 'result',
-      executing: false,
-      // 不回放结果集，避免过期/巨大数据弄乱 UI
-      result: null,
-      instanceName: t.instanceName,
-      savedQueryId: t.savedQueryId,
-    }));
+    const tabs: QueryTab[] = (list || []).map((t) => {
+      const sql = t.sql || '';
+      const savedQueryId = t.savedQueryId;
+      // 旧快照无 baseline：用当前 sql 视为已同步，避免误标 *
+      const savedSqlBaseline =
+        t.savedSqlBaseline != null
+          ? t.savedSqlBaseline
+          : savedQueryId != null
+            ? sql
+            : undefined;
+      return {
+        id: t.id,
+        title: t.title || 'Query',
+        sql,
+        resultVisible: !!t.resultVisible,
+        resultTab: t.resultTab === 'messages' ? 'messages' : 'result',
+        executing: false,
+        result: null,
+        instanceName: t.instanceName,
+        savedQueryId,
+        savedSqlBaseline,
+      };
+    });
     if (tabs.length === 0) continue;
     tabsByConnection[key] = tabs;
     const aid = data.activeTabByConnection?.[key];
@@ -177,7 +204,7 @@ export function useQueryTabs(connectionId: () => number | string | null) {
     if (list.length >= MAX_TABS) {
       return null;
     }
-    // 若已有同 savedQueryId 的 Tab，直接激活
+    // 若已有同 savedQueryId 的 Tab，直接激活；用库中最新内容覆盖并重置基线
     if (opts?.savedQueryId != null) {
       const exist = list.find(
         (t) => String(t.savedQueryId) === String(opts.savedQueryId),
@@ -186,7 +213,10 @@ export function useQueryTabs(connectionId: () => number | string | null) {
         if (opts?.activate !== false) {
           activeTabByConnection[connKey(id)] = exist.id;
         }
-        exist.sql = opts.sql ?? exist.sql;
+        if (opts.sql != null) {
+          exist.sql = opts.sql;
+          exist.savedSqlBaseline = opts.sql;
+        }
         exist.title = opts.title || exist.title;
         exist.instanceName = opts.instanceName || exist.instanceName;
         notifyClientSessionChange();
@@ -246,5 +276,10 @@ export function useQueryTabs(connectionId: () => number | string | null) {
     addTab,
     closeTab,
     openSqlInNewTab,
+    /** 保存成功后调用：把当前 SQL 记为已同步基线 */
+    markTabSaved(tab: QueryTab) {
+      tab.savedSqlBaseline = tab.sql;
+      notifyClientSessionChange();
+    },
   };
 }

@@ -1,9 +1,19 @@
 <script lang="ts" setup>
 /**
- * MySQL 对象浏览器（SQLyog 风格）
- * 树结构：库 → Tables/Views/Procedures/Functions/Triggers/Events → 叶子（表可再展开字段）
- * 使用 ElTree lazy：每一层展开时再请求，避免「预置 children + lazy」互相覆盖。
+ * 对象浏览器（SQLyog 风格，全库通用）
+ *
+ * 树结构：实例(库/模式) → Tables/Views/Procedures/Functions/Triggers/Events/Queries → 叶子
+ * 表节点可再展开字段。使用 ElTree lazy：每层展开时再请求。
+ *
+ * 库差异只体现在 dbTypes.ts 的能力开关上（不支持的分类不渲染文件夹），
+ * 不再为每种数据库派生组件。新增数据库无需改本文件。
+ *
+ * @author yanch
  */
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
+
+import { ElMessage } from 'element-plus';
+
 import {
   getEvents,
   getFunctions,
@@ -14,28 +24,33 @@ import {
   getTriggers,
   getViews,
 } from '#/api/visual/database';
-import { listSavedQueries } from '#/api/visual/savedQuery'
+import { listSavedQueries } from '#/api/visual/savedQuery';
+
+import { instanceLabelOf, resolveCapabilities } from '../../dialect/dbTypes';
 import { rememberInstanceTables } from '../../utils/sqlEditorAssist';
-
-import { ElMessage } from 'element-plus';
-import { onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
-
 import ObjectTreeContextMenu, {
   type TreeCtxAction,
 } from './ObjectTreeContextMenu.vue';
 
-defineOptions({ name: 'MysqlObjectTree' });
+defineOptions({ name: 'ObjectTree' });
 
 const props = defineProps<{
   dbConfigId: number | string;
+  dbType: string;
   filterText?: string;
 }>();
 
 const emit = defineEmits<{
-  openTable: [payload: { instanceName: string; tableName: string }];
+  openTable: [
+    payload: { instanceName: string; tableName: string; schemaName?: string },
+  ];
   insertName: [name: string];
   /** 单击库节点：同步编辑器当前库 */
   selectInstance: [instanceName: string];
+  /** 单击表节点：供 F11 打开表 */
+  selectTable: [
+    payload: { instanceName: string; tableName: string; schemaName?: string },
+  ];
   openSavedQuery: [
     payload: {
       id: number | string;
@@ -53,9 +68,13 @@ const emit = defineEmits<{
 }>();
 
 const treeRef = ref();
-/** 根节点：数据库实例列表 */
+/** 根节点：数据库/模式列表 */
 const treeData = ref<any[]>([]);
 const loading = ref(false);
+
+const capabilities = computed(() => resolveCapabilities(props.dbType));
+/** 右键菜单文案：Oracle/达梦一级节点是「模式」而非「数据库」 */
+const instanceLabel = computed(() => instanceLabelOf(props.dbType));
 
 const ctxMenu = reactive({
   visible: false,
@@ -73,78 +92,42 @@ const propsTree = {
 };
 
 /**
- * 库下对象文件夹。
- * Queries 挂在 Events 之后：存的是「当前登录用户 + 当前连接 + 当前库」的已保存 SQL，
- * 不是 MySQL Event Scheduler 对象。
+ * 实例下的对象文件夹，按当前库的能力开关裁剪。
+ * Queries 恒定存在：存的是「当前登录用户 + 当前连接 + 当前库」的已保存 SQL，
+ * 属于客户端自身数据，与数据库是否支持 Event Scheduler 无关。
  */
 function buildFolderNodes(instanceName: string) {
-  return [
-    {
-      id: `tables-${instanceName}`,
-      label: 'Tables',
-      nodeType: 'folder',
-      objectKind: 'tables',
-      instanceName,
-      isLeaf: false,
-    },
-    {
-      id: `views-${instanceName}`,
-      label: 'Views',
-      nodeType: 'folder',
-      objectKind: 'views',
-      instanceName,
-      isLeaf: false,
-    },
-    {
-      id: `procs-${instanceName}`,
-      label: 'Procedures',
-      nodeType: 'folder',
-      objectKind: 'procedures',
-      instanceName,
-      isLeaf: false,
-    },
-    {
-      id: `funcs-${instanceName}`,
-      label: 'Functions',
-      nodeType: 'folder',
-      objectKind: 'functions',
-      instanceName,
-      isLeaf: false,
-    },
-    {
-      id: `trigs-${instanceName}`,
-      label: 'Triggers',
-      nodeType: 'folder',
-      objectKind: 'triggers',
-      instanceName,
-      isLeaf: false,
-    },
-    {
-      id: `events-${instanceName}`,
-      label: 'Events',
-      nodeType: 'folder',
-      objectKind: 'events',
-      instanceName,
-      isLeaf: false,
-    },
-    {
-      id: `queries-${instanceName}`,
-      label: 'Queries',
-      nodeType: 'folder',
-      objectKind: 'queries',
-      instanceName,
-      isLeaf: false,
-    },
+  const caps = capabilities.value;
+  const specs: Array<{ enabled: boolean; kind: string; label: string }> = [
+    { kind: 'tables', label: 'Tables', enabled: true },
+    { kind: 'views', label: 'Views', enabled: caps.views },
+    { kind: 'procedures', label: 'Procedures', enabled: caps.procedures },
+    { kind: 'functions', label: 'Functions', enabled: caps.functions },
+    { kind: 'triggers', label: 'Triggers', enabled: caps.triggers },
+    { kind: 'events', label: 'Events', enabled: caps.events },
+    { kind: 'queries', label: 'Queries', enabled: true },
   ];
+  return specs
+    .filter((s) => s.enabled)
+    .map((s) => ({
+      id: `${s.kind}-${instanceName}`,
+      label: s.label,
+      nodeType: 'folder',
+      objectKind: s.kind,
+      instanceName,
+      isLeaf: false,
+    }));
 }
 
 function matchFilter(label: string) {
   const q = (props.filterText || '').trim().toLowerCase();
   if (!q) return true;
-  return label.toLowerCase().includes(q);
+  return String(label || '')
+    .toLowerCase()
+    .includes(q);
 }
 
-/** 加载连接下的数据库（实例）列表；不预置 children，交给 lazy */
+/** 加载连接下的库/模式列表；不预置 children，交给 lazy */
 async function loadInstances() {
   loading.value = true;
   try {
@@ -158,12 +141,20 @@ async function loadInstances() {
       instanceName: ins.instanceName,
       isLeaf: false,
     }));
-  } catch (e: any) {
-    ElMessage.error(e?.message || '加载实例失败');
+  } catch (error: any) {
+    ElMessage.error(error?.message || '加载实例失败');
   } finally {
     loading.value = false;
   }
 }
+
+const OBJECT_API: Record<string, (a: any, b: any) => Promise<any>> = {
+  views: getViews,
+  procedures: getProcedures,
+  functions: getFunctions,
+  triggers: getTriggers,
+  events: getEvents,
+};
 
 /** 展开「Tables/Views/...」文件夹时拉取对应对象列表 */
 async function loadFolder(node: any, resolve: (data: any[]) => void) {
@@ -188,10 +179,11 @@ async function loadFolder(node: any, resolve: (data: any[]) => void) {
         name: t.tableName,
         nodeType: 'table',
         instanceName,
+        /** 真实 schema（PG=public；达梦=OWNER）；打开表 SQL 优先用此字段 */
+        schemaName: t.schemaName || undefined,
         isLeaf: false,
       }));
     } else if (objectKind === 'queries') {
-      // 已保存查询：仅当前登录用户可见
       const res: any = await listSavedQueries({
         dbConfigId: props.dbConfigId,
         instanceName,
@@ -208,14 +200,7 @@ async function loadFolder(node: any, resolve: (data: any[]) => void) {
         isLeaf: true,
       }));
     } else {
-      const apiMap: Record<string, (a: any, b: any) => Promise<any>> = {
-        views: getViews,
-        procedures: getProcedures,
-        functions: getFunctions,
-        triggers: getTriggers,
-        events: getEvents,
-      };
-      const api = apiMap[objectKind];
+      const api = OBJECT_API[objectKind];
       if (!api) {
         resolve([]);
         return;
@@ -230,12 +215,13 @@ async function loadFolder(node: any, resolve: (data: any[]) => void) {
         isLeaf: true,
       }));
     }
-    if (props.filterText) {
-      list = list.filter((n) => matchFilter(n.name || n.label));
-    }
-    resolve(list);
-  } catch (e: any) {
-    ElMessage.error(e?.message || '加载失败');
+    resolve(
+      props.filterText
+        ? list.filter((n) => matchFilter(n.name || n.label))
+        : list,
+    );
+  } catch (error: any) {
+    ElMessage.error(error?.message || '加载失败');
     resolve([]);
   }
 }
@@ -245,16 +231,17 @@ async function loadColumns(node: any, resolve: (data: any[]) => void) {
   const { instanceName, name } = node.data;
   try {
     const res: any = await getTableColumns(props.dbConfigId, instanceName, name);
-    const cols = (res?.data || res || []).map((c: any) => ({
-      id: `col-${instanceName}-${name}-${c.fieldName}`,
-      label: `${c.fieldName}${c.dataType ? ' : ' + c.dataType : ''}`,
-      name: c.fieldName,
-      nodeType: 'column',
-      instanceName,
-      tableName: name,
-      isLeaf: true,
-    }));
-    resolve(cols);
+    resolve(
+      (res?.data || res || []).map((c: any) => ({
+        id: `col-${instanceName}-${name}-${c.fieldName}`,
+        label: `${c.fieldName}${c.dataType ? ` : ${c.dataType}` : ''}`,
+        name: c.fieldName,
+        nodeType: 'column',
+        instanceName,
+        tableName: name,
+        isLeaf: true,
+      })),
+    );
   } catch {
     resolve([]);
   }
@@ -262,7 +249,7 @@ async function loadColumns(node: any, resolve: (data: any[]) => void) {
 
 /**
  * ElTree lazy 回调：
- * - 展开库 → 返回六类文件夹
+ * - 展开库 → 返回对象文件夹
  * - 展开文件夹 → 请求远端对象
  * - 展开表 → 请求字段
  * 注意：lazy 首次展开一定会调 load，切勿 resolve([]) 覆盖子节点。
@@ -296,7 +283,11 @@ function loadNode(node: any, resolve: (data: any[]) => void) {
 /** 双击表：生成 SELECT；双击已保存查询：打开编辑器；其它：插入名称 */
 function onNodeDblClick(data: any) {
   if (data.nodeType === 'table') {
-    emit('openTable', { instanceName: data.instanceName, tableName: data.name });
+    emit('openTable', {
+      instanceName: data.instanceName,
+      tableName: data.name,
+      schemaName: data.schemaName,
+    });
     return;
   }
   if (data.nodeType === 'savedQuery') {
@@ -313,10 +304,17 @@ function onNodeDblClick(data: any) {
   }
 }
 
-/** 单击：选中库时同步编辑器当前库 */
+/** 单击：选中库时同步编辑器当前库；选中表时记录供 F11 */
 function onNodeClick(data: any) {
   if (data?.nodeType === 'instance' && data.instanceName) {
     emit('selectInstance', data.instanceName);
+  }
+  if (data?.nodeType === 'table' && data.name) {
+    emit('selectTable', {
+      instanceName: data.instanceName,
+      tableName: data.name,
+      schemaName: data.schemaName,
+    });
   }
 }
 
@@ -350,6 +348,14 @@ function closeCtxMenu() {
   ctxMenu.node = null;
 }
 
+/** 点击菜单外区域关闭（capture 阶段，避免 ElTree 吞掉 click） */
+function onDocMouseDown(e: MouseEvent) {
+  if (!ctxMenu.visible) return;
+  const target = e.target as HTMLElement | null;
+  if (target?.closest('.obj-ctx-menu')) return;
+  closeCtxMenu();
+}
+
 function onCtxAction(action: TreeCtxAction) {
   if (!ctxMenu.node) return;
   emit('contextAction', { action, node: { ...ctxMenu.node } });
@@ -361,40 +367,53 @@ function filterNode(value: string, data: any) {
 }
 
 /**
- * 刷新某库下 Queries 文件夹（保存/删除后调用）
+ * 刷新指定实例下的某个文件夹。
  * ElTree lazy：清掉子节点缓存后重新展开。
  */
-function reloadQueries(instanceName: string) {
+function reloadFolder(objectKind: string, instanceName: string) {
   const tree = treeRef.value;
   if (!tree || !instanceName) return;
-  const node = tree.getNode(`queries-${instanceName}`);
+  const node = tree.getNode(`${objectKind}-${instanceName}`);
   if (!node) return;
   node.loaded = false;
   node.expand();
 }
 
+/** 刷新某库下 Queries 文件夹（保存/删除后由父级调用） */
+function reloadQueries(instanceName: string) {
+  reloadFolder('queries', instanceName);
+}
+
+/** 刷新某库下 Tables 文件夹（删表后由父级调用） */
+function reloadTables(instanceName: string) {
+  reloadFolder('tables', instanceName);
+}
+
 watch(
   () => props.filterText,
-  (val) => {
-    treeRef.value?.filter(val || '');
-  },
+  (val) => treeRef.value?.filter(val || ''),
 );
 
 watch(
-  () => props.dbConfigId,
+  () => [props.dbConfigId, props.dbType],
   () => loadInstances(),
 );
 
 onMounted(() => {
   loadInstances();
-  document.addEventListener('click', closeCtxMenu);
+  document.addEventListener('mousedown', onDocMouseDown, true);
 });
 
 onBeforeUnmount(() => {
-  document.removeEventListener('click', closeCtxMenu);
+  document.removeEventListener('mousedown', onDocMouseDown, true);
 });
 
-defineExpose({ reload: loadInstances, reloadQueries });
+defineExpose({
+  reload: loadInstances,
+  reloadQueries,
+  reloadTables,
+  closeContextMenu: closeCtxMenu,
+});
 </script>
 
 <template>
@@ -407,7 +426,7 @@ defineExpose({ reload: loadInstances, reloadQueries });
       lazy
       :load="loadNode"
       highlight-current
-      :expand-on-click-node="false"
+      :expand-on-click-node="true"
       :filter-node-method="filterNode"
       @node-click="(_: any, node: any) => onNodeClick(node.data)"
       @node-dblclick="(_: any, node: any) => onNodeDblClick(node.data)"
@@ -419,6 +438,8 @@ defineExpose({ reload: loadInstances, reloadQueries });
       :y="ctxMenu.y"
       :target-type="ctxMenu.targetType"
       :object-kind="ctxMenu.objectKind"
+      :instance-label="instanceLabel"
+      :can-manage-instance="capabilities.manageInstance"
       @close="closeCtxMenu"
       @action="onCtxAction"
     />
@@ -428,7 +449,7 @@ defineExpose({ reload: loadInstances, reloadQueries });
 <style scoped>
 .object-tree {
   height: 100%;
-  overflow: auto;
   padding: 4px;
+  overflow: auto;
 }
 </style>

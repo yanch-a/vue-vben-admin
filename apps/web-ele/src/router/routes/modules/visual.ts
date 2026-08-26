@@ -8,7 +8,6 @@ const routes: RouteRecordRaw[] = [
   {
     name: 'VisualClient',
     path: '/visual/client',
-    // @ts-expect-error Options/SFC
     component: () => import('#/views/visual/client/index.vue'),
     meta: {
       title: '数据库客户端',
@@ -18,7 +17,6 @@ const routes: RouteRecordRaw[] = [
   {
     name: 'SavedQueryManage',
     path: '/visual/client/savedQueries',
-    // @ts-expect-error Options/SFC
     component: () => import('#/views/visual/client/savedQueryManage.vue'),
     meta: {
       title: '查询文件管理',
@@ -29,7 +27,8 @@ const routes: RouteRecordRaw[] = [
   {
     name: 'DbConfigCanvas',
     path: '/visual/dbConfig/canvas',
-    // @ts-expect-error Options API SFC
+    // 历史 Options SFC、无 lang=ts，vue-tsc 不生成模块声明
+    // @ts-expect-error SFC without typed module
     component: () => import('#/views/visual/dbConfig/canvas.vue'),
     meta: {
       hideInMenu: true,
@@ -40,7 +39,6 @@ const routes: RouteRecordRaw[] = [
   {
     name: 'RelationCanvas',
     path: '/visual/dbConfig/relationCanvas',
-    // @ts-expect-error Options API SFC
     component: () => import('#/views/visual/dbConfig/relationCanvas.vue'),
     meta: {
       hideInMenu: true,
@@ -55,6 +53,8 @@ const routes: RouteRecordRaw[] = [
   {
     name: 'QueryResultShare',
     path: '/visual/queryResult/share/:shareCode',
+    // 历史 script setup 无 lang=ts，vue-tsc 不生成模块声明
+    // @ts-expect-error SFC without typed module
     component: () => import('#/views/visual/visualQuery/share.vue'),
     meta: {
       hideInMenu: true,

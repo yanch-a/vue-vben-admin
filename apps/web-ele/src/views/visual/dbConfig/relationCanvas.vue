@@ -21,6 +21,7 @@
   import { Keyboard } from '@antv/x6-plugin-keyboard'
   import { Selection } from '@antv/x6-plugin-selection'
   import { Snapline } from '@antv/x6-plugin-snapline'
+  import { Page } from '@vben/common-ui'
   import { usePreferences } from '@vben/preferences'
   import { ArrowLeft, Search } from '@element-plus/icons-vue'
   import { ElMessage } from 'element-plus'
@@ -30,6 +31,7 @@
   import { getInstances, getTables } from '#/api/visual/database'
   import {
     addRelationCanvasGroup,
+    editRelationCanvasGroup,
     findBestRelationshipPath,
     getCatalogTablesLight,
     getDbConfigById,
@@ -38,6 +40,7 @@
     loadRelationCanvas,
     saveRelationCanvas,
     syncTableToCatalog,
+    updateTableDisplayName,
   } from '#/api/visual/vq'
   import { backToListPage } from '#/utils/route-back'
 
@@ -66,10 +69,37 @@
     tableId: string | number
     tableName: string
     displayName?: string
+    schemaName?: string
     fieldCount: number
   }
 
+  /** 不同实例表头配色（按实例列表下标循环） */
+  const INSTANCE_HEADER_COLORS = [
+    '#5a78a0',
+    '#409eff',
+    '#67c23a',
+    '#e6a23c',
+    '#f56c6c',
+    '#9b59b6',
+    '#1abc9c',
+    '#e67e22',
+    '#3498db',
+    '#16a085',
+  ]
+
   const { isDark } = usePreferences()
+
+  function headerColorForSchema(schema?: string | null) {
+    const name = String(schema || '').trim()
+    if (!name) return canvasTheme().headerFill
+    const idx = instanceOptions.value.indexOf(name)
+    if (idx >= 0) {
+      return INSTANCE_HEADER_COLORS[idx % INSTANCE_HEADER_COLORS.length]
+    }
+    let h = 0
+    for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) | 0
+    return INSTANCE_HEADER_COLORS[Math.abs(h) % INSTANCE_HEADER_COLORS.length]
+  }
 
   /** 画布/节点主题色，跟随系统亮暗色 */
   function canvasTheme() {
@@ -199,21 +229,23 @@
     const t = canvasTheme()
     graph.drawBackground({ color: t.bg })
     graph.drawGrid({
-      visible: true,
       type: 'dot',
       args: { color: t.grid, thickness: 1 },
     })
+    graph.showGrid()
     const selected = new Set(
       selectionPlugin
         ? selectionPlugin.getSelectedCells().filter((c) => c.isNode()).map((c) => c.id)
         : [],
     )
     graph.getNodes().forEach((node) => {
+      const data = (node.getData() || {}) as TableNodeData
+      const headerFill = selected.has(node.id)
+        ? t.headerFillActive
+        : headerColorForSchema(data.schemaName)
       node.attr({
         body: { fill: t.bodyFill, stroke: t.bodyStroke },
-        header: {
-          fill: selected.has(node.id) ? t.headerFillActive : t.headerFill,
-        },
+        header: { fill: headerFill },
         headerLabel: { fill: t.titleFill },
         nameLabel: { fill: t.nameFill },
         metaLabel: { fill: t.metaFill },
@@ -271,14 +303,20 @@
   const canvasRef = ref<HTMLElement | null>(null)
   const catalogScrollRef = ref<HTMLElement | null>(null)
   const saving = ref(false)
+  const switchingCanvas = ref(false)
   const tableFilter = ref('')
   const remoteLoading = ref(false)
   const syncingTableName = ref('')
 
-  /** 画布分组：同一库多套关系网 */
+  /**
+   * 画布模型：同一 dbConfig 下每个实例（schema）对应唯一画布分组。
+   * - canvasInstanceName：当前编辑的实例画布（工具栏切换）
+   * - currentSchema：左侧表目录浏览的实例（可跨库拉表）
+   */
   const canvasGroups = ref<any[]>([])
   const currentCanvasGroupId = ref<string | number | null>(null)
-  const creatingCanvasGroup = ref(false)
+  const instanceOptions = ref<string[]>([])
+  const canvasInstanceName = ref('')
 
   const schemaOptions = ref<string[]>([])
   const currentSchema = ref('')
@@ -292,21 +330,39 @@
   const pathDialogVisible = ref(false)
   const pathResult = ref<any>(null)
 
-  /** 双击表节点：查看表信息 */
+  /** 双击表节点：查看/改显示名 */
   const tableInfoVisible = ref(false)
   const tableInfoLoading = ref(false)
+  const tableInfoSaving = ref(false)
   const tableInfo = reactive<{
     tableId: string
     tableName: string
     displayName: string
     schemaName: string
+    syncRemoteComment: boolean
     columns: any[]
   }>({
     tableId: '',
     tableName: '',
     displayName: '',
     schemaName: '',
+    syncRemoteComment: true,
     columns: [],
+  })
+
+  /** 左侧右键：仅改库注释的显示名 */
+  const renameDialogVisible = ref(false)
+  const renameSaving = ref(false)
+  const renameForm = reactive<{
+    tableName: string
+    schemaName: string
+    displayName: string
+    tableId: string | number | null
+  }>({
+    tableName: '',
+    schemaName: '',
+    displayName: '',
+    tableId: null,
   })
 
   const ctxMenu = reactive<{
@@ -434,9 +490,12 @@
     const t = canvasTheme()
     const selected = new Set(selectedNodeIds.value)
     graph.getNodes().forEach((node) => {
+      const data = (node.getData() || {}) as TableNodeData
       node.attr(
         'header/fill',
-        selected.has(String(node.id)) ? t.headerFillActive : t.headerFill,
+        selected.has(String(node.id))
+          ? t.headerFillActive
+          : headerColorForSchema(data.schemaName),
       )
     })
   }
@@ -465,7 +524,7 @@
     ctxMenu.table = table
     const pad = 8
     const menuW = 140
-    const menuH = 72
+    const menuH = 108
     let x = event.clientX
     let y = event.clientY
     if (x + menuW > window.innerWidth - pad) x = window.innerWidth - menuW - pad
@@ -526,10 +585,15 @@
     const pos = centerToTopLeft(x, y)
     const t = canvasTheme()
     const tableName = table.tableName || ''
+    const schemaName = table.schemaName || ''
     // 表头：中文注释优先，没有则表名
     const headerText = resolveHeaderLabel(table)
     const displayName = table.displayName || tableName
     const fieldCount = table.columns ? table.columns.length : 0
+    const foreign =
+      !!schemaName &&
+      !!canvasInstanceName.value &&
+      schemaName !== canvasInstanceName.value
     return {
       id: String(table.id),
       shape: NODE_SHAPE,
@@ -539,7 +603,7 @@
       height: NODE_HEIGHT,
       attrs: {
         body: { fill: t.bodyFill, stroke: t.bodyStroke },
-        header: { fill: t.headerFill },
+        header: { fill: headerColorForSchema(schemaName) },
         headerLabel: {
           text: truncateLabel(headerText, 16),
           fill: t.titleFill,
@@ -549,7 +613,9 @@
           fill: t.nameFill,
         },
         metaLabel: {
-          text: `${fieldCount} 个字段`,
+          text: foreign
+            ? `${truncateLabel(schemaName, 10)} · ${fieldCount}字段`
+            : `${fieldCount} 个字段`,
           fill: t.metaFill,
         },
       },
@@ -557,6 +623,7 @@
         tableId: table.id,
         tableName,
         displayName,
+        schemaName,
         fieldCount,
       } as TableNodeData,
       ports: defaultPorts,
@@ -931,7 +998,8 @@
     tableInfo.tableId = tableId
     tableInfo.tableName = data.tableName || ''
     tableInfo.displayName = data.displayName || data.tableName || ''
-    tableInfo.schemaName = ''
+    tableInfo.schemaName = data.schemaName || ''
+    tableInfo.syncRemoteComment = true
     tableInfo.columns = []
     tableInfoVisible.value = true
     tableInfoLoading.value = true
@@ -949,7 +1017,8 @@
         tableInfo.tableName = table.tableName || tableInfo.tableName
         tableInfo.displayName =
           table.displayName || table.tableName || tableInfo.displayName
-        tableInfo.schemaName = table.schemaName || currentSchema.value || ''
+        tableInfo.schemaName =
+          table.schemaName || data.schemaName || currentSchema.value || ''
         tableInfo.columns = table.columns || []
       }
     } catch (e: any) {
@@ -957,6 +1026,145 @@
       ElMessage.error(e?.msg || e?.message || '加载表信息失败')
     } finally {
       tableInfoLoading.value = false
+    }
+  }
+
+  /** 将新显示名写回画布节点与本地缓存 */
+  const applyDisplayNameToNode = (
+    tableId: string | number,
+    displayName: string,
+    schemaName?: string,
+  ) => {
+    const id = String(tableId)
+    const cached = tableMap[id]
+    if (cached) {
+      cached.displayName = displayName
+      if (schemaName) cached.schemaName = schemaName
+    }
+    const sid = Object.keys(catalogBySourceId).find(
+      (k) => String(catalogBySourceId[k]?.id) === id,
+    )
+    if (sid && catalogBySourceId[sid]) {
+      catalogBySourceId[sid].displayName = displayName
+    }
+    if (!graph) return
+    const node = graph.getCellById(id)
+    if (!node || !node.isNode()) return
+    const data = {
+      ...(node.getData() || {}),
+      displayName,
+      schemaName: schemaName || (node.getData() as TableNodeData)?.schemaName,
+    } as TableNodeData
+    node.setData(data)
+    const headerText = resolveHeaderLabel({
+      tableName: data.tableName,
+      displayName,
+    })
+    const t = canvasTheme()
+    const selected = selectedNodeIds.value.includes(id)
+    node.attr({
+      header: {
+        fill: selected
+          ? t.headerFillActive
+          : headerColorForSchema(data.schemaName),
+      },
+      headerLabel: { text: truncateLabel(headerText, 16) },
+    })
+  }
+
+  const saveTableDisplayNameFromInfo = async () => {
+    const name = String(tableInfo.displayName || '').trim()
+    if (!name) {
+      ElMessage.warning('请输入显示名称')
+      return
+    }
+    tableInfoSaving.value = true
+    try {
+      const { data } = await updateTableDisplayName({
+        tableId: tableInfo.tableId,
+        dbConfigId,
+        schemaName: tableInfo.schemaName,
+        tableName: tableInfo.tableName,
+        displayName: name,
+        syncRemoteComment: tableInfo.syncRemoteComment,
+      })
+      if (data) rememberCatalogTable(data)
+      applyDisplayNameToNode(
+        tableInfo.tableId,
+        name,
+        tableInfo.schemaName || undefined,
+      )
+      // 左侧列表若同源表也刷新展示
+      const remote = remoteTables.value.find(
+        (t) => t.tableName === tableInfo.tableName,
+      )
+      if (remote && currentSchema.value === tableInfo.schemaName) {
+        remote.displayName = name
+      }
+      ElMessage.success(
+        tableInfo.syncRemoteComment
+          ? '显示名称已更新，并已同步数据库注释'
+          : '显示名称已更新（仅本画布目录）',
+      )
+    } catch (e: any) {
+      console.error(e)
+      ElMessage.error(e?.msg || e?.message || '保存显示名称失败')
+    } finally {
+      tableInfoSaving.value = false
+    }
+  }
+
+  const openRenameDialog = () => {
+    const table = ctxMenu.table
+    closeCatalogContextMenu()
+    if (!table) return
+    const sid = buildSourceId(table.tableName)
+    const local = catalogBySourceId[sid]
+    renameForm.tableName = table.tableName || ''
+    renameForm.schemaName = currentSchema.value || ''
+    renameForm.displayName =
+      table.displayName || local?.displayName || table.tableName || ''
+    renameForm.tableId = local?.id ?? null
+    renameDialogVisible.value = true
+  }
+
+  const confirmRenameFromCatalog = async () => {
+    const name = String(renameForm.displayName || '').trim()
+    if (!name) {
+      ElMessage.warning('请输入显示名称')
+      return
+    }
+    if (!renameForm.tableName || !renameForm.schemaName) {
+      ElMessage.warning('缺少表信息')
+      return
+    }
+    renameSaving.value = true
+    try {
+      const { data } = await updateTableDisplayName({
+        tableId: renameForm.tableId,
+        dbConfigId,
+        schemaName: renameForm.schemaName,
+        tableName: renameForm.tableName,
+        displayName: name,
+        syncRemoteComment: true,
+      })
+      if (data) {
+        rememberCatalogTable(data)
+        if (data.id != null) {
+          applyDisplayNameToNode(data.id, name, renameForm.schemaName)
+        }
+      }
+      const remote = remoteTables.value.find(
+        (t) => t.tableName === renameForm.tableName,
+      )
+      if (remote) remote.displayName = name
+      renameDialogVisible.value = false
+      ElMessage.success('已修改数据库表注释')
+    } catch (e: any) {
+      console.error(e)
+      ElMessage.error(e?.msg || e?.message || '修改显示名称失败')
+    } finally {
+      renameSaving.value = false
     }
   }
 
@@ -1063,86 +1271,144 @@
     await loadRemoteTables()
   }
 
-  const loadCanvasGroups = async () => {
+  /**
+   * 确保每个实例都有同名画布分组；历史「默认画布」在仅有一个时迁移为默认实例名。
+   */
+  const ensureInstanceCanvasGroups = async (preferredInstance?: string) => {
     const { data } = await listRelationCanvasGroups(dbConfigId)
     canvasGroups.value = data || []
-    if (!canvasGroups.value.length) {
-      // 首次进入：自动建默认画布
+
+    const migrateTarget =
+      (preferredInstance && instanceOptions.value.includes(preferredInstance)
+        ? preferredInstance
+        : null) || instanceOptions.value[0] || ''
+
+    if (
+      canvasGroups.value.length === 1 &&
+      canvasGroups.value[0].groupName === '默认画布' &&
+      migrateTarget
+    ) {
+      try {
+        const row = { ...canvasGroups.value[0], groupName: migrateTarget }
+        await editRelationCanvasGroup(row)
+        canvasGroups.value[0].groupName = migrateTarget
+      } catch (e) {
+        console.warn('迁移默认画布失败', e)
+      }
+    }
+
+    const existing = new Set(
+      canvasGroups.value.map((g) => String(g.groupName || '')),
+    )
+    for (let i = 0; i < instanceOptions.value.length; i++) {
+      const inst = instanceOptions.value[i]
+      if (!inst || existing.has(inst)) continue
       try {
         const { data: created } = await addRelationCanvasGroup({
           dbConfigId,
-          groupName: '默认画布',
+          groupName: inst,
           isPublic: 1,
-          orderNum: 0,
+          orderNum: i,
         })
-        if (created?.id) {
-          canvasGroups.value = [created]
-          currentCanvasGroupId.value = created.id
-          return
+        if (created) {
+          canvasGroups.value.push(created)
+          existing.add(inst)
         }
       } catch (e) {
-        console.warn('创建默认画布失败', e)
+        console.warn(`创建实例画布失败: ${inst}`, e)
       }
     }
-    if (!currentCanvasGroupId.value && canvasGroups.value.length) {
-      currentCanvasGroupId.value = canvasGroups.value[0].id
-    }
   }
 
-  const createCanvasGroup = async () => {
-    creatingCanvasGroup.value = true
-    try {
-      const { data } = await addRelationCanvasGroup({
-        dbConfigId,
-        groupName: `画布-${canvasGroups.value.length + 1}`,
-        isPublic: 1,
-        orderNum: canvasGroups.value.length,
-      })
-      await loadCanvasGroups()
-      if (data?.id) {
-        currentCanvasGroupId.value = data.id
-      }
-      await loadData()
-      ElMessage.success('已新建画布分组')
-    } catch (e) {
-      console.error(e)
-      ElMessage.error('新建画布分组失败')
-    } finally {
-      creatingCanvasGroup.value = false
-    }
+  const syncCanvasGroupByInstance = () => {
+    const g = canvasGroups.value.find(
+      (x) => String(x.groupName) === String(canvasInstanceName.value),
+    )
+    currentCanvasGroupId.value = g?.id ?? null
   }
 
-  const onCanvasGroupChange = async () => {
-    await loadData()
-  }
-
-  const loadData = async () => {
-    if (!graph) return
-    if (!canvasGroups.value.length) {
-      await loadCanvasGroups()
-    }
-    const [
-      { data: config },
-      { data: instanceTree },
-      { data: lightCatalog },
-      { data: relationships },
-    ] = await Promise.all([
-      getDbConfigById({ id: dbConfigId }),
-      getInstances(dbConfigId),
-      getCatalogTablesLight(dbConfigId),
-      loadRelationCanvas(dbConfigId, currentCanvasGroupId.value),
-    ])
-    dbConfigName.value = config ? config.dbName : ''
-
+  /** 加载实例列表，并为每个实例准备画布分组 */
+  const resolveInstancesAndCanvas = async (config?: any) => {
+    const { data: instanceTree } = await getInstances(dbConfigId)
     const instances = instanceTree?.[0]?.instances || []
-    schemaOptions.value = instances
+    instanceOptions.value = instances
       .map((i: any) => i.instanceName)
       .filter(Boolean)
-    const defaultSchema =
-      config?.schemaName && schemaOptions.value.includes(config.schemaName)
-        ? config.schemaName
-        : schemaOptions.value[0] || ''
-    currentSchema.value = defaultSchema
+    schemaOptions.value = [...instanceOptions.value]
+
+    const preferred =
+      (route.query.instance as string) ||
+      config?.schemaName ||
+      canvasInstanceName.value ||
+      ''
+
+    await ensureInstanceCanvasGroups(preferred)
+
+    if (
+      preferred &&
+      instanceOptions.value.includes(preferred)
+    ) {
+      canvasInstanceName.value = preferred
+    } else if (
+      !canvasInstanceName.value ||
+      !instanceOptions.value.includes(canvasInstanceName.value)
+    ) {
+      canvasInstanceName.value = instanceOptions.value[0] || ''
+    }
+
+    syncCanvasGroupByInstance()
+
+    if (
+      !currentSchema.value ||
+      !schemaOptions.value.includes(currentSchema.value)
+    ) {
+      currentSchema.value =
+        canvasInstanceName.value || schemaOptions.value[0] || ''
+    }
+  }
+
+  /** 工具栏：切换实例画布并重新加载 */
+  const onCanvasInstanceChange = async (name: string) => {
+    if (switchingCanvas.value || !name) return
+    switchingCanvas.value = true
+    try {
+      canvasInstanceName.value = name
+      syncCanvasGroupByInstance()
+      if (!currentCanvasGroupId.value) {
+        await ensureInstanceCanvasGroups(name)
+        syncCanvasGroupByInstance()
+      }
+      // 左侧目录默认跟着切到同实例，仍可再切去拉其他库表
+      currentSchema.value = name
+      tableFilter.value = ''
+      await router.replace({
+        query: { ...route.query, id: dbConfigId, instance: name },
+      })
+      await loadData({ skipInstanceResolve: true })
+    } catch (e) {
+      console.error(e)
+      ElMessage.error('切换画布失败')
+    } finally {
+      switchingCanvas.value = false
+    }
+  }
+
+  const loadData = async (opts?: { skipInstanceResolve?: boolean }) => {
+    if (!graph) return
+
+    const { data: config } = await getDbConfigById({ id: dbConfigId })
+    dbConfigName.value = config ? config.dbName : ''
+
+    if (!opts?.skipInstanceResolve) {
+      await resolveInstancesAndCanvas(config)
+    }
+
+    const [{ data: lightCatalog }, { data: relationships }] = await Promise.all(
+      [
+        getCatalogTablesLight(dbConfigId),
+        loadRelationCanvas(dbConfigId, currentCanvasGroupId.value),
+      ],
+    )
 
     Object.keys(catalogBySourceId).forEach((k) => delete catalogBySourceId[k])
     Object.keys(tableMap).forEach((k) => delete tableMap[k])
@@ -1162,10 +1428,15 @@
 
     const neededIds = new Set<string>()
     const rels = relationships || []
+    const canvasSchema = canvasInstanceName.value
+
+    // 当前实例画布：本实例有坐标的表 + 本画布关系中的表（可含其他实例）
     for (const t of lightCatalog || []) {
-      if (t.posX != null && t.posY != null && t.id != null) {
-        neededIds.add(String(t.id))
+      if (t.posX == null || t.posY == null || t.id == null) continue
+      if (canvasSchema && t.schemaName && t.schemaName !== canvasSchema) {
+        continue
       }
+      neededIds.add(String(t.id))
     }
     for (const r of rels) {
       if (r.sourceTableId != null) neededIds.add(String(r.sourceTableId))
@@ -1315,37 +1586,35 @@
 </script>
 
 <template>
-  <div class="relation-canvas-container">
+  <Page auto-content-height content-class="!p-0">
+    <div class="relation-canvas-container">
     <div class="canvas-toolbar">
       <div class="toolbar-left">
         <el-button :icon="ArrowLeft" @click="goBack">返回</el-button>
-        <span class="db-title">{{ dbConfigName }} - 关系画布</span>
         <el-select
-          v-model="currentCanvasGroupId"
-          placeholder="画布分组"
-          size="small"
+          v-model="canvasInstanceName"
+          placeholder="切换画布实例"
+          size="default"
           filterable
-          style="width: 180px; margin-left: 12px"
-          @change="onCanvasGroupChange"
+          :disabled="switchingCanvas"
+          style="width: 200px; margin-left: 12px"
+          @change="onCanvasInstanceChange"
         >
           <el-option
-            v-for="g in canvasGroups"
-            :key="g.id"
-            :label="g.groupName"
-            :value="g.id"
+            v-for="item in instanceOptions"
+            :key="item"
+            :label="item"
+            :value="item"
           />
         </el-select>
-        <el-button
-          size="small"
-          :loading="creatingCanvasGroup"
-          style="margin-left: 8px"
-          @click="createCanvasGroup"
-        >
-          新建画布
-        </el-button>
+        <span class="db-title">
+          {{ dbConfigName
+          }}{{ canvasInstanceName ? ` / ${canvasInstanceName}` : '' }} -
+          关系画布
+        </span>
         <span class="canvas-hint">
-          空白拖动画布 · 拖节点移动 · 边缘圆点拉线 · 双击表查看信息 · Ctrl+滚轮缩放 ·
-          Shift 框选
+          空白拖动画布 · 拖节点移动 · 边缘圆点拉线 · 双击表查看/改名 · Ctrl+滚轮缩放 ·
+          Shift 框选 · 表头颜色区分实例
         </span>
       </div>
       <div class="toolbar-right">
@@ -1374,12 +1643,12 @@
       </div>
     </div>
 
-    <div class="canvas-body">
+    <div class="canvas-body" v-loading="switchingCanvas">
       <div class="table-catalog">
         <div class="catalog-header">
           <el-select
             v-model="currentSchema"
-            placeholder="选择数据库"
+            placeholder="选择实例（拉表）"
             size="small"
             filterable
             style="width: 100%; margin-bottom: 8px"
@@ -1470,8 +1739,8 @@
           />
         </div>
         <div class="catalog-tip">
-          左键点击或右键「添加」加入画布；从节点边缘拖出可连线；选中后按 Delete
-          可移除（需保存画布才持久化）。
+          上方切换「拉表实例」可跨库加表到当前画布；工具栏切换的是整张实例画布。左键或右键「添加」加入；边缘拖出连线；Delete
+          移除（需保存才持久化）。
         </div>
       </div>
 
@@ -1491,6 +1760,9 @@
           @click="!ctxMenuOnCanvas && ctxMenuAdd()"
         >
           添加到画布
+        </div>
+        <div class="vq-ctx-item" @click="openRenameDialog()">
+          修改显示名称
         </div>
         <div
           class="vq-ctx-item danger"
@@ -1651,7 +1923,7 @@
             <el-timeline-item
               v-for="(rel, i) in pathResult.relationships"
               :key="rel.id"
-              :timestamp="`第 ${i + 1} 步`"
+              :timestamp="`第 ${Number(i) + 1} 步`"
             >
               {{ tableLabel(rel.sourceTableId) }}
               <el-tag size="small" style="margin: 0 4px">
@@ -1671,14 +1943,30 @@
       destroy-on-close
     >
       <div v-loading="tableInfoLoading" class="table-info-dialog">
+        <el-form label-width="100px" class="table-info-name-form">
+          <el-form-item label="显示名称">
+            <el-input
+              v-model="tableInfo.displayName"
+              placeholder="表头显示名 / 注释"
+              maxlength="200"
+              show-word-limit
+            />
+          </el-form-item>
+          <el-form-item label="同步库注释">
+            <el-checkbox v-model="tableInfo.syncRemoteComment">
+              同步修改数据库表注释
+            </el-checkbox>
+            <div class="table-info-sync-tip">
+              勾选：同时改远端库 COMMENT；不勾选：仅改本系统目录/画布显示名
+            </div>
+          </el-form-item>
+        </el-form>
         <el-descriptions :column="2" border size="small" class="table-info-meta">
           <el-descriptions-item label="表名">
             {{ tableInfo.tableName || '-' }}
           </el-descriptions-item>
-          <el-descriptions-item label="显示名">
-            {{ tableInfo.displayName || '-' }}
-          </el-descriptions-item>
-          <el-descriptions-item label="Schema">
+          <el-descriptions-item label="实例">
+            <span class="schema-dot" :style="{ background: headerColorForSchema(tableInfo.schemaName) }"></span>
             {{ tableInfo.schemaName || '-' }}
           </el-descriptions-item>
           <el-descriptions-item label="字段数">
@@ -1690,7 +1978,7 @@
           border
           stripe
           size="small"
-          max-height="420"
+          max-height="360"
           style="margin-top: 12px"
           empty-text="暂无字段信息"
         >
@@ -1759,17 +2047,62 @@
         </el-table>
       </div>
       <template #footer>
-        <el-button type="primary" @click="tableInfoVisible = false">关闭</el-button>
+        <el-button @click="tableInfoVisible = false">关闭</el-button>
+        <el-button
+          type="primary"
+          :loading="tableInfoSaving"
+          @click="saveTableDisplayNameFromInfo"
+        >
+          保存显示名称
+        </el-button>
+      </template>
+    </el-dialog>
+
+    <el-dialog
+      v-model="renameDialogVisible"
+      title="修改显示名称"
+      width="480px"
+      destroy-on-close
+    >
+      <el-form label-width="90px">
+        <el-form-item label="表名">
+          <el-input :model-value="renameForm.tableName" disabled />
+        </el-form-item>
+        <el-form-item label="实例">
+          <el-input :model-value="renameForm.schemaName" disabled />
+        </el-form-item>
+        <el-form-item label="显示名称" required>
+          <el-input
+            v-model="renameForm.displayName"
+            placeholder="将写入数据库表注释"
+            maxlength="200"
+            show-word-limit
+            @keyup.enter="confirmRenameFromCatalog"
+          />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="renameDialogVisible = false">取消</el-button>
+        <el-button
+          type="primary"
+          :loading="renameSaving"
+          @click="confirmRenameFromCatalog"
+        >
+          确定
+        </el-button>
       </template>
     </el-dialog>
   </div>
+  </Page>
 </template>
 
 <style lang="scss" scoped>
   .relation-canvas-container {
     display: flex;
     flex-direction: column;
-    height: calc(100vh - 120px);
+    box-sizing: border-box;
+    height: 100%;
+    min-height: 0;
     padding: 12px;
 
     .canvas-toolbar {
@@ -1991,6 +2324,26 @@
 
   .table-info-dialog {
     min-height: 120px;
+  }
+
+  .table-info-name-form {
+    margin-bottom: 8px;
+
+    .table-info-sync-tip {
+      margin-top: 4px;
+      font-size: 12px;
+      line-height: 1.4;
+      color: var(--el-text-color-secondary);
+    }
+  }
+
+  .schema-dot {
+    display: inline-block;
+    width: 10px;
+    height: 10px;
+    margin-right: 6px;
+    vertical-align: middle;
+    border-radius: 2px;
   }
 
   .x6-port-body {

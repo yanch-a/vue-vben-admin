@@ -14,6 +14,50 @@ export function testConnection(dbConfigId: any) {
 }
 
 /**
+ * 测试未保存的连接：直接用表单内容建连
+ * 编辑已有连接时可只传 id 而不传密码，后端会补齐已保存的密码
+ */
+export function testConnectionDraft(data: {
+  id?: number | string
+  dbType: string
+  dbHost?: string
+  dbPort?: number | string
+  schemaName?: string
+  jdbcUrl?: string
+  username?: string
+  password?: string
+}) {
+  return request({
+    url: databaseUrl + 'testConnectionDraft',
+    method: 'post',
+    data,
+  })
+}
+
+/** 预览连接实际使用的 JDBC URL */
+export function previewJdbcUrl(data: {
+  dbType: string
+  dbHost?: string
+  dbPort?: number | string
+  schemaName?: string
+  jdbcUrl?: string
+}) {
+  return request({
+    url: databaseUrl + 'previewJdbcUrl',
+    method: 'post',
+    data,
+  })
+}
+
+/** 服务端支持的数据库产品档案（连接形态 / 默认端口 / 驱动可用性） */
+export function getDbTypeProfiles() {
+  return request({
+    url: databaseUrl + 'dbTypeProfiles',
+    method: 'get',
+  })
+}
+
+/**
  * 获取数据库实例
  */
 export function getInstances(dbConfigId: any) {
@@ -77,6 +121,25 @@ export function getTableDDL(dbConfigId: any, instanceName: any, tableName: any) 
   })
 }
 
+/** 表详情：字段 / 索引 / DDL / 方言扩展属性 */
+export function getTableInfo(
+  dbConfigId: number | string,
+  instanceName: string,
+  tableName: string,
+) {
+  return request({
+    url:
+      databaseUrl +
+      'getTableInfo/' +
+      dbConfigId +
+      '/' +
+      instanceName +
+      '/' +
+      tableName,
+    method: 'get',
+  })
+}
+
 /** 执行只读自由 SQL */
 export function executeSql(data: {
   dbConfigId: number | string
@@ -102,6 +165,19 @@ export function executeDml(data: {
 }) {
   return request({
     url: databaseUrl + 'executeDml',
+    method: 'post',
+    data,
+  })
+}
+
+/** 执行单条受控 DDL（建删库/Schema/用户、删表、GRANT 等） */
+export function executeDdl(data: {
+  dbConfigId: number | string
+  instanceName?: string
+  sql: string
+}) {
+  return request({
+    url: databaseUrl + 'executeDdl',
     method: 'post',
     data,
   })

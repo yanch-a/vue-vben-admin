@@ -6,27 +6,23 @@
  * - 标识符引用 / 限行语法 / DDL 模板 / 字面量 / 补全触发字符
  * 因此采用「单 SqlEditor + resolveSqlDialect(dbType)」即可。
  *
- * ## 扩展策略：产品类型 → 方言族（Family）
- * 绝大多数国产/云数据库都兼容四大方言族之一，不必一开始就写全新 Handler：
- * - MYSQL_LIKE：MySQL、OceanBase(MySQL 模式)、TDSQL、PolarDB-MySQL
- * - POSTGRES_LIKE：PostgreSQL、人大金仓、GaussDB、PolarDB-PG
- * - ORACLE_LIKE：Oracle、达梦、OceanBase(Oracle 模式)
- * - SQLSERVER_LIKE：SQL Server
- *
- * 新库接入步骤：
- * 1. 在 PRODUCT_FAMILY_MAP 增加枚举码 → family
- * 2. 若 JDBC/元数据与族内差异大，再新增后端 *DataBaseOperateService
- * 3. 仅当对象树/权限模型特殊时，才新增独立 ObjectTree 组件
+ * ## 与 dbTypes.ts 的分工
+ * - dbTypes.ts：产品 → 方言族 / 连接形态 / 对象树能力（新增数据库改这里）
+ * - 本文件：族 → 具体语法（新增语法族才改这里）
  *
  * @author yanch
  */
 
-/** 方言族：决定 quote / LIMIT / 布尔字面量等核心语法 */
-export type SqlDialectFamily =
-  | 'MYSQL_LIKE'
-  | 'POSTGRES_LIKE'
-  | 'ORACLE_LIKE'
-  | 'SQLSERVER_LIKE';
+import type { SqlDialectFamily } from './dbTypes';
+
+import { resolveDbType, resolveDialectFamily } from './dbTypes';
+
+export type { SqlDialectFamily } from './dbTypes';
+export {
+  normalizeDbTypeCode,
+  resolveCapabilities,
+  resolveDialectFamily,
+} from './dbTypes';
 
 export interface SqlDialectProfile {
   family: SqlDialectFamily;
@@ -57,13 +53,13 @@ export interface SqlDialectProfile {
 }
 
 function escBacktick(n: string) {
-  return String(n || '').replace(/`/g, '``');
+  return String(n || '').replaceAll('`', '``');
 }
 function escDouble(n: string) {
-  return String(n || '').replace(/"/g, '""');
+  return String(n || '').replaceAll('"', '""');
 }
 function escBracket(n: string) {
-  return String(n || '').replace(/]/g, ']]');
+  return String(n || '').replaceAll(']', ']]');
 }
 
 function mysqlLiteral(value: unknown): string {
@@ -75,7 +71,7 @@ function mysqlLiteral(value: unknown): string {
     const pad = (n: number) => String(n).padStart(2, '0');
     return `'${value.getFullYear()}-${pad(value.getMonth() + 1)}-${pad(value.getDate())} ${pad(value.getHours())}:${pad(value.getMinutes())}:${pad(value.getSeconds())}'`;
   }
-  return `'${String(value).replace(/\\/g, '\\\\').replace(/'/g, "''")}'`;
+  return `'${String(value).replaceAll('\\', '\\\\').replaceAll("'", "''")}'`;
 }
 
 function stdLiteral(value: unknown, boolStyle: '01' | 'truefalse'): string {
@@ -90,7 +86,12 @@ function stdLiteral(value: unknown, boolStyle: '01' | 'truefalse'): string {
     const pad = (n: number) => String(n).padStart(2, '0');
     return `'${value.getFullYear()}-${pad(value.getMonth() + 1)}-${pad(value.getDate())} ${pad(value.getHours())}:${pad(value.getMinutes())}:${pad(value.getSeconds())}'`;
   }
-  return `'${String(value).replace(/'/g, "''")}'`;
+  return `'${String(value).replaceAll("'", "''")}'`;
+}
+
+/** LIMIT 系方言共用的尾部追加 */
+function appendLimitKeyword(sql: string, limit: number): string {
+  return `${sql.replace(/;?\s*$/, '')}\nLIMIT ${limit}`;
 }
 
 const MYSQL_LIKE: SqlDialectProfile = {
@@ -108,7 +109,7 @@ const MYSQL_LIKE: SqlDialectProfile = {
       : `\`${escBacktick(table)}\``,
   selectAllLimited: (schema, table, limit) =>
     `SELECT * FROM \`${escBacktick(schema)}\`.\`${escBacktick(table)}\` LIMIT ${limit}`,
-  appendLimit: (sql, limit) => `${sql.replace(/;?\s*$/, '')}\nLIMIT ${limit}`,
+  appendLimit: appendLimitKeyword,
   literal: mysqlLiteral,
   createDatabaseSql: (name) =>
     `CREATE DATABASE \`${escBacktick(name)}\` DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci;`,
@@ -140,7 +141,7 @@ const POSTGRES_LIKE: SqlDialectProfile = {
   },
   selectAllLimited: (_database, table, limit) =>
     `SELECT * FROM "public"."${escDouble(table)}" LIMIT ${limit}`,
-  appendLimit: (sql, limit) => `${sql.replace(/;?\s*$/, '')}\nLIMIT ${limit}`,
+  appendLimit: appendLimitKeyword,
   literal: (v) => stdLiteral(v, 'truefalse'),
   createDatabaseSql: (name) => `CREATE DATABASE "${escDouble(name)}";`,
   dropDatabaseSql: (name) =>
@@ -158,12 +159,15 @@ const ORACLE_LIKE: SqlDialectProfile = {
   label: 'Oracle-like',
   completionTriggers: ['.', ' ', '"'],
   lineComment: '--',
-  dumpFkOptionLabel: '（Oracle/达梦：请手工 DISABLE CONSTRAINT，无 FOREIGN_KEY_CHECKS）',
+  dumpFkOptionLabel:
+    '（Oracle/达梦：请手工 DISABLE CONSTRAINT，无 FOREIGN_KEY_CHECKS）',
   dumpUseOptionLabel: '包含 "ALTER SESSION SET CURRENT_SCHEMA"',
   instanceKind: 'schema',
   quoteIdent: (name) => `"${escDouble(name)}"`,
   qualifyTable: (schema, table) =>
-    schema ? `"${escDouble(schema)}"."${escDouble(table)}"` : `"${escDouble(table)}"`,
+    schema
+      ? `"${escDouble(schema)}"."${escDouble(table)}"`
+      : `"${escDouble(table)}"`,
   selectAllLimited: (schema, table, limit) =>
     `SELECT * FROM "${escDouble(schema)}"."${escDouble(table)}" WHERE ROWNUM <= ${limit}`,
   appendLimit: (sql, limit) =>
@@ -206,7 +210,7 @@ const SQLSERVER_LIKE: SqlDialectProfile = {
   },
   literal: (v) => {
     if (typeof v === 'string') {
-      return `N'${v.replace(/'/g, "''")}'`;
+      return `N'${v.replaceAll("'", "''")}'`;
     }
     return stdLiteral(v, '01');
   },
@@ -220,69 +224,79 @@ const SQLSERVER_LIKE: SqlDialectProfile = {
     `-- 改变表结构（请按需修改）\nALTER TABLE [${escBracket(schema)}].[dbo].[${escBracket(table)}]\n  -- ADD col_name NVARCHAR(64) NULL;\n;`,
 };
 
+/**
+ * SQLite：单文件单命名空间，表名不能加库前缀（会被当成 attached database）。
+ */
+const SQLITE_LIKE: SqlDialectProfile = {
+  family: 'SQLITE_LIKE',
+  label: 'SQLite',
+  completionTriggers: ['.', ' ', '"'],
+  lineComment: '--',
+  dumpFkOptionLabel: '设置 PRAGMA foreign_keys=OFF',
+  dumpUseOptionLabel: '（SQLite 单库，无需切换语句）',
+  instanceKind: 'database',
+  quoteIdent: (name) => `"${escDouble(name)}"`,
+  qualifyTable: (_schema, table) => `"${escDouble(table)}"`,
+  selectAllLimited: (_schema, table, limit) =>
+    `SELECT * FROM "${escDouble(table)}" LIMIT ${limit}`,
+  appendLimit: appendLimitKeyword,
+  literal: (v) => stdLiteral(v, '01'),
+  createDatabaseSql: () =>
+    `-- SQLite 一个文件即一个库，新建库请创建新的连接并指定文件路径`,
+  dropDatabaseSql: () => `-- SQLite 删除库 = 删除数据库文件，请在文件系统中操作`,
+  createTableStubSql: (_schema, table) =>
+    `CREATE TABLE "${escDouble(table)}" (\n  id INTEGER PRIMARY KEY AUTOINCREMENT\n);`,
+  dropTableSql: (_schema, table) =>
+    `DROP TABLE IF EXISTS "${escDouble(table)}";`,
+  alterTableStubSql: (_schema, table) =>
+    `-- SQLite 的 ALTER 仅支持重命名与加列\nALTER TABLE "${escDouble(table)}"\n  -- ADD COLUMN col_name TEXT;\n;`,
+};
+
+/**
+ * H2：实例节点是 schema（库由 jdbcUrl 决定，连接内无法切换）。
+ */
+const H2_LIKE: SqlDialectProfile = {
+  family: 'H2_LIKE',
+  label: 'H2',
+  completionTriggers: ['.', ' ', '"'],
+  lineComment: '--',
+  dumpFkOptionLabel: '设置 REFERENTIAL_INTEGRITY FALSE',
+  dumpUseOptionLabel: '包含 "SET SCHEMA" 语句',
+  instanceKind: 'schema',
+  quoteIdent: (name) => `"${escDouble(name)}"`,
+  qualifyTable: (schema, table) => {
+    const sch = schema && schema.trim() ? schema.toUpperCase() : 'PUBLIC';
+    return `"${escDouble(sch)}"."${escDouble(table)}"`;
+  },
+  selectAllLimited: (schema, table, limit) =>
+    `SELECT * FROM "${escDouble((schema || 'PUBLIC').toUpperCase())}"."${escDouble(table)}" LIMIT ${limit}`,
+  appendLimit: appendLimitKeyword,
+  literal: (v) => stdLiteral(v, 'truefalse'),
+  createDatabaseSql: (name) => `CREATE SCHEMA "${escDouble(name)}";`,
+  dropDatabaseSql: (name) => `DROP SCHEMA "${escDouble(name)}" CASCADE;`,
+  createTableStubSql: (schema, table) =>
+    `CREATE TABLE "${escDouble((schema || 'PUBLIC').toUpperCase())}"."${escDouble(table)}" (\n  id BIGINT GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY\n);`,
+  dropTableSql: (schema, table) =>
+    `DROP TABLE IF EXISTS "${escDouble((schema || 'PUBLIC').toUpperCase())}"."${escDouble(table)}" CASCADE;`,
+  alterTableStubSql: (schema, table) =>
+    `-- 改变表结构（请按需修改）\nALTER TABLE "${escDouble((schema || 'PUBLIC').toUpperCase())}"."${escDouble(table)}"\n  -- ADD COLUMN col_name VARCHAR(64) NULL;\n;`,
+};
+
 const FAMILY_PROFILE: Record<SqlDialectFamily, SqlDialectProfile> = {
   MYSQL_LIKE,
   POSTGRES_LIKE,
   ORACLE_LIKE,
   SQLSERVER_LIKE,
+  SQLITE_LIKE,
+  H2_LIKE,
 };
-
-/**
- * 产品类型码 → 方言族。
- * 新增国产/云库时优先只加映射；元数据差异大再写独立后端 Handler。
- */
-const PRODUCT_FAMILY_MAP: Record<string, SqlDialectFamily> = {
-  // 基础四件套
-  MY_SQL: 'MYSQL_LIKE',
-  POSTGRE_SQL: 'POSTGRES_LIKE',
-  ORACLE: 'ORACLE_LIKE',
-  SQL_SERVER: 'SQLSERVER_LIKE',
-  // 国产
-  DM: 'ORACLE_LIKE',
-  DAMENG: 'ORACLE_LIKE',
-  KINGBASE: 'POSTGRES_LIKE',
-  KINGBASE_ES: 'POSTGRES_LIKE',
-  OCEANBASE: 'MYSQL_LIKE',
-  OCEANBASE_MYSQL: 'MYSQL_LIKE',
-  OCEANBASE_ORACLE: 'ORACLE_LIKE',
-  // 云原生
-  GAUSSDB: 'POSTGRES_LIKE',
-  TDSQL: 'MYSQL_LIKE',
-  POLARDB: 'MYSQL_LIKE',
-  POLARDB_MYSQL: 'MYSQL_LIKE',
-  POLARDB_PG: 'POSTGRES_LIKE',
-};
-
-/** 归一化 dbType 字符串（兼容别名） */
-export function normalizeDbTypeCode(dbType?: string | null): string {
-  const raw = String(dbType || 'MY_SQL').trim().toUpperCase().replace(/[\s-]+/g, '_');
-  if (raw.includes('POSTGRES') || raw === 'PG') return 'POSTGRE_SQL';
-  if (raw.includes('SQLSERVER') || raw === 'MSSQL') return 'SQL_SERVER';
-  if (raw.includes('MARIA')) return 'MY_SQL';
-  if (raw.includes('达梦') || raw === 'DM' || raw.includes('DAMENG')) return 'DM';
-  if (raw.includes('KINGBASE')) return 'KINGBASE';
-  if (raw.includes('OCEANBASE') && raw.includes('ORACLE')) return 'OCEANBASE_ORACLE';
-  if (raw.includes('OCEANBASE')) return 'OCEANBASE';
-  if (raw.includes('GAUSS')) return 'GAUSSDB';
-  if (raw.includes('TDSQL')) return 'TDSQL';
-  if (raw.includes('POLAR') && (raw.includes('PG') || raw.includes('POSTGRE'))) {
-    return 'POLARDB_PG';
-  }
-  if (raw.includes('POLAR')) return 'POLARDB_MYSQL';
-  return raw;
-}
-
-export function resolveDialectFamily(dbType?: string | null): SqlDialectFamily {
-  const code = normalizeDbTypeCode(dbType);
-  return PRODUCT_FAMILY_MAP[code] || 'MYSQL_LIKE';
-}
 
 /** 解析完整方言配置（编辑器 / 模板 / 结果行 DML 统一入口） */
-export function resolveSqlDialect(dbType?: string | null): SqlDialectProfile {
+export function resolveSqlDialect(dbType?: null | string): SqlDialectProfile {
   return FAMILY_PROFILE[resolveDialectFamily(dbType)];
 }
 
-/** 对象树：MySQL 族用完整树，其余先 Generic（后续可按产品加专用树） */
-export function useMysqlStyleObjectTree(dbType?: string | null): boolean {
-  return resolveDialectFamily(dbType) === 'MYSQL_LIKE';
+/** 对象树一级节点的界面称呼，随产品在「数据库 / 模式」间切换 */
+export function instanceKindLabel(dbType?: null | string): string {
+  return resolveDbType(dbType).instanceKind === 'SCHEMA' ? '模式' : '数据库';
 }

@@ -1,5 +1,8 @@
 <script lang="ts" setup>
-import type { QueryTab } from '../../composables/useQueryTabs';
+import {
+  isQueryTabDirty,
+  type QueryTab,
+} from '../../composables/useQueryTabs';
 
 defineOptions({ name: 'QueryTabs' });
 
@@ -14,6 +17,10 @@ const emit = defineEmits<{
   add: [];
   close: [id: string];
 }>();
+
+function tabTitle(t: QueryTab) {
+  return isQueryTabDirty(t) ? `${t.title} *` : t.title;
+}
 </script>
 
 <template>
@@ -22,10 +29,11 @@ const emit = defineEmits<{
       v-for="t in tabs"
       :key="t.id"
       class="q-tab"
-      :class="{ active: t.id === activeId }"
+      :class="{ active: t.id === activeId, dirty: isQueryTabDirty(t) }"
+      :title="isQueryTabDirty(t) ? '有未保存到数据库的修改' : undefined"
       @click="emit('change', t.id)"
     >
-      <span>{{ t.title }}</span>
+      <span>{{ tabTitle(t) }}</span>
       <button type="button" class="close" @click.stop="emit('close', t.id)">×</button>
     </div>
     <button
@@ -65,6 +73,9 @@ const emit = defineEmits<{
 .q-tab.active {
   background: var(--el-bg-color);
   border-color: var(--el-border-color);
+}
+.q-tab.dirty span {
+  color: var(--el-color-warning);
 }
 .close,
 .add {

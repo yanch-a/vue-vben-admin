@@ -341,6 +341,24 @@ export function syncTableToCatalog(data: {
   })
 }
 
+/**
+ * 更新表显示名；syncRemoteComment=true 时同步改远端库表注释
+ */
+export function updateTableDisplayName(data: {
+  tableId?: number | string | null
+  dbConfigId?: number | string
+  schemaName?: string
+  tableName?: string
+  displayName: string
+  syncRemoteComment?: boolean
+}) {
+  return request({
+    url: dbTableUrl + 'updateDisplayName',
+    method: 'post',
+    data,
+  })
+}
+
 /** ********************************** QueryExecuteController *********************************/
 /** SQL 预览（不执行） */
 export function previewQuerySql(configId: string) {

@@ -17,7 +17,7 @@ import {
 } from 'vue';
 import { useRouter } from 'vue-router';
 
-import { executeDml, executeSql, exportSqlExcel, exportSqlInsert, getInstances, getTableColumns, getTableDDL, getTables } from '#/api/visual/database';
+import { executeDdl, executeDml, executeSql, exportSqlExcel, exportSqlInsert, getInstances, getTableColumns, getTableDDL, getTableInfo, getTables } from '#/api/visual/database';
 import {
   addSavedQuery,
   deleteSavedQuery,
@@ -33,14 +33,16 @@ import type { TreeCtxAction } from './components/object-tree/ObjectTreeContextMe
 import ClientToolbar from './components/ClientToolbar.vue';
 import ConnectionDialog from './components/ConnectionDialog.vue';
 import ConnectionTabs from './components/ConnectionTabs.vue';
-import ObjectTreeHost from './components/object-tree/ObjectTreeHost.vue';
+import ObjectTree from './components/object-tree/ObjectTree.vue';
 import QueryTabs from './components/query/QueryTabs.vue';
 import ResultPanel from './components/query/ResultPanel.vue';
 import SqlEditor from './components/query/SqlEditor.vue';
 import SmartQueryDrawer from './components/SmartQueryDrawer.vue';
 import SqlDumpDialog from './components/SqlDumpDialog.vue';
+import CreateDatabaseDialog from './components/CreateDatabaseDialog.vue';
 import CopyDatabaseDialog from './components/CopyDatabaseDialog.vue';
 import CopyTaskProgressPanel from './components/CopyTaskProgressPanel.vue';
+import TableInfoDialog from './components/TableInfoDialog.vue';
 import { useConnectionStore } from './composables/useConnectionStore';
 import { useCopyTasks } from './composables/useCopyTasks';
 import { setupClientSessionPersist } from './composables/useClientSessionPersist';
@@ -97,6 +99,7 @@ const {
   addTab,
   closeTab,
   openSqlInNewTab,
+  markTabSaved,
 } = useQueryTabs(() => activeConnectionId.value);
 
 const dialogVisible = ref(false);
@@ -108,7 +111,7 @@ const leftWidth = ref(260);
 const resultHeight = ref(220);
 const smartVisible = ref(false);
 const sqlEditorRef = ref<InstanceType<typeof SqlEditor>>();
-const objectTreeRef = ref<InstanceType<typeof ObjectTreeHost>>();
+const objectTreeRef = ref<InstanceType<typeof ObjectTree>>();
 /** 右侧工作区 DOM，用于计算可拖拽高度上下限 */
 const rightPaneRef = ref<HTMLElement | null>(null);
 /** 导出 Excel loading */
@@ -160,7 +163,7 @@ const saveDialog = reactive({
   saving: false,
 });
 
-/** 创建库 / 创建表 / 执行脚本 等简易对话框 */
+/** 创建库 / 创建表 / 执行脚本 等简易对话框（建库已拆到 CreateDatabaseDialog） */
 const promptDialog = reactive({
   visible: false,
   title: '',
@@ -168,6 +171,27 @@ const promptDialog = reactive({
   instanceName: '',
   input: '',
   sqlPreview: '',
+});
+
+/** 按方言族选项创建数据库 / Schema / 用户 */
+const createDbDialog = reactive({
+  visible: false,
+  /** 执行 DDL 时连到的已有实例 */
+  connectInstance: '',
+});
+
+/** 左侧对象树当前选中的表（单击 Tables 下某表，供 F11 打开） */
+const selectedTreeTable = ref<{
+  instanceName: string;
+  tableName: string;
+  schemaName?: string;
+} | null>(null);
+
+/** 查看表信息弹窗 */
+const tableInfoDialog = reactive({
+  visible: false,
+  loading: false,
+  info: null as any,
 });
 
 const hasConnection = computed(() => !!activeConnection.value);
@@ -287,9 +311,16 @@ function goGroup() {
 
 function goRelation() {
   if (!activeConnection.value) return;
+  const instance =
+    activeTab.value?.instanceName ||
+    activeConnection.value.schemaName ||
+    undefined;
   router.push({
     name: 'RelationCanvas',
-    query: { id: String(activeConnection.value.id) },
+    query: {
+      id: String(activeConnection.value.id),
+      ...(instance ? { instance } : {}),
+    },
   });
 }
 
@@ -348,7 +379,7 @@ async function tryConsumePendingSavedQuery() {
           return;
         }
         conn = openConnections.value.find(
-          (c) => String(c.id) === String(pending.dbConfigId),
+          (c) => c.sessionId === result.sessionId,
         );
       } catch (e: any) {
         ElMessage.error(e?.msg || e?.message || '打开连接失败');
@@ -359,7 +390,7 @@ async function tryConsumePendingSavedQuery() {
     if (!conn) return;
 
     consumePendingSavedQueryOpen();
-    setActiveConnection(conn.id);
+    setActiveConnection(conn.sessionId);
     await nextTick();
     const tab = openSqlInNewTab(
       pending.sqlText || '',
@@ -375,22 +406,71 @@ async function tryConsumePendingSavedQuery() {
   }
 }
 
-/** 双击表：新查询 Tab 预填 SELECT（按方言限行） */
+/** 在当前查询编辑器打开表：写入 SELECT 并立即查 1000 条 */
+async function openTableInCurrentEditor(payload: {
+  instanceName: string;
+  tableName: string;
+  schemaName?: string;
+}) {
+  if (!activeConnection.value || !activeTab.value) {
+    ElMessage.warning('请先打开连接和查询编辑器');
+    return;
+  }
+  const d = activeDialect.value;
+  // 一级节点是 schema 的库（Oracle/达梦/H2）用真实 schema 限定，否则用库名
+  const qualifyKey =
+    d.instanceKind === 'schema'
+      ? payload.schemaName || payload.instanceName
+      : payload.instanceName;
+  const sql = d.selectAllLimited(qualifyKey, payload.tableName, 1000);
+  activeTab.value.instanceName = payload.instanceName;
+  activeTab.value.sql = sql;
+  activeTab.value.title = payload.tableName;
+  await nextTick();
+  await runSql();
+}
+
+/** 打开表：在当前编辑器查 1000 条（右键 / 双击 / F11） */
 function onOpenTable(payload: {
   instanceName: string;
   tableName: string;
   schemaName?: string;
 }) {
-  const d = activeDialect.value;
-  // PG：instance=库，表固定 public；Oracle/达梦：instance=schema；MySQL：instance=库
-  const qualifyKey =
-    d.family === 'ORACLE_LIKE'
-      ? payload.schemaName || payload.instanceName
-      : payload.instanceName;
-  const sql = d.selectAllLimited(qualifyKey, payload.tableName, 100);
-  const tab = openSqlInNewTab(sql, payload.tableName, payload.instanceName);
-  if (!tab) {
-    ElMessage.warning(`同一连接最多 ${MAX_TABS} 个查询编辑器`);
+  void openTableInCurrentEditor(payload);
+}
+
+function onSelectTreeTable(payload: {
+  instanceName: string;
+  tableName: string;
+  schemaName?: string;
+}) {
+  selectedTreeTable.value = payload;
+}
+
+/** 查看表信息弹窗 */
+async function showTableInfo(payload: {
+  instanceName: string;
+  tableName: string;
+}) {
+  if (!activeConnection.value) {
+    ElMessage.warning('请先打开数据库连接');
+    return;
+  }
+  tableInfoDialog.visible = true;
+  tableInfoDialog.loading = true;
+  tableInfoDialog.info = null;
+  try {
+    const res: any = await getTableInfo(
+      activeConnection.value.id,
+      payload.instanceName,
+      payload.tableName,
+    );
+    tableInfoDialog.info = res?.data || res;
+  } catch (e: any) {
+    ElMessage.error(e?.msg || e?.message || '获取表信息失败');
+    tableInfoDialog.visible = false;
+  } finally {
+    tableInfoDialog.loading = false;
   }
 }
 
@@ -442,15 +522,30 @@ async function onTreeContextAction(payload: {
       return;
     }
     case 'openTable':
-      onOpenTable({ instanceName, tableName });
+      onOpenTable({
+        instanceName,
+        tableName,
+        schemaName: node.schemaName,
+      });
+      return;
+    case 'viewTableInfo':
+      await showTableInfo({ instanceName, tableName });
       return;
     case 'createDatabase':
-      promptDialog.mode = action;
-      promptDialog.title = '创建数据库';
-      promptDialog.instanceName = instanceName;
-      promptDialog.input = '';
-      promptDialog.sqlPreview = '';
-      promptDialog.visible = true;
+      if (!activeConnection.value) {
+        ElMessage.warning('请先打开数据库连接');
+        return;
+      }
+      createDbDialog.connectInstance =
+        instanceName ||
+        activeTab.value?.instanceName ||
+        activeConnection.value.schemaName ||
+        '';
+      if (!createDbDialog.connectInstance) {
+        ElMessage.warning(`请先在对象树选中一个${instanceLabel.value}`);
+        return;
+      }
+      createDbDialog.visible = true;
       return;
     case 'dropDatabase':
       try {
@@ -485,19 +580,29 @@ async function onTreeContextAction(payload: {
       promptDialog.visible = true;
       return;
     case 'dropTable':
+      if (!activeConnection.value) {
+        ElMessage.warning('请先打开数据库连接');
+        return;
+      }
       try {
         await ElMessageBox.confirm(
-          `确认删除表 ${instanceName}.${tableName}？将生成 DROP TABLE 到查询编辑器。`,
+          `确认删除表 ${instanceName}.${tableName}？此操作不可恢复。`,
           '删除表',
-          { type: 'warning' },
+          { type: 'warning', confirmButtonText: '删除', cancelButtonText: '取消' },
         );
-        openSqlInNewTab(
-          activeDialect.value.dropTableSql(instanceName, tableName),
-          `Drop ${tableName}`,
+        const dropSql = activeDialect.value.dropTableSql(instanceName, tableName);
+        const res: any = await executeDdl({
+          dbConfigId: activeConnection.value.id,
           instanceName,
-        );
-      } catch {
-        /* cancel */
+          sql: dropSql,
+        });
+        const data = res?.data || res;
+        ElMessage.success(data?.message || '表已删除');
+        objectTreeRef.value?.reloadTables?.(instanceName);
+      } catch (e: any) {
+        if (e !== 'cancel' && e !== 'close') {
+          ElMessage.error(e?.msg || e?.message || '删除表失败');
+        }
       }
       return;
     case 'alterTable':
@@ -596,6 +701,7 @@ async function onTreeContextAction(payload: {
         );
         if (tab) {
           tab.savedQueryId = undefined;
+          tab.savedSqlBaseline = undefined;
         }
       } catch {
         /* cancel */
@@ -613,13 +719,7 @@ function confirmPromptDialog() {
   const inst = promptDialog.instanceName;
   const d = activeDialect.value;
 
-  if (mode === 'createDatabase') {
-    if (!name) {
-      ElMessage.warning('请输入名称');
-      return;
-    }
-    openSqlInNewTab(d.createDatabaseSql(name), `Create ${name}`, name);
-  } else if (mode === 'createTable') {
+  if (mode === 'createTable') {
     if (!name) {
       ElMessage.warning('请输入表名');
       return;
@@ -638,6 +738,14 @@ function confirmPromptDialog() {
     openSqlInNewTab(sql, 'SQL Script', inst);
   }
   promptDialog.visible = false;
+}
+
+/** 建库成功：刷新对象树，并尽量切到新实例 */
+function onDatabaseCreated(newInstanceName: string) {
+  objectTreeRef.value?.reload?.();
+  if (newInstanceName && activeTab.value) {
+    activeTab.value.instanceName = newInstanceName;
+  }
 }
 
 /** 执行当前光标所在语句（或选中片段）；不再整页发送 */
@@ -837,7 +945,7 @@ function buildSelectAllSql(
 ) {
   const d = resolveSqlDialect(dbType);
   const qualifyKey =
-    d.family === 'ORACLE_LIKE' ? schemaName || instanceName : instanceName;
+    d.instanceKind === 'schema' ? schemaName || instanceName : instanceName;
   return d.selectAllLimited(
     qualifyKey,
     tableName,
@@ -966,6 +1074,7 @@ async function onImportSqlFile(payload: { fileName: string; content: string }) {
   activeTab.value.sql = payload.content;
   // 导入视为新建保存，不覆盖已有关联
   activeTab.value.savedQueryId = undefined;
+  activeTab.value.savedSqlBaseline = undefined;
   activeTab.value.title = base || 'imported';
   saveDialog.mode = 'create';
   saveDialog.queryName = base || 'imported';
@@ -1009,6 +1118,7 @@ async function confirmSaveQuery() {
         instanceName,
       });
       activeTab.value.title = name;
+      markTabSaved(activeTab.value);
       ElMessage.success('已更新保存');
     } else {
       const res: any = await addSavedQuery({
@@ -1020,6 +1130,7 @@ async function confirmSaveQuery() {
       const data = res?.data || res;
       activeTab.value.savedQueryId = data?.id;
       activeTab.value.title = name;
+      markTabSaved(activeTab.value);
       ElMessage.success('已保存');
     }
     saveDialog.visible = false;
@@ -1127,7 +1238,12 @@ async function onOpenCopyTasks() {
   const running = copyTasks.value.find(
     (t) => t.status === 'PENDING' || t.status === 'RUNNING',
   );
-  openCopyTask((running || copyTasks.value[0]).taskId);
+  const first = running || copyTasks.value[0];
+  if (!first?.taskId) {
+    ElMessage.info('暂无复制任务');
+    return;
+  }
+  openCopyTask(first.taskId);
 }
 
 async function onCancelCopyTask() {
@@ -1180,21 +1296,34 @@ function onSplitterUp() {
 }
 
 onMounted(() => {
-  // 管理页跳转过来时：等会话恢复后再尝试打开查询
   nextTick(() => {
     void tryConsumePendingSavedQuery();
   });
+  window.addEventListener('keydown', onGlobalKeydown);
 });
+
+function onGlobalKeydown(e: KeyboardEvent) {
+  if (e.key !== 'F11') return;
+  // 仅当焦点在客户端工作区时响应，避免整页全屏
+  if (!activeConnection.value) return;
+  e.preventDefault();
+  if (selectedTreeTable.value) {
+    void openTableInCurrentEditor(selectedTreeTable.value);
+  } else {
+    ElMessage.warning('请先在左侧 Tables 中单击选中一个表');
+  }
+}
 
 /** 连接列表变化时再试一次（管理页先开连接再跳转时可能晚一拍） */
 watch(
-  () => openConnections.value.map((c) => c.id).join(','),
+  () => openConnections.value.map((c) => c.sessionId).join(','),
   () => {
     void tryConsumePendingSavedQuery();
   },
 );
 
 onBeforeUnmount(() => {
+  window.removeEventListener('keydown', onGlobalKeydown);
   onSplitterUp();
   sessionPersist.stop();
 });
@@ -1223,7 +1352,7 @@ onBeforeUnmount(() => {
       />
 
       <div v-if="activeConnection" class="workspace">
-        <aside class="left" :style="{ width: leftWidth + 'px' }">
+        <aside class="left" :style="{ width: leftWidth + 'px' }" @mousedown="objectTreeRef?.closeContextMenu?.()">
           <div class="search">
             <ElInput
               v-model="filterText"
@@ -1232,7 +1361,7 @@ onBeforeUnmount(() => {
               placeholder="Search As Input"
             />
           </div>
-          <ObjectTreeHost
+          <ObjectTree
             ref="objectTreeRef"
             :db-config-id="activeConnection.id"
             :db-type="activeConnection.dbType"
@@ -1240,6 +1369,7 @@ onBeforeUnmount(() => {
             @open-table="onOpenTable"
             @insert-name="onInsertName"
             @select-instance="onSelectInstance"
+            @select-table="onSelectTreeTable"
             @open-saved-query="onOpenSavedQuery"
             @context-action="onTreeContextAction"
           />
@@ -1373,6 +1503,12 @@ onBeforeUnmount(() => {
       :preselected-tables="sqlDump.preselectedTables"
     />
 
+    <TableInfoDialog
+      v-model="tableInfoDialog.visible"
+      :loading="tableInfoDialog.loading"
+      :info="tableInfoDialog.info"
+    />
+
     <CopyDatabaseDialog
       v-model="copyDb.visible"
       :source-connection="activeConnection"
@@ -1426,7 +1562,7 @@ onBeforeUnmount(() => {
 
     <SmartQueryDrawer
       v-model="smartVisible"
-      :db-config-id="activeConnectionId"
+      :db-config-id="activeConnection?.id ?? null"
       @open-sql="onSmartSql"
     />
 
@@ -1444,7 +1580,7 @@ onBeforeUnmount(() => {
         placeholder="粘贴 SQL 脚本，确认后打开到查询编辑器预览"
       />
       <ElForm v-else label-width="100px">
-        <ElFormItem :label="promptDialog.mode === 'createDatabase' ? '数据库名' : '表名'">
+        <ElFormItem label="表名">
           <ElInput v-model="promptDialog.input" clearable />
         </ElFormItem>
       </ElForm>
@@ -1455,6 +1591,15 @@ onBeforeUnmount(() => {
         </ElButton>
       </template>
     </ElDialog>
+
+    <CreateDatabaseDialog
+      v-if="activeConnection"
+      v-model="createDbDialog.visible"
+      :db-config-id="activeConnection.id"
+      :db-type="activeConnection.dbType"
+      :connect-instance="createDbDialog.connectInstance"
+      @created="onDatabaseCreated"
+    />
   </Page>
 </template>
 

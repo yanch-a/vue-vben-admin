@@ -17,6 +17,7 @@ export type TreeCtxAction =
   | 'createTable'
   | 'copyDbToHost'
   | 'openTable'
+  | 'viewTableInfo'
   | 'dropTable'
   | 'alterTable'
   | 'copyDdl'
@@ -27,15 +28,22 @@ export type TreeCtxAction =
   | 'deleteSavedQuery'
   | 'copySavedQuerySql';
 
-const props = defineProps<{
-  visible: boolean;
-  x: number;
-  y: number;
-  /** instance | folder | table | savedQuery */
-  targetType: string;
-  /** folder 时的 objectKind，如 tables / queries */
-  objectKind?: string;
-}>();
+const props = withDefaults(
+  defineProps<{
+    visible: boolean;
+    x: number;
+    y: number;
+    /** instance | folder | table | savedQuery */
+    targetType: string;
+    /** folder 时的 objectKind，如 tables / queries */
+    objectKind?: string;
+    /** 一级节点称呼：数据库 / 模式（Oracle 族） */
+    instanceLabel?: string;
+    /** 是否允许建删一级节点；Oracle/达梦由 DBA 操作，SQLite 由文件系统决定 */
+    canManageInstance?: boolean;
+  }>(),
+  { instanceLabel: '数据库', canManageInstance: true },
+);
 
 const emit = defineEmits<{
   close: [];
@@ -64,11 +72,19 @@ function onAction(action: TreeCtxAction) {
       @contextmenu.prevent
     >
       <template v-if="isDb()">
-        <div class="item" @click="onAction('createDatabase')">创建数据库</div>
-        <div class="item danger" @click="onAction('dropDatabase')">删除数据库</div>
-        <div class="divider" />
+        <template v-if="canManageInstance">
+          <div class="item" @click="onAction('createDatabase')">
+            创建{{ instanceLabel }}
+          </div>
+          <div class="item danger" @click="onAction('dropDatabase')">
+            删除{{ instanceLabel }}
+          </div>
+          <div class="divider" />
+        </template>
         <div class="item muted" @click="onAction('importData')">导入数据（预留）</div>
-        <div class="item" @click="onAction('copyDbToHost')">将数据库复制到不同主机</div>
+        <div class="item" @click="onAction('copyDbToHost')">
+          将{{ instanceLabel }}复制到不同主机
+        </div>
         <div class="item" @click="onAction('runSqlScript')">执行 SQL 脚本（预览）</div>
       </template>
       <template v-else-if="isTablesFolder()">
@@ -76,7 +92,8 @@ function onAction(action: TreeCtxAction) {
         <div class="item" @click="onAction('copyDbToHost')">将表复制到不同主机</div>
       </template>
       <template v-else-if="isTable()">
-        <div class="item" @click="onAction('openTable')">打开表</div>
+        <div class="item" @click="onAction('openTable')">打开表 (F11)</div>
+        <div class="item" @click="onAction('viewTableInfo')">查看表信息</div>
         <div class="item danger" @click="onAction('dropTable')">删除表</div>
         <div class="item" @click="onAction('alterTable')">改变表</div>
         <div class="item" @click="onAction('copyDdl')">复制 DDL</div>

@@ -3,29 +3,46 @@ import type { DbConnection } from '../composables/useConnectionStore';
 
 defineOptions({ name: 'ConnectionTabs' });
 
-defineProps<{
+const props = defineProps<{
   connections: DbConnection[];
+  /** 当前激活页签 sessionId */
   activeId: number | string | null;
 }>();
 
 const emit = defineEmits<{
-  change: [id: number | string];
-  close: [id: number | string];
+  change: [sessionId: number | string];
+  close: [sessionId: number | string];
 }>();
+
+/** 同库多开时显示序号：库名 (2) */
+function tabLabel(c: DbConnection) {
+  const same = props.connections.filter(
+    (x) => String(x.id) === String(c.id),
+  );
+  if (same.length <= 1) return c.dbName;
+  const idx = same.findIndex((x) => x.sessionId === c.sessionId) + 1;
+  return `${c.dbName} (${idx})`;
+}
 </script>
 
 <template>
   <div class="connection-tabs">
     <div
       v-for="c in connections"
-      :key="c.id"
+      :key="c.sessionId"
       class="conn-tab"
-      :class="{ active: c.id === activeId }"
-      @click="emit('change', c.id)"
+      :class="{ active: c.sessionId === activeId }"
+      @click="emit('change', c.sessionId)"
     >
-      <span class="name">{{ c.dbName }}</span>
+      <span class="name">{{ tabLabel(c) }}</span>
       <span class="meta">{{ c.dbType }} · {{ c.dbHost || '' }}</span>
-      <button class="close" type="button" @click.stop="emit('close', c.id)">×</button>
+      <button
+        class="close"
+        type="button"
+        @click.stop="emit('close', c.sessionId)"
+      >
+        ×
+      </button>
     </div>
     <div v-if="!connections.length" class="empty">请新建或打开数据库连接</div>
   </div>

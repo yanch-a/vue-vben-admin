@@ -175,7 +175,13 @@
       }
 
       const handleRelationCanvas = (row) => {
-        router.push({ name: 'RelationCanvas', query: { id: row.id } })
+        router.push({
+          name: 'RelationCanvas',
+          query: {
+            id: row.id,
+            ...(row.schemaName ? { instance: row.schemaName } : {}),
+          },
+        })
       }
 
       const handleSubmit = async () => {
@@ -436,7 +442,7 @@
             />
           </el-form-item>
           <el-form-item>
-            <el-button :icon="Search" type="primary" @click="queryData">
+            <el-button :icon="Search" type="primary" v-permissions="{ permission: ['DbConfig:list'] }" @click="queryData">
               查询
             </el-button>
           </el-form-item>
@@ -488,17 +494,36 @@
       <el-table-column label="操作" width="380" fixed="right">
         <template #default="{ row }">
           <el-button-group>
-            <el-button type="primary" link @click="handleEdit(row)" title="编辑">
+            <el-button
+              v-permissions="{ permission: ['DbConfig:update'] }"
+              type="primary"
+              link
+              @click="handleEdit(row)"
+              title="编辑"
+            >
               <vab-icon icon="edit-line" style="font-size: 20px" />
             </el-button>
-            <el-button type="primary" link @click="openAuthDialog(row)" title="权限分配">
+            <el-button
+              v-permissions="{ permission: ['DbConfigUser:update'] }"
+              type="primary"
+              link
+              @click="openAuthDialog(row)"
+              title="权限分配"
+            >
               权限
             </el-button>
-            <el-button type="primary" link @click="handleCanvas(row)" title="表分组">
+            <el-button
+              v-permissions="{ permission: ['TableGroup:list'] }"
+              type="primary"
+              link
+              @click="handleCanvas(row)"
+              title="表分组"
+            >
               <vab-icon icon="layout-line" style="font-size: 20px" />
               表分组
             </el-button>
             <el-button
+              v-permissions="{ permission: ['TableRelationship:info'] }"
               type="primary"
               link
               @click="handleRelationCanvas(row)"
@@ -507,10 +532,17 @@
               <vab-icon icon="node-tree" style="font-size: 20px" />
               关系画布
             </el-button>
-            <el-button type="danger" link @click="handleDelete(row)" title="删除">
+            <el-button
+              v-permissions="{ permission: ['DbConfig:delete'] }"
+              type="danger"
+              link
+              @click="handleDelete(row)"
+              title="删除"
+            >
               <vab-icon icon="delete-bin-line" style="font-size: 20px" />
             </el-button>
             <el-button
+              v-permissions="{ permission: ['DataBaseOperate:test'] }"
               type="primary"
               link
               @click="testConnectionMethod(row)"

@@ -110,3 +110,22 @@ export function getQueryResultContent(resultFileId: number | string) {
     method: 'get',
   });
 }
+
+/**
+ * 导出结果 Excel（blob）
+ * 优先传 columns/rows 导出当前视图；也可只传 shareCode / resultFileId
+ */
+export function exportQueryResultExcel(data: {
+  shareCode?: string;
+  resultFileId?: number | string;
+  title?: string;
+  columns?: string[];
+  rows?: Array<Record<string, unknown>>;
+}) {
+  return request({
+    url: url + 'exportExcel',
+    method: 'post',
+    responseType: 'blob',
+    data,
+  });
+}

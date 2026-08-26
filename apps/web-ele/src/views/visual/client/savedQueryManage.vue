@@ -26,7 +26,6 @@ import { ElMessage, ElMessageBox } from 'element-plus';
 
 import {
   useConnectionStore,
-  type DbConnection,
 } from '../client/composables/useConnectionStore';
 import { setPendingSavedQueryOpen } from '../client/composables/usePendingSavedQuery';
 import { visualClientConfig } from '../client/config';
@@ -54,7 +53,6 @@ interface TreeNode {
 
 const loading = ref(false);
 const treeData = ref<TreeNode[]>([]);
-const treeRef = ref();
 const filterKeyword = ref('');
 const searching = ref(false);
 const searchResults = ref<any[]>([]);
@@ -294,7 +292,7 @@ async function openInEditor(payload: {
     (c) => String(c.id) === String(payload.dbConfigId),
   );
   if (existed) {
-    setActiveConnection(existed.id);
+    setActiveConnection(existed.sessionId);
   } else {
     try {
       const res: any = await getDbConfigById({ id: payload.dbConfigId });
@@ -307,7 +305,7 @@ async function openInEditor(payload: {
         ElMessage.warning('该连接已禁用，无法打开');
         return;
       }
-      const conn: DbConnection = {
+      const result = openConnection({
         id: cfg.id,
         dbName: cfg.dbName,
         schemaName: cfg.schemaName,
@@ -317,8 +315,7 @@ async function openInEditor(payload: {
         username: cfg.username,
         description: cfg.description,
         connectionStatus: cfg.connectionStatus,
-      };
-      const result = openConnection(conn);
+      });
       if (!result.ok) {
         if (result.reason === 'max') {
           ElMessage.warning(
@@ -465,7 +462,6 @@ onMounted(() => {
         />
         <ElTree
           v-else
-          ref="treeRef"
           :data="treeData"
           node-key="id"
           default-expand-all

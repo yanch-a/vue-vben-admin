@@ -68,9 +68,10 @@ function sanitizeMenuTree(
     return [];
   }
   return menus.map((menu) => {
+    // RouteRecordStringComponent.component 要求 string；空值用 ''，勿用 undefined
     const component =
       menu.component == null || menu.component === ''
-        ? undefined
+        ? ''
         : typeof menu.component === 'string'
           ? menu.component
           : String(menu.component);

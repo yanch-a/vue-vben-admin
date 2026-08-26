@@ -14,7 +14,8 @@ import type { PersistedQueryTab, QueryTab } from './useQueryTabs';
 import { visualClientConfig } from '../config';
 
 const STORAGE_KEY = 'visual-client-session-v1';
-const VERSION = 1;
+/** v2：连接页签用 sessionId，同一 dbConfig 可多开 */
+const VERSION = 2;
 /** 单 Tab SQL 最大字符，防止异常大文本写爆 localStorage */
 const MAX_SQL_CHARS = 500_000;
 const MAX_CONNECTIONS = visualClientConfig.maxOpenConnections;
@@ -51,8 +52,13 @@ export interface PersistHandles {
 
 function stripConnection(c: DbConnection): DbConnection {
   // 不落盘密码；执行仍走后端 dbConfigId 取密
+  const sessionId =
+    c.sessionId && String(c.sessionId).trim()
+      ? String(c.sessionId)
+      : `sess-${c.id}`;
   return {
     id: c.id,
+    sessionId,
     dbName: String(c.dbName || ''),
     schemaName: c.schemaName,
     dbType: String(c.dbType || ''),
@@ -85,6 +91,12 @@ function sanitizeTab(t: QueryTab | PersistedQueryTab): PersistedQueryTab | null 
         ? String((t as any).instanceName).slice(0, 200)
         : undefined,
     savedQueryId: (t as any).savedQueryId,
+    savedSqlBaseline:
+      typeof (t as any).savedSqlBaseline === 'string'
+        ? (t as any).savedSqlBaseline.length > MAX_SQL_CHARS
+          ? (t as any).savedSqlBaseline.slice(0, MAX_SQL_CHARS)
+          : (t as any).savedSqlBaseline
+        : undefined,
   };
 }
 
@@ -113,12 +125,13 @@ export function validateSessionSnapshot(raw: unknown): ClientSessionSnapshot | n
     connections.push(stripConnection(item as DbConnection));
   }
 
-  const connIds = new Set(connections.map((c) => String(c.id)));
+  // tabs / activeConnection 按 sessionId 隔离
+  const sessionIds = new Set(connections.map((c) => String(c.sessionId)));
   const tabsByConnection: Record<string, PersistedQueryTab[]> = {};
   const activeTabByConnection: Record<string, string> = {};
 
   for (const [key, list] of Object.entries(o.tabsByConnection)) {
-    if (!connIds.has(String(key))) continue;
+    if (!sessionIds.has(String(key))) continue;
     if (!Array.isArray(list)) continue;
     const tabs: PersistedQueryTab[] = [];
     for (const t of list.slice(0, MAX_TABS_PER_CONN)) {
@@ -135,13 +148,13 @@ export function validateSessionSnapshot(raw: unknown): ClientSessionSnapshot | n
     activeTabByConnection[String(key)] = pick;
   }
 
-  // 只保留仍有 tabs 或至少在列表中的连接；无 tabs 的连接也会 ensureTabs，可保留
+  // activeConnectionId 存的是 sessionId
   let activeConnectionId: number | string | null = o.activeConnectionId ?? null;
   if (
     activeConnectionId != null &&
-    !connIds.has(String(activeConnectionId))
+    !sessionIds.has(String(activeConnectionId))
   ) {
-    activeConnectionId = connections[0]?.id ?? null;
+    activeConnectionId = connections[0]?.sessionId ?? null;
   }
 
   const leftWidth =

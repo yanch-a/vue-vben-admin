@@ -61,7 +61,6 @@ const REFERENCE_VALUE = 100;
 
 const accessStore = useAccessStore();
 const {
-  globalLockScreenShortcutKey,
   globalLogoutShortcutKey,
   globalSearchShortcutKey,
   preferencesButtonPosition,
@@ -78,10 +77,6 @@ const showLockInHeader = computed(
 const showLogoutInHeader = computed(
   () => preferences.widget.logoutButtonPosition === 'header',
 );
-
-const enableLockScreenShortcutKey = computed(() => {
-  return showLockInHeader.value && globalLockScreenShortcutKey.value;
-});
 
 const enableLogoutShortcutKey = computed(() => {
   return showLogoutInHeader.value && globalLogoutShortcutKey.value;

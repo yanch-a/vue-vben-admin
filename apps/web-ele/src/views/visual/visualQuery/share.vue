@@ -11,6 +11,7 @@ import { useRoute } from 'vue-router';
 import { usePreferences } from '@vben/preferences';
 
 import {
+  exportQueryResultExcel,
   getQueryResultByShareCode,
   listQueryResultOpLogs,
   syncQueryResultContent,
@@ -61,6 +62,7 @@ const title = ref('共享查询结果');
 const drawerVisible = ref(false);
 const opLogs = ref([]);
 const syncing = ref(false);
+const exporting = ref(false);
 /** 是否允许写回（WRITE 分享或所有者场景由后端 canWrite 判定） */
 const canWrite = ref(false);
 
@@ -291,6 +293,71 @@ function openDrawer() {
   loadOpLogs();
 }
 
+function unwrapFileBlob(res) {
+  if (res instanceof Blob) return res;
+  if (res?.data instanceof Blob) return res.data;
+  return null;
+}
+
+/** 导出当前表格视图为 Excel */
+async function exportExcel() {
+  if (exporting.value) return;
+  exporting.value = true;
+  try {
+    // 可编辑时先尽量落盘，再读当前 sheet，保证导出含本地改动
+    if (canWrite.value && resultFileId) {
+      try {
+        await flushSync({ id: 'export', name: 'export-before-download' });
+      } catch {
+        /* 同步失败仍允许导出当前视图 */
+      }
+    }
+    const { columns, rows } = readSheetAsResult();
+    if (!columns?.length) {
+      ElMessage.warning('没有可导出的数据');
+      return;
+    }
+    const res = await exportQueryResultExcel({
+      shareCode: shareCode(),
+      resultFileId: resultFileId || undefined,
+      title: title.value || '分享结果导出',
+      columns,
+      rows,
+    });
+    const fileBlob = unwrapFileBlob(res);
+    if (!fileBlob) {
+      ElMessage.error('导出失败：未收到有效文件');
+      return;
+    }
+    if (fileBlob.type && fileBlob.type.includes('application/json')) {
+      const text = await fileBlob.text();
+      let msg = '导出失败';
+      try {
+        msg = JSON.parse(text)?.msg || msg;
+      } catch {
+        /* ignore */
+      }
+      ElMessage.error(msg);
+      return;
+    }
+    const safeName = String(title.value || '分享结果导出')
+      .replace(/[\\/:*?"<>|]/g, '_')
+      .slice(0, 80);
+    const url = window.URL.createObjectURL(fileBlob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `${safeName}.xlsx`;
+    link.click();
+    window.URL.revokeObjectURL(url);
+    ElMessage.success('导出成功');
+  } catch (e) {
+    console.error(e);
+    ElMessage.error(e?.message || e?.msg || '导出失败');
+  } finally {
+    exporting.value = false;
+  }
+}
+
 onMounted(() => {
   bootstrap();
 });
@@ -315,6 +382,9 @@ onBeforeUnmount(() => {
         <el-tag v-if="!canWrite" type="info" size="small">只读分享</el-tag>
         <el-tag v-else type="success" size="small">可编辑</el-tag>
         <el-tag v-if="syncing" type="warning" size="small">同步中…</el-tag>
+        <el-button size="small" type="primary" :loading="exporting" @click="exportExcel">
+          导出 Excel
+        </el-button>
         <el-button size="small" @click="openDrawer">操作记录</el-button>
       </div>
     </header>

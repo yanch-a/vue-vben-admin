@@ -1669,8 +1669,16 @@
       <div class="panel-header">
         <h3>查询视图配置</h3>
         <div>
-          <el-button size="small" @click="previewSql">SQL预览</el-button>
-          <el-button type="primary" size="small" :loading="executing" @click="executeQuery">执行查询</el-button>
+          <el-button size="small" v-permissions="{ permission: ['QueryExecute:preview'] }" @click="previewSql">SQL预览</el-button>
+          <el-button
+            type="primary"
+            size="small"
+            :loading="executing"
+            v-permissions="{ permission: ['QueryExecute:execute'] }"
+            @click="executeQuery"
+          >
+            执行查询
+          </el-button>
         </div>
       </div>
       
@@ -1709,11 +1717,22 @@
         <el-collapse-transition>
           <div v-show="configVisible" class="config-content">
             <div class="config-actions">
-              <el-button type="primary" size="small" @click="showConfigDialog('add')">
+              <el-button
+                type="primary"
+                size="small"
+                v-permissions="{ permission: ['QueryConfig:add'] }"
+                @click="showConfigDialog('add')"
+              >
                 <vab-icon icon="add-line" />
                 新建配置
               </el-button>
-              <el-button type="success" size="small" @click="saveQueryConfigItems" :disabled="!hasSelectedFields">
+              <el-button
+                type="success"
+                size="small"
+                v-permissions="{ permission: ['QueryConfig:update', 'QueryConfigItem:add'] }"
+                @click="saveQueryConfigItems"
+                :disabled="!hasSelectedFields"
+              >
                 <vab-icon icon="save-line" />
                 保存/更新当前配置
               </el-button>
