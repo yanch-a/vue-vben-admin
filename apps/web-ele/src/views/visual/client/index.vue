@@ -42,6 +42,7 @@ import SqlDumpDialog from './components/SqlDumpDialog.vue';
 import CreateDatabaseDialog from './components/CreateDatabaseDialog.vue';
 import CopyDatabaseDialog from './components/CopyDatabaseDialog.vue';
 import CopyTaskProgressPanel from './components/CopyTaskProgressPanel.vue';
+import SystemFunctionsDialog from './components/SystemFunctionsDialog.vue';
 import TableInfoDialog from './components/TableInfoDialog.vue';
 import { useConnectionStore } from './composables/useConnectionStore';
 import { useCopyTasks } from './composables/useCopyTasks';
@@ -110,6 +111,7 @@ const leftWidth = ref(260);
 /** 结果区高度（可拖拽调整）；查询成功后默认按编辑器:结果 = 2:1 设置 */
 const resultHeight = ref(220);
 const smartVisible = ref(false);
+const systemFunctionsVisible = ref(false);
 const sqlEditorRef = ref<InstanceType<typeof SqlEditor>>();
 const objectTreeRef = ref<InstanceType<typeof ObjectTree>>();
 /** 右侧工作区 DOM，用于计算可拖拽高度上下限 */
@@ -327,6 +329,15 @@ function goRelation() {
 /** 打开已保存查询文件管理页（分组 / 树 / 搜索） */
 function goSavedQueryManage() {
   router.push({ name: 'SavedQueryManage' });
+}
+
+function onOpenSystemFunctions() {
+  systemFunctionsVisible.value = true;
+}
+
+function onBundleImported() {
+  objectTreeRef.value?.reload?.();
+  objectTreeRef.value?.reloadQueries?.();
 }
 
 /** 防止管理页打开查询时并发重复消费 */
@@ -1343,6 +1354,7 @@ onBeforeUnmount(() => {
         @saved-queries="goSavedQueryManage"
         @smart="smartVisible = true"
         @copy-tasks="onOpenCopyTasks"
+        @system="onOpenSystemFunctions"
       />
       <ConnectionTabs
         :connections="openConnections"
@@ -1599,6 +1611,10 @@ onBeforeUnmount(() => {
       :db-type="activeConnection.dbType"
       :connect-instance="createDbDialog.connectInstance"
       @created="onDatabaseCreated"
+    />
+    <SystemFunctionsDialog
+      v-model="systemFunctionsVisible"
+      @imported="onBundleImported"
     />
   </Page>
 </template>

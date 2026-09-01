@@ -8,11 +8,11 @@
   } from 'vue'
   import { useRouter } from 'vue-router'
 
-  import { getMemberLevelList } from '@/api/member/memberLevelApi'
   import { getMemberUserGroupList } from '@/api/member/memberUserGroup'
   import { doDelete, getPage } from '@/api/member/memberUserApi'
-  import { dictConvertObj } from '@/utils/convert'
+  import { getDictData } from '@/utils/convert'
   import { Delete, Edit as EditIcon, Plus, Search } from '@element-plus/icons-vue'
+
   export default defineComponent({
     name: 'MemberUserManage',
     components: {},
@@ -20,18 +20,18 @@
       const $baseConfirm = inject('$baseConfirm')
       const $baseMessage = inject('$baseMessage')
       const router = useRouter()
+      const userStatusMap = getDictData('userStatus')?.data || {}
+
       const state = reactive({
         list: [],
         listLoading: true,
         layout: 'total, sizes, prev, pager, next, jumper',
         total: 0,
         selectRows: '',
-        userLevelOptions: [],
         userGroupOptions: [],
         queryForm: {
           pageNum: 1,
           pageSize: 10,
-          memberLevelId: undefined,
           userGroup: undefined,
         },
       })
@@ -42,21 +42,19 @@
 
       const handleEdit = (row) => {
         if (row && row.id) {
-          // 编辑
           router.push({
             path: '/memberUser/detail',
             query: {
               id: row.id,
-              title: '编辑-会员管理',
+              title: '编辑-会员用户',
               timestamp: new Date().getTime(),
             },
           })
         } else {
-          // 新增
           router.push({
             path: '/memberUser/detail',
             query: {
-              title: '新增-会员管理',
+              title: '新增-会员用户',
               timestamp: new Date().getTime(),
             },
           })
@@ -97,14 +95,13 @@
       }
       const fetchData = async () => {
         state.listLoading = true
-        const { list, total } = await getPage(state.queryForm)
-        state.list = dictConvertObj(list, 'common', ['sex'])
-        state.total = total
-        state.listLoading = false
-      }
-      const loadUserLevelOptions = async () => {
-        const { data } = await getMemberLevelList({})
-        state.userLevelOptions = data || []
+        try {
+          const { list, total } = await getPage(state.queryForm)
+          state.list = list || []
+          state.total = total || 0
+        } finally {
+          state.listLoading = false
+        }
       }
       const loadUserGroupOptions = async () => {
         const { data } = await getMemberUserGroupList({})
@@ -117,8 +114,11 @@
         )
         return g ? g.groupName : userGroup
       }
+      const statusLabelOf = (status) => {
+        if (status == null || status === '') return '-'
+        return userStatusMap[status] ?? status
+      }
       onMounted(() => {
-        loadUserLevelOptions()
         loadUserGroupOptions()
         fetchData()
       })
@@ -132,6 +132,7 @@
         queryData,
         fetchData,
         groupNameOf,
+        statusLabelOf,
         Plus,
         Delete,
         EditIcon,
@@ -166,13 +167,6 @@
         <el-form inline :model="queryForm" @submit.prevent>
           <el-form-item>
             <el-input
-              v-model.trim="queryForm.phoneNumber"
-              clearable
-              placeholder="请输入手机号"
-            />
-          </el-form-item>
-          <el-form-item>
-            <el-input
               v-model.trim="queryForm.userName"
               clearable
               placeholder="请输入用户名"
@@ -184,22 +178,6 @@
               clearable
               placeholder="请输入真实名称"
             />
-          </el-form-item>
-
-          <el-form-item>
-            <el-select
-              v-model="queryForm.memberLevelId"
-              clearable
-              placeholder="请选择会员等级"
-              style="width: 160px"
-            >
-              <el-option
-                v-for="item in userLevelOptions"
-                :key="item.id"
-                :label="item.levelName"
-                :value="item.id"
-              />
-            </el-select>
           </el-form-item>
           <el-form-item>
             <el-select
@@ -231,7 +209,7 @@
       @selection-change="setSelectRows"
     >
       <el-table-column align="center" type="selection" />
-      <el-table-column align="center" label="会员ID" prop="id" width="80" />
+      <el-table-column align="center" label="用户ID" prop="id" width="80" />
       <el-table-column
         align="center"
         label="用户名"
@@ -245,23 +223,16 @@
         </template>
       </el-table-column>
       <el-table-column align="center" label="真实名称" prop="realName" />
-      <el-table-column
-        align="center"
-        label="手机号"
-        prop="phoneNumber"
-        show-overflow-tooltip
-      />
-      <el-table-column
-        align="center"
-        label="会员等级"
-        prop="memberLevel.levelName"
-      />
       <el-table-column align="center" label="会员分组" min-width="120">
         <template #default="{ row }">
           {{ groupNameOf(row.userGroup) }}
         </template>
       </el-table-column>
-      <el-table-column align="center" label="性别" prop="sex" />
+      <el-table-column align="center" label="状态" width="100">
+        <template #default="{ row }">
+          {{ statusLabelOf(row.userStatus) }}
+        </template>
+      </el-table-column>
       <el-table-column
         align="center"
         label="创建时间"

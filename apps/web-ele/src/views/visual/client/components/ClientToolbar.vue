@@ -21,6 +21,8 @@ const emit = defineEmits<{
   savedQueries: [];
   smart: [];
   copyTasks: [];
+  /** 系统功能（导入/导出配置等） */
+  system: [];
 }>();
 </script>
 
@@ -57,6 +59,10 @@ const emit = defineEmits<{
         复制任务
       </ElButton>
     </ElBadge>
+    <ElDivider direction="vertical" />
+    <ElButton size="small" @click="emit('system')">
+      系统功能
+    </ElButton>
   </div>
 </template>
 

@@ -27,7 +27,7 @@ export const overridesPreferences = defineOverridesPreferences({
     // 登录页布局默认：panel-right（表单在右）
     // 登录页右上角切换组件：packages/effects/layouts/src/widgets/layout-toggle.vue
     // Toolbar 注入：packages/effects/layouts/src/authentication/toolbar.vue
-    authPageLayout: 'panel-right',
+    authPageLayout: 'panel-center',
   },
   logo: {
     enable: true,

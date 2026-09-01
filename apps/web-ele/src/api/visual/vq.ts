@@ -421,7 +421,13 @@ export function listDbConfigUsers(dbConfigId: number | string) {
 /** 全量替换授权 */
 export function replaceDbConfigUsers(data: {
   dbConfigId: number | string
-  grants: Array<{ memberUserId: number | string; canUse?: number; canEditCanvas?: number }>
+  grants: Array<{
+    memberUserId: number | string
+    canUse?: number
+    canEditCanvas?: number
+    canWriteData?: number
+    canWriteSchema?: number
+  }>
 }) {
   return request({
     url: dbConfigUserUrl + 'replace',

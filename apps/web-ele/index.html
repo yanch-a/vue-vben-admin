@@ -13,7 +13,10 @@
     />
     <!-- 由 vite 注入 VITE_APP_TITLE 变量，在 .env 文件内配置 -->
     <title>%VITE_APP_TITLE%</title>
-    <link rel="icon" href="/favicon.ico" />
+    <!-- 站点图标与侧栏 logo 同源；浏览器会强缓存 favicon，改后需强刷 -->
+    <link rel="icon" type="image/png" href="/logo.png" />
+    <link rel="shortcut icon" type="image/png" href="/logo.png" />
+    <link rel="apple-touch-icon" href="/logo.png" />
     <script>
       // 生产环境下注入百度统计
       if (window._VBEN_ADMIN_PRO_APP_CONF_) {

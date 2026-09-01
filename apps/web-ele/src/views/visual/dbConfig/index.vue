@@ -95,7 +95,7 @@
       const memberGroups = ref([])
       const selectedGroupId = ref(null)
       const groupUsers = ref([])
-      /** { memberUserId, userName, realName, canUse, canEditCanvas } */
+      /** { memberUserId, userName, realName, canUse, canWriteData, canWriteSchema, canEditCanvas } */
       const grants = ref([])
       const searchKeyword = ref('')
 
@@ -225,6 +225,8 @@
             realName: g.realName || '',
             canUse: g.canUse == null ? 1 : g.canUse,
             canEditCanvas: g.canEditCanvas == null ? 0 : g.canEditCanvas,
+            canWriteData: g.canWriteData == null ? 0 : g.canWriteData,
+            canWriteSchema: g.canWriteSchema == null ? 0 : g.canWriteSchema,
           }))
           await enrichGrantNames(grants.value)
         } catch (e) {
@@ -277,6 +279,8 @@
           realName: user.realName || '',
           canUse: defaults.canUse != null ? defaults.canUse : 1,
           canEditCanvas: defaults.canEditCanvas != null ? defaults.canEditCanvas : 0,
+          canWriteData: defaults.canWriteData != null ? defaults.canWriteData : 0,
+          canWriteSchema: defaults.canWriteSchema != null ? defaults.canWriteSchema : 0,
         }
         if (idx >= 0) {
           grants.value[idx] = { ...grants.value[idx], ...row }
@@ -329,6 +333,13 @@
         )
       }
 
+      /** 打开写权限时自动打开「可用」，避免授权矛盾 */
+      const onWriteFlagChange = (row, _kind, v) => {
+        if (v === 1) {
+          row.canUse = 1
+        }
+      }
+
       const saveAuth = async () => {
         if (!authDbConfigId.value) return
         authSaving.value = true
@@ -339,6 +350,8 @@
               memberUserId: g.memberUserId,
               canUse: g.canUse ? 1 : 0,
               canEditCanvas: g.canEditCanvas ? 1 : 0,
+              canWriteData: g.canWriteData ? 1 : 0,
+              canWriteSchema: g.canWriteSchema ? 1 : 0,
             })),
           })
           ElMessage.success('授权已保存')
@@ -411,6 +424,7 @@
         addSingleUser,
         searchAndAddUser,
         removeGrant,
+        onWriteFlagChange,
         saveAuth,
         Plus,
         Search,
@@ -641,7 +655,7 @@
     <el-dialog
       v-model="authVisible"
       :title="`权限分配 — ${authDbName}`"
-      width="920px"
+      width="1080px"
       destroy-on-close
     >
       <div class="auth-layout">
@@ -706,21 +720,45 @@
           </el-input>
         </div>
         <div class="auth-right">
-          <div class="auth-section-title">已授权用户</div>
+          <div class="auth-section-title">
+            已授权用户
+            <span class="auth-hint">可用=只读；写数据=增改删行；改结构=建删改表；建库仅所有者</span>
+          </div>
           <el-table :data="grants" border size="small" max-height="420">
             <el-table-column prop="userName" label="用户名" min-width="100" />
             <el-table-column prop="realName" label="姓名" min-width="90" />
-            <el-table-column label="可用" width="80" align="center">
+            <el-table-column label="可用" width="70" align="center">
               <template #default="{ row }">
                 <el-switch v-model="row.canUse" :active-value="1" :inactive-value="0" />
               </template>
             </el-table-column>
-            <el-table-column label="可改画布" width="100" align="center">
+            <el-table-column label="写数据" width="80" align="center">
+              <template #default="{ row }">
+                <el-switch
+                  v-model="row.canWriteData"
+                  :active-value="1"
+                  :inactive-value="0"
+                  @change="(v) => onWriteFlagChange(row, 'data', v)"
+                />
+              </template>
+            </el-table-column>
+            <el-table-column label="改结构" width="80" align="center">
+              <template #default="{ row }">
+                <el-switch
+                  v-model="row.canWriteSchema"
+                  :active-value="1"
+                  :inactive-value="0"
+                  @change="(v) => onWriteFlagChange(row, 'schema', v)"
+                />
+              </template>
+            </el-table-column>
+            <el-table-column label="可改画布" width="90" align="center">
               <template #default="{ row }">
                 <el-switch
                   v-model="row.canEditCanvas"
                   :active-value="1"
                   :inactive-value="0"
+                  @change="(v) => onWriteFlagChange(row, 'canvas', v)"
                 />
               </template>
             </el-table-column>
@@ -771,5 +809,16 @@
   .auth-section-title {
     margin-bottom: 8px;
     font-weight: 600;
+  }
+  .auth-section-title {
+    margin-bottom: 8px;
+    font-weight: 600;
+  }
+
+  .auth-hint {
+    margin-left: 8px;
+    font-size: 12px;
+    font-weight: 400;
+    color: var(--el-text-color-secondary);
   }
 </style>

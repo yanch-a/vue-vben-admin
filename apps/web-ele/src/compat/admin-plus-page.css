@@ -13,3 +13,73 @@
 [class*='-management-container'] .el-pagination {
   margin-top: 12px;
 }
+
+/* vab-dot 状态圆点（操作/登录日志等） */
+.vab-dot {
+  position: relative;
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin-right: 3px;
+  vertical-align: middle;
+  border-radius: 50%;
+}
+
+.vab-dot span {
+  position: absolute;
+  top: 0;
+  left: 0;
+  box-sizing: border-box;
+  display: block;
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+  animation: vabDot 1.2s ease-in-out infinite;
+}
+
+@keyframes vabDot {
+  0% {
+    opacity: 0.6;
+    transform: scale(0.8);
+  }
+  to {
+    opacity: 0;
+    transform: scale(2.4);
+  }
+}
+
+.vab-dot-success {
+  background: var(--el-color-success);
+}
+
+.vab-dot-success span {
+  background: var(--el-color-success);
+}
+
+.vab-dot-error {
+  background: var(--el-color-error);
+}
+
+.vab-dot-error span {
+  background: var(--el-color-error);
+}
+
+/* 表格展开行详情 */
+.vab-table-expand {
+  padding: 12px;
+  line-height: 30px;
+}
+
+.vab-table-expand-title {
+  display: inline-block;
+  width: 80px;
+  font-weight: bold;
+}
+
+.vab-data-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 320px;
+  margin: auto;
+}

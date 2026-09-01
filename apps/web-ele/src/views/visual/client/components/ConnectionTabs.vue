@@ -53,7 +53,6 @@ function tabLabel(c: DbConnection) {
   display: flex;
   align-items: stretch;
   gap: 2px;
-  padding: 0 8px;
   min-height: 36px;
   border-bottom: 1px solid var(--el-border-color);
   background: var(--el-fill-color-light);
