@@ -8,6 +8,7 @@
  */
 import {
   computed,
+  markRaw,
   nextTick,
   onBeforeUnmount,
   onMounted,
@@ -17,7 +18,7 @@ import {
 } from 'vue';
 import { useRouter } from 'vue-router';
 
-import { executeDdl, executeDml, executeSql, exportSqlExcel, exportSqlInsert, getInstances, getTableColumns, getTableDDL, getTableInfo, getTables } from '#/api/visual/database';
+import { executeDdl, executeDml, executeSql, cancelSql, exportSqlExcel, exportSqlInsert, getInstances, getTableColumns, getTableDDL, getTableInfo, getTables } from '#/api/visual/database';
 import {
   addSavedQuery,
   deleteSavedQuery,
@@ -44,6 +45,10 @@ import CopyDatabaseDialog from './components/CopyDatabaseDialog.vue';
 import CopyTaskProgressPanel from './components/CopyTaskProgressPanel.vue';
 import SystemFunctionsDialog from './components/SystemFunctionsDialog.vue';
 import TableInfoDialog from './components/TableInfoDialog.vue';
+import ClientPreferencesDialog from './components/ClientPreferencesDialog.vue';
+import LicenseDialog from './components/LicenseDialog.vue';
+import { useClientPreferences } from './composables/useClientPreferences';
+import { getLicenseStatus } from '#/api/visual/license';
 import { useConnectionStore } from './composables/useConnectionStore';
 import { useCopyTasks } from './composables/useCopyTasks';
 import { setupClientSessionPersist } from './composables/useClientSessionPersist';
@@ -99,9 +104,14 @@ const {
   activeTab,
   addTab,
   closeTab,
+  closeAllTabs,
+  closeOtherTabs,
   openSqlInNewTab,
   markTabSaved,
 } = useQueryTabs(() => activeConnectionId.value);
+
+const { queryTabsPlacement, queryTabsLeftWidth, TABS_LEFT_MIN, TABS_LEFT_MAX } =
+  useClientPreferences();
 
 const dialogVisible = ref(false);
 const dialogMode = ref<'create' | 'open'>('open');
@@ -112,6 +122,11 @@ const leftWidth = ref(260);
 const resultHeight = ref(220);
 const smartVisible = ref(false);
 const systemFunctionsVisible = ref(false);
+const preferencesVisible = ref(false);
+const licenseVisible = ref(false);
+const licenseForce = ref(false);
+const licenseHint = ref('');
+const licenseAllowed = ref(true);
 const sqlEditorRef = ref<InstanceType<typeof SqlEditor>>();
 const objectTreeRef = ref<InstanceType<typeof ObjectTree>>();
 /** 右侧工作区 DOM，用于计算可拖拽高度上下限 */
@@ -331,8 +346,61 @@ function goSavedQueryManage() {
   router.push({ name: 'SavedQueryManage' });
 }
 
+function onAddQueryTab() {
+  const t = addTab({
+    instanceName:
+      activeTab.value?.instanceName ||
+      activeConnection.value?.schemaName ||
+      instanceOptions.value[0],
+  });
+  if (!t) ElMessage.warning(`最多 ${MAX_TABS} 个查询`);
+}
+
 function onOpenSystemFunctions() {
   systemFunctionsVisible.value = true;
+}
+
+function onOpenPreferences() {
+  preferencesVisible.value = true;
+}
+
+function onOpenLicense() {
+  licenseForce.value = false;
+  licenseVisible.value = true;
+}
+
+/** 启动时拉取授权：试用可直接用；到期则强制导入 License */
+async function refreshLicenseStatus() {
+  try {
+    const res: any = await getLicenseStatus();
+    const data = res?.data || res || {};
+    licenseAllowed.value = !!data.allowed;
+    if (data.mode === 'TRIAL') {
+      licenseHint.value = `试用剩余约 ${data.trialRemainingDays ?? '-'} 天`;
+      licenseForce.value = false;
+    } else if (data.mode === 'LICENSED') {
+      licenseHint.value = data.customer
+        ? `已授权：${data.customer}`
+        : '已授权';
+      licenseForce.value = false;
+    } else if (!data.allowed) {
+      licenseHint.value = data.message || '试用已结束，请导入 License';
+      licenseForce.value = true;
+      licenseVisible.value = true;
+    } else {
+      licenseHint.value = '';
+      licenseForce.value = false;
+    }
+  } catch {
+    // 状态接口失败不阻断页面（可能未登录）；真正业务接口会被后端 460 拦住
+    licenseHint.value = '';
+  }
+}
+
+function onLicenseActivated() {
+  licenseForce.value = false;
+  licenseVisible.value = false;
+  void refreshLicenseStatus();
 }
 
 function onBundleImported() {
@@ -417,14 +485,14 @@ async function tryConsumePendingSavedQuery() {
   }
 }
 
-/** 在当前查询编辑器打开表：写入 SELECT 并立即查 1000 条 */
-async function openTableInCurrentEditor(payload: {
+/** 打开表：新开查询页签，查 200 条，输入:结果 ≈ 1:5 */
+async function openTableInNewEditor(payload: {
   instanceName: string;
   tableName: string;
   schemaName?: string;
 }) {
-  if (!activeConnection.value || !activeTab.value) {
-    ElMessage.warning('请先打开连接和查询编辑器');
+  if (!activeConnection.value) {
+    ElMessage.warning('请先打开连接');
     return;
   }
   const d = activeDialect.value;
@@ -433,21 +501,25 @@ async function openTableInCurrentEditor(payload: {
     d.instanceKind === 'schema'
       ? payload.schemaName || payload.instanceName
       : payload.instanceName;
-  const sql = d.selectAllLimited(qualifyKey, payload.tableName, 1000);
-  activeTab.value.instanceName = payload.instanceName;
-  activeTab.value.sql = sql;
-  activeTab.value.title = payload.tableName;
+  const sql = d.selectAllLimited(qualifyKey, payload.tableName, 200);
+  const tab = openSqlInNewTab(sql, payload.tableName, payload.instanceName);
+  if (!tab) {
+    ElMessage.warning(`同一连接最多 ${MAX_TABS} 个查询编辑器`);
+    return;
+  }
   await nextTick();
+  // 仅「打开表」给默认 1:5，之后用户拖拽高度不再被普通查询覆盖
+  applyEditorResultRatio(1, 5);
   await runSql();
 }
 
-/** 打开表：在当前编辑器查 1000 条（右键 / 双击 / F11） */
+/** 打开表：新开编辑器查 200 条（右键 / 双击 / F11） */
 function onOpenTable(payload: {
   instanceName: string;
   tableName: string;
   schemaName?: string;
 }) {
-  void openTableInCurrentEditor(payload);
+  void openTableInNewEditor(payload);
 }
 
 function onSelectTreeTable(payload: {
@@ -759,9 +831,21 @@ function onDatabaseCreated(newInstanceName: string) {
   }
 }
 
-/** 执行当前光标所在语句（或选中片段）；不再整页发送 */
+/** 当前正在执行的自由 SQL（用于停止） */
+let sqlRunAbort: AbortController | null = null;
+let sqlRunRequestId: string | null = null;
+
+function newSqlRequestId() {
+  return `sql-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+/** 执行当前光标所在语句（或选中片段）；不重置用户已调好的结果区高度 */
 async function runSql() {
   if (!activeConnection.value || !activeTab.value) return;
+  if (activeTab.value.executing) {
+    ElMessage.warning('当前查询正在执行，请先停止或等待完成');
+    return;
+  }
   if (!activeTab.value.instanceName) {
     ElMessage.warning(`请先选择${instanceLabel.value}实例`);
     return;
@@ -774,44 +858,89 @@ async function runSql() {
     ElMessage.warning('请输入 SQL，或将光标放到要执行的语句上');
     return;
   }
+  const requestId = newSqlRequestId();
+  const abort = new AbortController();
+  sqlRunAbort = abort;
+  sqlRunRequestId = requestId;
   activeTab.value.executing = true;
   activeTab.value.resultVisible = true;
   activeTab.value.resultTab = 'result';
+  const t0 = performance.now();
   try {
-    const res: any = await executeSql({
-      dbConfigId: activeConnection.value.id,
-      instanceName: activeTab.value.instanceName,
-      sql,
-      maxRows: 1000,
-    });
+    const res: any = await executeSql(
+      {
+        dbConfigId: activeConnection.value.id,
+        instanceName: activeTab.value.instanceName,
+        sql,
+        maxRows: 1000,
+        requestId,
+      },
+      { signal: abort.signal },
+    );
+    const clientElapsedMs = Math.round(performance.now() - t0);
     const data = res?.data || res;
+    // markRaw：避免对成百上千行做深层响应式代理，减轻结果表卡顿
     activeTab.value.result = {
       columns: data.columns || [],
-      rows: data.rows || [],
+      rows: markRaw(data.rows || []),
       rowCount: data.rowCount || 0,
       elapsedMs: data.elapsedMs,
+      clientElapsedMs,
       message: data.message,
       sourceSql: sql,
     };
     activeTab.value.resultTab = 'result';
-    // 查询成功后：编辑器:结果 ≈ 2:1
-    applyEditorResultRatio();
   } catch (e: any) {
-    // 业务失败（含 SQL 语法错误）写入 Messages，避免只弹 toast / 空白结果
-    const errText = pickErrorMsg(e, '执行失败');
-    activeTab.value.result = {
-      columns: [],
-      rows: [],
-      rowCount: 0,
-      error: errText,
-      message: errText,
-      sourceSql: sql,
-    };
-    activeTab.value.resultTab = 'messages';
-    applyEditorResultRatio();
+    const clientElapsedMs = Math.round(performance.now() - t0);
+    if (abort.signal.aborted || /查询已取消|canceled|cancelled/i.test(String(e?.msg || e?.message || ''))) {
+      activeTab.value.result = {
+        columns: [],
+        rows: [],
+        rowCount: 0,
+        error: '查询已取消',
+        message: '查询已取消',
+        clientElapsedMs,
+        sourceSql: sql,
+      };
+      activeTab.value.resultTab = 'messages';
+    } else {
+      // 业务失败（含 SQL 语法错误）写入 Messages，避免只弹 toast / 空白结果
+      const errText = pickErrorMsg(e, '执行失败');
+      activeTab.value.result = {
+        columns: [],
+        rows: [],
+        rowCount: 0,
+        error: errText,
+        message: errText,
+        clientElapsedMs,
+        sourceSql: sql,
+      };
+      activeTab.value.resultTab = 'messages';
+    }
   } finally {
+    if (sqlRunRequestId === requestId) {
+      sqlRunAbort = null;
+      sqlRunRequestId = null;
+    }
     activeTab.value.executing = false;
   }
+}
+
+/** 停止当前自由 SQL：先通知后端 cancel/kill，再 abort HTTP */
+async function stopSql() {
+  if (!activeTab.value?.executing) return;
+  const requestId = sqlRunRequestId;
+  const abort = sqlRunAbort;
+  try {
+    if (requestId) {
+      await cancelSql({ requestId });
+    }
+  } catch {
+    // 仍尝试中断前端请求
+  } finally {
+    abort?.abort();
+  }
+  ElMessage.info('已请求停止查询');
 }
 
 /** 从 axios / 业务 reject 对象中取出可读错误文案 */
@@ -831,18 +960,20 @@ function onFormatSql() {
 }
 
 /**
- * 按右栏可用高度设置结果区为约 1/3（编辑器占约 2/3）
+ * 按右栏可用高度分配编辑器与结果区比例（仅「打开表」等场景主动调用；普通查询不改用户拖拽高度）
  * @author yanch
  */
-function applyEditorResultRatio() {
+function applyEditorResultRatio(editorParts = 2, resultParts = 1) {
   nextTick(() => {
     const paneH = rightPaneRef.value?.clientHeight || 600;
     // 扣除 QueryTabs + 操作条 + 分隔条大约占用
     const reserved = 100;
     const flexH = Math.max(paneH - reserved, 300);
-    const next = Math.floor(flexH / 3);
+    const total = Math.max(1, editorParts + resultParts);
+    const next = Math.floor((flexH * resultParts) / total);
     const minR = 120;
-    const maxR = Math.max(minR, Math.floor(flexH * 0.55));
+    // 给编辑器至少留一点高度，避免完全挤没
+    const maxR = Math.max(minR, flexH - 80);
     resultHeight.value = Math.min(maxR, Math.max(minR, next));
   });
 }
@@ -1198,6 +1329,7 @@ async function onRunDml(dmlSql: string) {
 async function refreshQueryResult(sql: string) {
   if (!activeConnection.value || !activeTab.value) return;
   if (!activeTab.value.instanceName) return;
+  const t0 = performance.now();
   try {
     const res: any = await executeSql({
       dbConfigId: activeConnection.value.id,
@@ -1205,20 +1337,24 @@ async function refreshQueryResult(sql: string) {
       sql,
       maxRows: 1000,
     });
+    const clientElapsedMs = Math.round(performance.now() - t0);
     const data = res?.data || res;
     activeTab.value.result = {
       columns: data.columns || [],
-      rows: data.rows || [],
+      rows: markRaw(data.rows || []),
       rowCount: data.rowCount || 0,
       elapsedMs: data.elapsedMs,
+      clientElapsedMs,
       message: data.message,
       sourceSql: sql,
     };
     activeTab.value.resultTab = 'result';
   } catch (e: any) {
+    const clientElapsedMs = Math.round(performance.now() - t0);
     const errText = pickErrorMsg(e, '刷新结果失败');
     if (activeTab.value.result) {
       activeTab.value.result.error = errText;
+      activeTab.value.result.clientElapsedMs = clientElapsedMs;
       activeTab.value.resultTab = 'messages';
     } else {
       activeTab.value.result = {
@@ -1227,6 +1363,7 @@ async function refreshQueryResult(sql: string) {
         rowCount: 0,
         error: errText,
         message: errText,
+        clientElapsedMs,
         sourceSql: sql,
       };
       activeTab.value.resultTab = 'messages';
@@ -1306,9 +1443,83 @@ function onSplitterUp() {
   window.removeEventListener('mouseup', onSplitterUp);
 }
 
+/** ---------- 左右拖拽：对象树宽度 ---------- */
+const LEFT_MIN = 100;
+const LEFT_MAX = 600;
+const workspaceRef = ref<HTMLElement | null>(null);
+let resizingLeft = false;
+let startXLeft = 0;
+let startLeftW = 0;
+
+function onLeftSplitterDown(e: MouseEvent) {
+  resizingLeft = true;
+  startXLeft = e.clientX;
+  startLeftW = leftWidth.value;
+  document.body.style.cursor = 'col-resize';
+  document.body.style.userSelect = 'none';
+  window.addEventListener('mousemove', onLeftSplitterMove);
+  window.addEventListener('mouseup', onLeftSplitterUp);
+}
+
+function onLeftSplitterMove(e: MouseEvent) {
+  if (!resizingLeft) return;
+  const delta = e.clientX - startXLeft;
+  const workspaceW = workspaceRef.value?.clientWidth || 1200;
+  // 右侧至少留约 320px 给查询区
+  const maxW = Math.min(LEFT_MAX, Math.max(LEFT_MIN, workspaceW - 320));
+  leftWidth.value = Math.min(maxW, Math.max(LEFT_MIN, startLeftW + delta));
+}
+
+function onLeftSplitterUp() {
+  resizingLeft = false;
+  document.body.style.cursor = '';
+  document.body.style.userSelect = '';
+  window.removeEventListener('mousemove', onLeftSplitterMove);
+  window.removeEventListener('mouseup', onLeftSplitterUp);
+}
+
+/** ---------- 左右拖拽：竖排查询 Tabs 宽度 ---------- */
+let resizingTabsLeft = false;
+let startXTabs = 0;
+let startTabsW = 0;
+
+function onTabsLeftSplitterDown(e: MouseEvent) {
+  if (queryTabsPlacement.value !== 'left') return;
+  resizingTabsLeft = true;
+  startXTabs = e.clientX;
+  startTabsW = queryTabsLeftWidth.value;
+  document.body.style.cursor = 'col-resize';
+  document.body.style.userSelect = 'none';
+  window.addEventListener('mousemove', onTabsLeftSplitterMove);
+  window.addEventListener('mouseup', onTabsLeftSplitterUp);
+}
+
+function onTabsLeftSplitterMove(e: MouseEvent) {
+  if (!resizingTabsLeft) return;
+  const delta = e.clientX - startXTabs;
+  const paneW = rightPaneRef.value?.clientWidth || 800;
+  const maxW = Math.min(
+    TABS_LEFT_MAX,
+    Math.max(TABS_LEFT_MIN, paneW - 280),
+  );
+  queryTabsLeftWidth.value = Math.min(
+    maxW,
+    Math.max(TABS_LEFT_MIN, startTabsW + delta),
+  );
+}
+
+function onTabsLeftSplitterUp() {
+  resizingTabsLeft = false;
+  document.body.style.cursor = '';
+  document.body.style.userSelect = '';
+  window.removeEventListener('mousemove', onTabsLeftSplitterMove);
+  window.removeEventListener('mouseup', onTabsLeftSplitterUp);
+}
+
 onMounted(() => {
   nextTick(() => {
     void tryConsumePendingSavedQuery();
+    void refreshLicenseStatus();
   });
   window.addEventListener('keydown', onGlobalKeydown);
 });
@@ -1319,7 +1530,7 @@ function onGlobalKeydown(e: KeyboardEvent) {
   if (!activeConnection.value) return;
   e.preventDefault();
   if (selectedTreeTable.value) {
-    void openTableInCurrentEditor(selectedTreeTable.value);
+    void openTableInNewEditor(selectedTreeTable.value);
   } else {
     ElMessage.warning('请先在左侧 Tables 中单击选中一个表');
   }
@@ -1336,6 +1547,8 @@ watch(
 onBeforeUnmount(() => {
   window.removeEventListener('keydown', onGlobalKeydown);
   onSplitterUp();
+  onLeftSplitterUp();
+  onTabsLeftSplitterUp();
   sessionPersist.stop();
 });
 </script>
@@ -1346,6 +1559,7 @@ onBeforeUnmount(() => {
       <ClientToolbar
         :has-connection="hasConnection"
         :copy-task-count="copyRunningCount"
+        :license-hint="licenseHint"
         @create="onCreateConnection"
         @open="onOpenConnection"
         @refresh="filterText = filterText"
@@ -1355,6 +1569,8 @@ onBeforeUnmount(() => {
         @smart="smartVisible = true"
         @copy-tasks="onOpenCopyTasks"
         @system="onOpenSystemFunctions"
+        @preferences="onOpenPreferences"
+        @license="onOpenLicense"
       />
       <ConnectionTabs
         :connections="openConnections"
@@ -1363,8 +1579,16 @@ onBeforeUnmount(() => {
         @close="closeConnection"
       />
 
-      <div v-if="activeConnection" class="workspace">
-        <aside class="left" :style="{ width: leftWidth + 'px' }" @mousedown="objectTreeRef?.closeContextMenu?.()">
+      <div
+        v-if="activeConnection"
+        ref="workspaceRef"
+        class="workspace"
+      >
+        <aside
+          class="left"
+          :style="{ flex: `0 0 ${leftWidth}px`, width: leftWidth + 'px' }"
+          @mousedown="objectTreeRef?.closeContextMenu?.()"
+        >
           <div class="search">
             <ElInput
               v-model="filterText"
@@ -1386,26 +1610,56 @@ onBeforeUnmount(() => {
             @context-action="onTreeContextAction"
           />
         </aside>
+        <div
+          class="splitter-v"
+          title="拖拽调整对象树宽度"
+          @mousedown.prevent="onLeftSplitterDown"
+        />
 
-        <section ref="rightPaneRef" class="right">
+        <section
+          ref="rightPaneRef"
+          class="right"
+          :class="{ 'tabs-left': queryTabsPlacement === 'left' }"
+        >
+          <div
+            v-if="queryTabsPlacement === 'left'"
+            class="query-tabs-rail"
+            :style="{
+              flex: `0 0 ${queryTabsLeftWidth}px`,
+              width: queryTabsLeftWidth + 'px',
+            }"
+          >
+            <QueryTabs
+              :tabs="tabs"
+              :active-id="activeTabId"
+              :max-tabs="MAX_TABS"
+              placement="left"
+              @change="(id) => (activeTabId = id)"
+              @add="onAddQueryTab"
+              @close="closeTab"
+              @close-all="closeAllTabs"
+              @close-others="closeOtherTabs"
+            />
+          </div>
+          <div
+            v-if="queryTabsPlacement === 'left'"
+            class="splitter-v"
+            title="拖拽调整查询页签宽度"
+            @mousedown.prevent="onTabsLeftSplitterDown"
+          />
           <QueryTabs
+            v-if="queryTabsPlacement === 'top'"
             :tabs="tabs"
             :active-id="activeTabId"
             :max-tabs="MAX_TABS"
+            placement="top"
             @change="(id) => (activeTabId = id)"
-            @add="
-              () => {
-                const t = addTab({
-                  instanceName:
-                    activeTab?.instanceName ||
-                    activeConnection?.schemaName ||
-                    instanceOptions[0],
-                });
-                if (!t) ElMessage.warning(`最多 ${MAX_TABS} 个查询`);
-              }
-            "
+            @add="onAddQueryTab"
             @close="closeTab"
+            @close-all="closeAllTabs"
+            @close-others="closeOtherTabs"
           />
+          <div class="query-main">
           <div class="query-actions">
             <ElSelect
               v-if="activeTab"
@@ -1427,13 +1681,40 @@ onBeforeUnmount(() => {
               type="primary"
               size="small"
               :loading="activeTab?.executing"
+              :disabled="activeTab?.executing"
               @click="runSql"
             >
               执行 (Ctrl+Enter / F9)
             </ElButton>
-            <ElButton size="small" @click="onFormatSql">格式化 (F12)</ElButton>
-            <ElButton size="small" @click="onSaveQuery">保存 (Ctrl+S)</ElButton>
-            <ElButton size="small" @click="onSaveQueryAs">另存为</ElButton>
+            <ElButton
+              v-if="activeTab?.executing"
+              type="danger"
+              size="small"
+              @click="stopSql"
+            >
+              停止
+            </ElButton>
+            <ElButton
+              size="small"
+              :disabled="activeTab?.executing"
+              @click="onFormatSql"
+            >
+              格式化 (F12)
+            </ElButton>
+            <ElButton
+              size="small"
+              :disabled="activeTab?.executing"
+              @click="onSaveQuery"
+            >
+              保存 (Ctrl+S)
+            </ElButton>
+            <ElButton
+              size="small"
+              :disabled="activeTab?.executing"
+              @click="onSaveQueryAs"
+            >
+              另存为
+            </ElButton>
             <ElButton
               size="small"
               @click="
@@ -1454,6 +1735,7 @@ onBeforeUnmount(() => {
               :db-config-id="activeConnection?.id"
               :db-type="activeConnection?.dbType"
               :instance-name="activeTab.instanceName"
+              :read-only="!!activeTab.executing"
               :load-columns="loadEditorColumns"
               :load-tables="loadEditorTables"
               @execute="runSql"
@@ -1490,6 +1772,7 @@ onBeforeUnmount(() => {
               @export-excel="onExportExcel"
               @export-sql="onExportSqlInsert"
             />
+          </div>
           </div>
         </section>
       </div>
@@ -1616,6 +1899,15 @@ onBeforeUnmount(() => {
       v-model="systemFunctionsVisible"
       @imported="onBundleImported"
     />
+    <ClientPreferencesDialog
+      v-model="preferencesVisible"
+      v-model:query-tabs-placement="queryTabsPlacement"
+    />
+    <LicenseDialog
+      v-model="licenseVisible"
+      :force="licenseForce"
+      @activated="onLicenseActivated"
+    />
   </Page>
 </template>
 
@@ -1634,15 +1926,35 @@ onBeforeUnmount(() => {
 .left {
   display: flex;
   flex-direction: column;
-  border-right: 1px solid var(--el-border-color);
-  min-width: 180px;
-  max-width: 480px;
+  border-right: none;
+  min-width: 100px;
+  flex: 0 0 auto;
+  overflow: hidden;
 }
 .search {
   padding: 8px;
   border-bottom: 1px solid var(--el-border-color-lighter);
 }
 .right {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+.right.tabs-left {
+  flex-direction: row;
+}
+.query-tabs-rail {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  height: 100%;
+  overflow: hidden;
+  background: var(--el-fill-color-lighter);
+}
+.query-main {
   flex: 1;
   display: flex;
   flex-direction: column;
@@ -1675,6 +1987,19 @@ onBeforeUnmount(() => {
 }
 .splitter-h:hover,
 .splitter-h:active {
+  background: var(--el-color-primary-light-5);
+}
+/* 垂直分隔条：对象树 / 左侧 Tabs 宽度 */
+.splitter-v {
+  flex: 0 0 5px;
+  cursor: col-resize;
+  background: var(--el-border-color-lighter);
+  position: relative;
+  z-index: 2;
+  align-self: stretch;
+}
+.splitter-v:hover,
+.splitter-v:active {
   background: var(--el-color-primary-light-5);
 }
 .result-area {

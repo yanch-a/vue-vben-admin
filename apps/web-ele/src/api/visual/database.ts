@@ -140,17 +140,32 @@ export function getTableInfo(
   })
 }
 
-/** 执行只读自由 SQL */
+/** 执行只读自由 SQL（可长时间运行；传 requestId 便于取消） */
 export function executeSql(data: {
   dbConfigId: number | string
   instanceName?: string
   sql: string
   maxRows?: number
-}) {
+  /** 与 cancelSql 配对 */
+  requestId?: string
+}, opts?: { signal?: AbortSignal }) {
   return request({
     url: databaseUrl + 'executeSql',
     method: 'post',
     data,
+    signal: opts?.signal,
+    // 长查询：不走默认 10s；取消靠后端 Statement.cancel
+    timeout: 0,
+  })
+}
+
+/** 取消正在执行的自由 SQL（服务端 kill/cancel） */
+export function cancelSql(data: { requestId: string }) {
+  return request({
+    url: databaseUrl + 'cancelSql',
+    method: 'post',
+    data,
+    timeout: 15_000,
   })
 }
 

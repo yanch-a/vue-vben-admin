@@ -9,6 +9,8 @@ defineProps<{
   hasConnection: boolean;
   /** 运行中的复制任务数（角标） */
   copyTaskCount?: number;
+  /** 授权状态短提示（试用剩余 / 已授权） */
+  licenseHint?: string;
 }>();
 
 const emit = defineEmits<{
@@ -23,6 +25,10 @@ const emit = defineEmits<{
   copyTasks: [];
   /** 系统功能（导入/导出配置等） */
   system: [];
+  /** 偏好设置（Tabs 位置等） */
+  preferences: [];
+  /** 产品授权 */
+  license: [];
 }>();
 </script>
 
@@ -63,6 +69,13 @@ const emit = defineEmits<{
     <ElButton size="small" @click="emit('system')">
       系统功能
     </ElButton>
+    <ElButton size="small" @click="emit('preferences')">
+      偏好设置
+    </ElButton>
+    <ElButton size="small" @click="emit('license')">
+      授权
+      <span v-if="licenseHint" class="lic-hint">（{{ licenseHint }}）</span>
+    </ElButton>
   </div>
 </template>
 
@@ -77,5 +90,11 @@ const emit = defineEmits<{
 }
 .copy-badge {
   margin-left: 4px;
+}
+.lic-hint {
+  margin-left: 2px;
+  font-size: 12px;
+  color: var(--el-color-warning);
+  font-weight: normal;
 }
 </style>

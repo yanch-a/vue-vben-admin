@@ -315,15 +315,115 @@ export function parsePrimaryTableFromStatement(stmt: string): {
   schema?: string;
   table?: string;
 } {
+  const refs = parseTableRefsFromStatement(stmt);
+  if (refs[0]) {
+    return { schema: refs[0].schema, table: refs[0].table };
+  }
+  // 无 FROM/JOIN 时兜底 UPDATE / INTO / TABLE
   const masked = maskSqlNoise(stmt);
   const m = masked.match(
-    /\b(?:FROM|UPDATE|INTO|TABLE)\s+(?:([a-zA-Z0-9_]+|`[^`]+`|"[^"]+"|\[[^\]]+\])\s*\.\s*)?([a-zA-Z0-9_]+|`[^`]+`|"[^"]+"|\[[^\]]+\])/i,
+    /\b(?:UPDATE|INTO|TABLE)\s+(?:([a-zA-Z0-9_$#]+|`[^`]+`|"[^"]+"|\[[^\]]+\])\s*\.\s*)?([a-zA-Z0-9_$#]+|`[^`]+`|"[^"]+"|\[[^\]]+\])/i,
   );
   if (!m) return {};
   const a = stripIdentQuotes(m[1] || '');
   const b = stripIdentQuotes(m[2] || '');
   if (a && b) return { schema: a, table: b };
   if (b) return { table: b };
+  return {};
+}
+
+/** JOIN/FROM 后不应被当成别名的关键字 */
+const ALIAS_STOP_WORDS = new Set(
+  [
+    'on',
+    'where',
+    'left',
+    'right',
+    'inner',
+    'outer',
+    'full',
+    'cross',
+    'join',
+    'using',
+    'group',
+    'order',
+    'limit',
+    'offset',
+    'having',
+    'union',
+    'except',
+    'intersect',
+    'set',
+    'into',
+    'values',
+    'as',
+    'and',
+    'or',
+    'when',
+    'then',
+    'else',
+    'end',
+    'fetch',
+    'only',
+    'with',
+    'start',
+    'connect',
+    'natural',
+  ].map((s) => s.toLowerCase()),
+);
+
+export interface SqlTableRef {
+  schema?: string;
+  table: string;
+  /** 显式或隐式别名；无别名时与 table 相同便于查找 */
+  alias: string;
+}
+
+/**
+ * 解析语句中 FROM / JOIN 出现的表及别名（供 a.col / b.col 补全）
+ */
+export function parseTableRefsFromStatement(stmt: string): SqlTableRef[] {
+  const masked = maskSqlNoise(stmt);
+  const ident =
+    '(?:[a-zA-Z0-9_$#]+|`[^`]+`|"[^"]+"|\\[[^\\]]+\\])';
+  const re = new RegExp(
+    `\\b(?:FROM|JOIN)\\s+(?:(${ident})\\s*\\.\\s*)?(${ident})(?:\\s+(?:AS\\s+)?(${ident}))?`,
+    'gi',
+  );
+  const out: SqlTableRef[] = [];
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(masked)) !== null) {
+    const schema = stripIdentQuotes(m[1] || '');
+    const table = stripIdentQuotes(m[2] || '');
+    if (!table) continue;
+    let alias = stripIdentQuotes(m[3] || '');
+    if (alias && ALIAS_STOP_WORDS.has(alias.toLowerCase())) {
+      alias = '';
+    }
+    out.push({
+      schema: schema || undefined,
+      table,
+      alias: alias || table,
+    });
+  }
+  return out;
+}
+
+/**
+ * 按别名或表名解析真实表（大小写不敏感）
+ */
+export function resolveTableRefByAlias(
+  stmt: string,
+  name: string,
+): { schema?: string; table?: string } {
+  const key = (name || '').toLowerCase();
+  if (!key) return {};
+  const refs = parseTableRefsFromStatement(stmt);
+  for (const r of refs) {
+    if (r.alias.toLowerCase() === key || r.table.toLowerCase() === key) {
+      return { schema: r.schema, table: r.table };
+    }
+  }
   return {};
 }
 
@@ -368,12 +468,24 @@ export function detectCompletionContext(
 
   const primary = parsePrimaryTableFromStatement(stmtAll);
 
-  // 形如 db. 或 db.xxx —— 第二段当表名；若前面已有 FROM 表. 则当字段
+  // 形如 alias. / table. / schema.table —— 第二段当字段或表名
   if (dotted.length >= 2) {
     const left = dotted[0] || '';
     // lookback 以点结束（刚输入完左标识）或 raw 含点
     const afterDotTable = TABLE_HINT_RE.test(lookback.replace(/\.\s*$/, ' '));
-    // 若 left 已是已知表（有 FROM），更可能是 table.column
+    // 优先：别名 / 表名 → 字段（JOIN ON a. / b.）
+    const byAlias = resolveTableRefByAlias(stmtAll, left);
+    if (byAlias.table) {
+      return {
+        kind: 'column',
+        prefix,
+        schema: byAlias.schema || primary.schema,
+        table: byAlias.table,
+        replaceFrom,
+        replaceTo,
+      };
+    }
+    // 若 left 已是已知主表名
     if (
       primary.table &&
       left.toLowerCase() === primary.table.toLowerCase()

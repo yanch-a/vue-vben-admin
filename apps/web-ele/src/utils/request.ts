@@ -10,6 +10,8 @@ export default async function request(config: {
   method?: string;
   params?: any;
   responseType?: any;
+  signal?: AbortSignal;
+  timeout?: number;
   url: string;
 }) {
   const method = (config.method || 'get').toLowerCase();
@@ -19,6 +21,8 @@ export default async function request(config: {
   if (config.params) options.params = config.params;
   if (config.responseType) options.responseType = config.responseType;
   if (config.headers) options.headers = config.headers;
+  if (config.signal) options.signal = config.signal;
+  if (config.timeout != null) options.timeout = config.timeout;
 
   let body: any;
   if (method === 'get' || method === 'delete') {

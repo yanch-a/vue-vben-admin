@@ -72,6 +72,8 @@ const editForm = ref<Record<string, any>>({});
 const editOriginal = ref<Record<string, any> | null>(null);
 
 const columns = computed(() => props.result?.columns || []);
+/** 行数据不做深层响应式；表格仅展示 */
+const tableRows = computed(() => props.result?.rows || []);
 const dbType = computed(() => props.dbType || 'MY_SQL');
 const whereCols = computed(() => {
   const pks = (props.primaryKeys || []).filter((k) => columns.value.includes(k));
@@ -79,6 +81,25 @@ const whereCols = computed(() => {
 });
 
 const canMutate = computed(() => !!props.tableRef?.table && !!selectedRow.value);
+
+/** Messages 区文案：附带服务端耗时与响应到前台耗时 */
+const messagesText = computed(() => {
+  const r = props.result;
+  if (!r) return 'Ready';
+  const lines: string[] = [];
+  const base =
+    r.error ||
+    r.message ||
+    `查询完成，返回 ${r.rowCount ?? 0} 行`;
+  lines.push(String(base));
+  if (r.elapsedMs != null && !Number.isNaN(r.elapsedMs)) {
+    lines.push(`服务端查询耗时: ${r.elapsedMs} ms`);
+  }
+  if (r.clientElapsedMs != null && !Number.isNaN(r.clientElapsedMs)) {
+    lines.push(`响应到前台耗时: ${r.clientElapsedMs} ms`);
+  }
+  return lines.join('\n');
+});
 
 function closeCtxMenu() {
   ctxMenu.visible = false;
@@ -395,12 +416,13 @@ watch(
         <ElTable
           v-if="result?.columns?.length"
           ref="tableElRef"
-          :data="result.rows"
+          :data="tableRows"
           border
           stripe
           height="100%"
           size="small"
           highlight-current-row
+          table-layout="fixed"
           @current-change="onCurrentChange"
           @selection-change="onSelectionChange"
           @row-contextmenu="onRowContextMenu"
@@ -412,19 +434,13 @@ watch(
             :prop="col"
             :label="col"
             min-width="120"
-            show-overflow-tooltip
+            class-name="result-cell"
           />
         </ElTable>
         <div v-else class="empty">暂无结果</div>
       </template>
       <template v-else>
-        <pre class="messages">{{
-          result?.error ||
-          result?.message ||
-          (result
-            ? `OK, ${result.rowCount} row(s)${result.elapsedMs != null ? `, ${result.elapsedMs} ms` : ''}`
-            : 'Ready')
-        }}</pre>
+        <pre class="messages">{{ messagesText }}</pre>
       </template>
     </div>
 
@@ -532,6 +548,12 @@ watch(
   flex: 1;
   min-height: 0;
   overflow: auto;
+}
+/* 用 CSS 截断替代 show-overflow-tooltip，避免每格挂载 Tooltip 导致卡顿 */
+.result-body :deep(.result-cell .cell) {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .empty {
   padding: 16px;

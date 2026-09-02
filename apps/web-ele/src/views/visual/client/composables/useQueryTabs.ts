@@ -14,7 +14,10 @@ export interface QueryResultState {
   columns: string[];
   rows: Record<string, any>[];
   rowCount: number;
+  /** 服务端 SQL 执行耗时（ms） */
   elapsedMs?: number;
+  /** 请求发出到响应到达前台的端到端耗时（ms） */
+  clientElapsedMs?: number;
   message?: string;
   error?: string;
   /** 产生该结果的 SQL，用于解析目标表 */
@@ -259,6 +262,31 @@ export function useQueryTabs(connectionId: () => number | string | null) {
     notifyClientSessionChange();
   }
 
+  /** 关闭当前连接下全部查询页签，并保留一个空白 Query */
+  function closeAllTabs() {
+    const id = connectionId();
+    if (id == null) return;
+    const key = connKey(id);
+    const tab = createTab('Query 1');
+    tabsByConnection[key] = [tab];
+    activeTabByConnection[key] = tab.id;
+    notifyClientSessionChange();
+  }
+
+  /** 关闭除 keepTabId 外的其它查询页签 */
+  function closeOtherTabs(keepTabId: string) {
+    const id = connectionId();
+    if (id == null) return;
+    const key = connKey(id);
+    const list = tabsByConnection[key];
+    if (!list || list.length <= 1) return;
+    const keep = list.find((t) => t.id === keepTabId);
+    if (!keep) return;
+    tabsByConnection[key] = [keep];
+    activeTabByConnection[key] = keep.id;
+    notifyClientSessionChange();
+  }
+
   function openSqlInNewTab(
     sql: string,
     title?: string,
@@ -275,6 +303,8 @@ export function useQueryTabs(connectionId: () => number | string | null) {
     activeTab,
     addTab,
     closeTab,
+    closeAllTabs,
+    closeOtherTabs,
     openSqlInNewTab,
     /** 保存成功后调用：把当前 SQL 记为已同步基线 */
     markTabSaved(tab: QueryTab) {

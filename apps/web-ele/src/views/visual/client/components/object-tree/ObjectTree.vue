@@ -304,8 +304,19 @@ function onNodeDblClick(data: any) {
   }
 }
 
-/** 单击：选中库时同步编辑器当前库；选中表时记录供 F11 */
-function onNodeClick(data: any) {
+/** 单击：实例/文件夹点行切换展开；表节点不展开列（仅箭头展开），只记录选中供 F11 */
+function onNodeClick(data: any, node: any) {
+  // 实例、二级目录：点击名称行展开/收起（表节点除外）
+  if (
+    (data?.nodeType === 'instance' || data?.nodeType === 'folder') &&
+    node
+  ) {
+    if (node.expanded) {
+      node.collapse?.();
+    } else {
+      node.expand?.();
+    }
+  }
   if (data?.nodeType === 'instance' && data.instanceName) {
     emit('selectInstance', data.instanceName);
   }
@@ -426,12 +437,19 @@ defineExpose({
       lazy
       :load="loadNode"
       highlight-current
-      :expand-on-click-node="true"
+      :expand-on-click-node="false"
       :filter-node-method="filterNode"
-      @node-click="(_: any, node: any) => onNodeClick(node.data)"
-      @node-dblclick="(_: any, node: any) => onNodeDblClick(node.data)"
+      @node-click="(data: any, node: any) => onNodeClick(data, node)"
       @node-contextmenu="(e: MouseEvent, data: any) => onNodeContextMenu(e, data)"
-    />
+    >
+      <!-- ElTree 无 node-dblclick，需在节点内容上自行绑定 -->
+      <template #default="{ node, data }">
+        <span
+          class="tree-node-label"
+          @dblclick.stop="onNodeDblClick(data)"
+        >{{ node.label }}</span>
+      </template>
+    </ElTree>
     <ObjectTreeContextMenu
       :visible="ctxMenu.visible"
       :x="ctxMenu.x"
@@ -451,5 +469,13 @@ defineExpose({
   height: 100%;
   padding: 4px;
   overflow: auto;
+}
+.tree-node-label {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+  user-select: none;
 }
 </style>

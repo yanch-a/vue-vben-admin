@@ -51,6 +51,8 @@ const props = defineProps<{
   dbType?: string;
   /** 当前编辑器所属库 */
   instanceName?: string;
+  /** 执行中锁定编辑 */
+  readOnly?: boolean;
   /**
    * 缓存未命中时按需加载字段（返回字段名列表；主键可选）
    */
@@ -158,6 +160,10 @@ async function onDrop(e: DragEvent) {
   e.preventDefault();
   e.stopPropagation();
   dragOver.value = false;
+  if (props.readOnly) {
+    ElMessage.warning('查询执行中，暂不可导入');
+    return;
+  }
   const file = e.dataTransfer?.files?.[0];
   if (!file) return;
   const parsed = await readImportFile(file);
@@ -308,6 +314,7 @@ onMounted(() => {
     fontSize: 13,
     tabSize: 2,
     scrollBeyondLastLine: false,
+    readOnly: !!props.readOnly,
     tabCompletion: 'on',
     suggestOnTriggerCharacters: true,
     quickSuggestions: { other: true, comments: false, strings: false },
@@ -320,22 +327,30 @@ onMounted(() => {
     acceptSuggestionOnEnter: 'on',
   });
   editor.onDidChangeModelContent(() => {
+    if (props.readOnly) return;
     emit('update:modelValue', editor?.getValue() || '');
   });
   editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter, () => {
-    emit('execute');
+    if (!props.readOnly) emit('execute');
   });
   editor.addCommand(monaco.KeyCode.F9, () => {
-    emit('execute');
+    if (!props.readOnly) emit('execute');
   });
   editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => {
-    emit('save');
+    if (!props.readOnly) emit('save');
   });
   editor.addCommand(monaco.KeyCode.F12, () => {
-    formatCurrentSql();
+    if (!props.readOnly) formatCurrentSql();
   });
   registerCompletion();
 });
+
+watch(
+  () => props.readOnly,
+  (v) => {
+    editor?.updateOptions({ readOnly: !!v });
+  },
+);
 
 watch(
   () => props.modelValue,

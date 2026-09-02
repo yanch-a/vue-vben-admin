@@ -158,7 +158,7 @@ export function validateSessionSnapshot(raw: unknown): ClientSessionSnapshot | n
   }
 
   const leftWidth =
-    typeof o.leftWidth === 'number' && o.leftWidth >= 160 && o.leftWidth <= 600
+    typeof o.leftWidth === 'number' && o.leftWidth >= 100 && o.leftWidth <= 600
       ? o.leftWidth
       : undefined;
   const resultHeight =
