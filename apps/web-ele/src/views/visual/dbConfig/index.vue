@@ -47,7 +47,16 @@
         description: '',
         orderNum: 0,
         isPublic: 0,
+        sshEnabled: 0,
+        sshHost: '',
+        sshPort: 22,
+        sshUsername: '',
+        sshPassword: '',
+        sshPrivateKey: '',
+        sshPassphrase: '',
       })
+
+      const sshAuthMode = ref('password')
 
       const queryForm = reactive({
         pageNum: 1,
@@ -131,7 +140,15 @@
           description: '',
           orderNum: 0,
           isPublic: 0,
+          sshEnabled: 0,
+          sshHost: '',
+          sshPort: 22,
+          sshUsername: '',
+          sshPassword: '',
+          sshPrivateKey: '',
+          sshPassphrase: '',
         })
+        sshAuthMode.value = 'password'
         dialogVisible.value = true
       }
 
@@ -141,8 +158,12 @@
           ...row,
           // 密码不回显；留空提交则后端保留原密码
           password: '',
+          sshPassword: '',
+          sshPrivateKey: '',
+          sshPassphrase: '',
           isPublic: row.isPublic == null ? 0 : row.isPublic,
         })
+        sshAuthMode.value = row.sshPrivateKey ? 'key' : 'password'
         dialogVisible.value = true
       }
 
@@ -194,6 +215,22 @@
               // 编辑且密码为空：不传 password，避免误清空
               if (dialogType.value === 'edit' && !payload.password) {
                 delete payload.password
+              }
+              if (dialogType.value === 'edit' && !payload.sshPassword) {
+                delete payload.sshPassword
+              }
+              if (dialogType.value === 'edit' && !payload.sshPrivateKey) {
+                delete payload.sshPrivateKey
+              }
+              if (dialogType.value === 'edit' && !payload.sshPassphrase) {
+                delete payload.sshPassphrase
+              }
+              if (sshAuthMode.value === 'password') {
+                payload.sshPrivateKey = dialogType.value === 'edit' ? '' : ''
+              } else if (dialogType.value === 'edit') {
+                payload.sshPassword = ''
+              } else {
+                payload.sshPassword = ''
               }
               const { msg } = await editDbConfig(payload)
               $baseMessage(msg, 'success', 'vab-hey-message-success')
@@ -426,6 +463,7 @@
         removeGrant,
         onWriteFlagChange,
         saveAuth,
+        sshAuthMode,
         Plus,
         Search,
       }
@@ -621,6 +659,57 @@
             show-password
           />
         </el-form-item>
+        <el-divider content-position="left">SSH 隧道（可选）</el-divider>
+        <el-form-item label="启用 SSH">
+          <el-switch
+            v-model="form.sshEnabled"
+            :active-value="1"
+            :inactive-value="0"
+          />
+        </el-form-item>
+        <template v-if="form.sshEnabled === 1">
+          <el-form-item label="SSH 主机">
+            <el-input v-model="form.sshHost" placeholder="跳板机地址" />
+          </el-form-item>
+          <el-form-item label="SSH 端口">
+            <el-input-number v-model="form.sshPort" :min="1" :max="65535" />
+          </el-form-item>
+          <el-form-item label="SSH 用户">
+            <el-input v-model="form.sshUsername" />
+          </el-form-item>
+          <el-form-item label="SSH 认证">
+            <el-radio-group v-model="sshAuthMode">
+              <el-radio value="password">密码</el-radio>
+              <el-radio value="key">私钥</el-radio>
+            </el-radio-group>
+          </el-form-item>
+          <el-form-item v-if="sshAuthMode === 'password'" label="SSH 密码">
+            <el-input
+              v-model="form.sshPassword"
+              type="password"
+              show-password
+              :placeholder="dialogType === 'edit' ? '留空则不修改' : ''"
+            />
+          </el-form-item>
+          <template v-else>
+            <el-form-item label="SSH 私钥">
+              <el-input
+                v-model="form.sshPrivateKey"
+                type="textarea"
+                :rows="4"
+                placeholder="PEM 私钥；留空则不修改"
+              />
+            </el-form-item>
+            <el-form-item label="私钥口令">
+              <el-input
+                v-model="form.sshPassphrase"
+                type="password"
+                show-password
+                placeholder="可选"
+              />
+            </el-form-item>
+          </template>
+        </template>
         <el-form-item label="是否公开">
           <el-switch
             v-model="form.isPublic"

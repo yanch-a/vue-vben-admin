@@ -9,7 +9,7 @@ import {
   getAttachments,
   getByBelongIds,
 } from '@/api/attachmentApi';
-import { baseURL } from '@/config';
+import { baseURL, isPublicBrandAsset, publicAssetUrl } from '@/config';
 import { ElButton, ElDialog, ElMessage, ElUpload } from 'element-plus';
 
 defineOptions({ name: 'LemonUpload' });
@@ -71,12 +71,9 @@ function resolveUrl(url?: string) {
   if (url.startsWith('http') || url.startsWith('blob:') || url.startsWith('data:')) {
     return url;
   }
-  // public 目录下的站点根静态资源，不要拼 API 前缀（/lemon）
-  if (
-    /^\/(logo|login-bg|favicon)(\.|$)/i.test(url) ||
-    url.startsWith('/assets/')
-  ) {
-    return url;
+  // public 目录下的站点根静态资源，挂到 Vite BASE_URL（/lmdb/view/）
+  if (isPublicBrandAsset(url) || url.startsWith('/assets/')) {
+    return isPublicBrandAsset(url) ? publicAssetUrl(url) : url;
   }
   return `${baseURL}${url.startsWith('/') ? '' : '/'}${url}`;
 }

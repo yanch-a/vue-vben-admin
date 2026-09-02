@@ -9,7 +9,7 @@ import { reactive, readonly } from 'vue';
 
 import { updatePreferences } from '@vben/preferences';
 
-import { baseURL } from '#/config';
+import { baseURL, isPublicBrandAsset, publicAssetUrl } from '#/config';
 
 /** 后台配置编码 */
 export const BRAND_CONFIG_KEYS = {
@@ -58,17 +58,17 @@ export interface BrandingState {
  * 布局默认「双列菜单」在 preferences.ts 中设置，不放这里。
  */
 const DEFAULT_BRANDING: Omit<BrandingState, 'loaded'> = {
-  accountMark: 'Lemon',
-  appTitle: 'Lemon',
-  browserTitle: 'Lemon Admin',
-  logo: '/logo.png',
-  loginBg: '/login-bg.png',
-  welcome: '欢迎登录 Lemon',
-  pageTitle: 'Lemon 管理系统',
-  pageDesc: '工程化、高性能的 Lemon 中后台',
+  accountMark: 'lemonDbClient',
+  appTitle: 'lemonDbClient',
+  browserTitle: 'lemonDbClient',
+  logo: publicAssetUrl('logo.png'),
+  loginBg: publicAssetUrl('login-bg.png'),
+  welcome: '欢迎登录 lemonDbClient',
+  pageTitle: 'lemonDbClient',
+  pageDesc: '可视化数据库客户端',
   icp: '',
   icpLink: 'https://beian.miit.gov.cn/',
-  companyName: 'Lemon',
+  companyName: 'lemonDbClient',
 };
 
 const state = reactive<BrandingState>({
@@ -78,6 +78,7 @@ const state = reactive<BrandingState>({
 
 /**
  * 把相对路径补成可访问 URL；已是 http(s)/data/blob 则原样返回。
+ * public 品牌图走 Vite BASE_URL；其它相对路径拼后台 API 前缀。
  */
 export function resolveAssetUrl(url?: null | string): string {
   if (!url) return '';
@@ -86,13 +87,23 @@ export function resolveAssetUrl(url?: null | string): string {
   if (
     /^https?:\/\//i.test(trimmed) ||
     trimmed.startsWith('data:') ||
-    trimmed.startsWith('blob:') ||
-    trimmed.startsWith('/')
+    trimmed.startsWith('blob:')
   ) {
     return trimmed;
   }
+  // 兼容后台仍返回 /logo.png、/login-bg.png
+  if (isPublicBrandAsset(trimmed)) {
+    return publicAssetUrl(trimmed);
+  }
+  const viteBase = import.meta.env.BASE_URL || '/';
+  if (viteBase !== '/' && trimmed.startsWith(viteBase)) {
+    return trimmed;
+  }
+  if (trimmed.startsWith('/')) {
+    return trimmed;
+  }
   const prefix = baseURL.endsWith('/') ? baseURL.slice(0, -1) : baseURL;
-  return `${prefix}${trimmed.startsWith('/') ? '' : '/'}${trimmed}`;
+  return `${prefix}/${trimmed.replace(/^\//, '')}`;
 }
 
 function pick(

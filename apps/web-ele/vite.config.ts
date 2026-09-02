@@ -2,7 +2,7 @@ import { createRequire } from 'node:module';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { defineConfig, viteCssLayerPlugin } from '@vben/vite-config';
+import { defineConfig } from '@vben/vite-config';
 
 import ElementPlus from 'unplugin-element-plus/vite';
 
@@ -10,13 +10,17 @@ const rootDir = path.dirname(fileURLToPath(import.meta.url));
 const require = createRequire(import.meta.url);
 const logicflowCoreEntry = require.resolve('@logicflow/core');
 
-export default defineConfig(async () => {
+export default defineConfig(async ({ command }) => {
   return {
     application: {},
     vite: {
+      // 仅生产打包挂 /lmdb/view/；开发仍用 /
+      base: command === 'build' ? '/lmdb/view/' : '/',
       plugins: [
-        // element-plus 的 css 包进 @layer el，使 Tailwind 工具类可覆盖组件样式
-        viteCssLayerPlugin({ layerName: 'el', packageName: 'element-plus' }),
+        // 注意：不要使用 viteCssLayerPlugin 包装 element-plus。
+        // 生产构建下异步 CSS chunk 会抢先声明 @layer el，层序变成 el < base，
+        // Tailwind preflight 压过 EP → 按钮/表格无边框、高度异常。
+        // 参见 https://github.com/vbenjs/vue-vben-admin/issues/8224
         ElementPlus({ format: 'esm' }),
       ],
       resolve: {
@@ -42,7 +46,7 @@ export default defineConfig(async () => {
       },
       server: {
         proxy: {
-          '/lemon': {
+          '/lmdb': {
             changeOrigin: true,
             // lemon 本地默认端口，见 lemon-main application-dev.yml
             target: 'http://localhost:7806',

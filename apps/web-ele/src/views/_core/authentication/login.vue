@@ -2,7 +2,6 @@
 import type { FormInstance, FormRules } from 'element-plus';
 
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref } from 'vue';
-import { useRouter } from 'vue-router';
 
 import {
   ElButton,
@@ -36,7 +35,6 @@ const WX_SCAN_POLL_MAX = 30;
 const PRIVACY_AGREED_CACHE_KEY = 'privacy_policy_agreed';
 
 const authStore = useAuthStore();
-const router = useRouter();
 
 type LoginType = 'admin' | 'member';
 type AuthMode = 'password' | 'sms' | 'wechat';
@@ -524,9 +522,6 @@ onBeforeUnmount(() => {
         >
           <ElButton type="primary" link @click="forgotDialogVisible = true">
             忘记密码？
-          </ElButton>
-          <ElButton type="primary" link @click="router.push('/auth/register')">
-            注册账号
           </ElButton>
         </div>
 

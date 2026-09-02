@@ -10,7 +10,7 @@
  *
  * @author yanch
  */
-import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
 
 import { ElMessage } from 'element-plus';
 
@@ -71,6 +71,9 @@ const treeRef = ref();
 /** 根节点：数据库/模式列表 */
 const treeData = ref<any[]>([]);
 const loading = ref(false);
+/** 定位高亮的节点 id（主题色背景） */
+const locateKey = ref('');
+let locateTimer: null | ReturnType<typeof setTimeout> = null;
 
 const capabilities = computed(() => resolveCapabilities(props.dbType));
 /** 右键菜单文案：Oracle/达梦一级节点是「模式」而非「数据库」 */
@@ -400,6 +403,103 @@ function reloadTables(instanceName: string) {
   reloadFolder('tables', instanceName);
 }
 
+function clearLocateHighlight() {
+  locateKey.value = '';
+  if (locateTimer) {
+    clearTimeout(locateTimer);
+    locateTimer = null;
+  }
+}
+
+function applyLocateHighlight(key: string) {
+  locateKey.value = String(key);
+  treeRef.value?.setCurrentKey?.(key);
+  if (locateTimer) clearTimeout(locateTimer);
+  locateTimer = setTimeout(() => {
+    locateKey.value = '';
+    locateTimer = null;
+  }, 4500);
+  nextTick(() => {
+    const root = treeRef.value?.$el as HTMLElement | undefined;
+    const el = root?.querySelector?.('.is-locate-target') as HTMLElement | null;
+    el?.scrollIntoView?.({ block: 'center', behavior: 'smooth' });
+  });
+}
+
+/** 展开节点并等待 lazy 子节点加载完成 */
+function waitExpand(node: any): Promise<void> {
+  return new Promise((resolve) => {
+    if (!node) {
+      resolve();
+      return;
+    }
+    if (node.expanded && node.loaded) {
+      resolve();
+      return;
+    }
+    try {
+      node.expand(() => resolve());
+    } catch {
+      resolve();
+    }
+  });
+}
+
+/**
+ * 在对象树中定位：
+ * - 有 savedQueryId：展开实例 → Queries，高亮对应已保存查询
+ * - 无 savedQueryId：高亮当前数据库实例节点
+ */
+async function locateTarget(opts: {
+  instanceName?: string;
+  savedQueryId?: number | string;
+}) {
+  const tree = treeRef.value;
+  const instanceName = (opts.instanceName || '').trim();
+  if (!tree) return;
+  if (!instanceName) {
+    ElMessage.warning('当前编辑器未选择数据库实例');
+    return;
+  }
+  if (!treeData.value.length) {
+    await loadInstances();
+  }
+  const insKey = `ins-${instanceName}`;
+  const insNode = tree.getNode(insKey);
+  if (!insNode) {
+    ElMessage.warning(`左侧未找到${instanceLabel.value}：${instanceName}`);
+    return;
+  }
+
+  await waitExpand(insNode);
+
+  if (opts.savedQueryId == null || opts.savedQueryId === '') {
+    applyLocateHighlight(insKey);
+    return;
+  }
+
+  const folderKey = `queries-${instanceName}`;
+  const folderNode = tree.getNode(folderKey);
+  if (!folderNode) {
+    ElMessage.warning('未找到 Queries 目录');
+    applyLocateHighlight(insKey);
+    return;
+  }
+  // 强制刷新 Queries，避免缓存里没有刚保存的项
+  folderNode.loaded = false;
+  folderNode.expanded = false;
+  await waitExpand(folderNode);
+
+  const queryKey = `saved-${opts.savedQueryId}`;
+  const queryNode = tree.getNode(queryKey);
+  if (!queryNode) {
+    ElMessage.warning('Queries 中未找到该已保存查询');
+    applyLocateHighlight(folderKey);
+    return;
+  }
+  applyLocateHighlight(queryKey);
+}
+
 watch(
   () => props.filterText,
   (val) => treeRef.value?.filter(val || ''),
@@ -407,7 +507,10 @@ watch(
 
 watch(
   () => [props.dbConfigId, props.dbType],
-  () => loadInstances(),
+  () => {
+    clearLocateHighlight();
+    loadInstances();
+  },
 );
 
 onMounted(() => {
@@ -416,6 +519,7 @@ onMounted(() => {
 });
 
 onBeforeUnmount(() => {
+  clearLocateHighlight();
   document.removeEventListener('mousedown', onDocMouseDown, true);
 });
 
@@ -423,6 +527,7 @@ defineExpose({
   reload: loadInstances,
   reloadQueries,
   reloadTables,
+  locateTarget,
   closeContextMenu: closeCtxMenu,
 });
 </script>
@@ -446,6 +551,10 @@ defineExpose({
       <template #default="{ node, data }">
         <span
           class="tree-node-label"
+          :class="{
+            'is-locate-target':
+              !!locateKey && String(data.id) === String(locateKey),
+          }"
           @dblclick.stop="onNodeDblClick(data)"
         >{{ node.label }}</span>
       </template>
@@ -477,5 +586,23 @@ defineExpose({
   white-space: nowrap;
   font-size: 13px;
   user-select: none;
+}
+/* 定位高亮：跟随 Element Plus 主题色（亮/暗模式均可用） */
+.tree-node-label.is-locate-target {
+  padding: 0 6px;
+  border-radius: 4px;
+  color: var(--el-color-primary);
+  background-color: var(--el-color-primary-light-8);
+  box-shadow: inset 0 0 0 1px var(--el-color-primary-light-5);
+  animation: locate-pulse 1s ease-in-out 2;
+}
+@keyframes locate-pulse {
+  0%,
+  100% {
+    background-color: var(--el-color-primary-light-8);
+  }
+  50% {
+    background-color: var(--el-color-primary-light-7);
+  }
 }
 </style>

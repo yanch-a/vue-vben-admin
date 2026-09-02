@@ -2,6 +2,8 @@ import {
   defineOverridesPreferences,
 } from '@vben/preferences';
 
+import { publicAssetUrl } from './config';
+
 /**
  * @description 项目配置文件
  * 只需要覆盖项目中的一部分配置，不需要的配置不用覆盖，会自动使用默认配置
@@ -19,7 +21,7 @@ export const overridesPreferences = defineOverridesPreferences({
     accessMode: 'backend',
     enableRefreshToken: false,
     // 系统简短标题（菜单左侧文字）；启动后可被后台 ui.brand.appTitle 覆盖
-    name: import.meta.env.VITE_APP_TITLE || 'Lemon',
+    name: import.meta.env.VITE_APP_TITLE || 'lemonDbClient',
     // 默认双列菜单（侧边混合菜单 sidebar-mixed-nav）
     // 偏好设置面板入口：右上角「偏好设置」→ 布局 → 「双列菜单」
     // 代码位置：packages/@core/preferences/src/config.ts 默认值；此处覆盖
@@ -31,11 +33,11 @@ export const overridesPreferences = defineOverridesPreferences({
   },
   logo: {
     enable: true,
-    source: '/logo.png',
+    source: publicAssetUrl('logo.png'),
     showText: true,
   },
   copyright: {
-    companyName: 'Lemon',
+    companyName: 'lemonDbClient',
     companySiteLink: '',
     date: `${new Date().getFullYear()}`,
     enable: true,
@@ -50,9 +52,14 @@ export const overridesPreferences = defineOverridesPreferences({
   },
   // 关闭页面缓存与过渡，避免连点菜单时右侧内容挂载失败后空白
   tabbar: {
+    enable: false,
     keepAlive: false,
   },
   transition: {
     enable: false,
+  },
+  // 隐藏顶栏通知铃铛
+  widget: {
+    notification: false,
   },
 });

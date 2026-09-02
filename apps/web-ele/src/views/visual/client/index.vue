@@ -28,6 +28,7 @@ import { getDbConfigById } from '#/api/visual/vq';
 import { Page } from '@vben/common-ui';
 
 import { ElMessage, ElMessageBox } from 'element-plus';
+import { Aim } from '@element-plus/icons-vue';
 
 import type { TreeCtxAction } from './components/object-tree/ObjectTreeContextMenu.vue';
 
@@ -343,7 +344,7 @@ function goRelation() {
 
 /** 打开已保存查询文件管理页（分组 / 树 / 搜索） */
 function goSavedQueryManage() {
-  router.push({ name: 'SavedQueryManage' });
+  router.push({ name: 'SavedQuerys' });
 }
 
 function onAddQueryTab() {
@@ -957,6 +958,25 @@ function pickErrorMsg(e: any, fallback: string) {
 /** 格式化当前选区或光标所在 SQL（与编辑器 F12 相同） */
 function onFormatSql() {
   sqlEditorRef.value?.formatSql?.();
+}
+
+/**
+ * 在左侧对象树定位当前编辑器：
+ * - 已保存：展开实例 → Queries，高亮对应查询
+ * - 未保存：高亮当前数据库实例
+ */
+function locateCurrentInTree() {
+  const tab = activeTab.value;
+  if (!tab) return;
+  const instanceName = tab.instanceName?.trim();
+  if (!instanceName) {
+    ElMessage.warning('请先选择当前库/模式');
+    return;
+  }
+  objectTreeRef.value?.locateTarget?.({
+    instanceName,
+    savedQueryId: tab.savedQueryId,
+  });
 }
 
 /**
@@ -1723,6 +1743,13 @@ onBeforeUnmount(() => {
             >
               {{ activeTab?.resultVisible ? '隐藏结果' : '显示结果' }}
             </ElButton>
+            <ElButton
+              size="small"
+              :icon="Aim"
+              title="在对象树中定位"
+              :disabled="!activeTab"
+              @click="locateCurrentInTree"
+            />
           </div>
 
           <!-- SQL 编辑区（占满剩余空间） -->

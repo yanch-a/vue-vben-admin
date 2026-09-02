@@ -86,6 +86,22 @@ const form = reactive({
   password: '',
   description: '',
   orderNum: 0,
+  sshEnabled: 0,
+  sshHost: '',
+  sshPort: 22,
+  sshUsername: '',
+  sshPassword: '',
+  sshPrivateKey: '',
+  sshPassphrase: '',
+});
+
+/** SSH 认证方式：password | key */
+const sshAuthMode = ref<'password' | 'key'>('password');
+const sshEnabled = computed({
+  get: () => form.sshEnabled === 1,
+  set: (v: boolean) => {
+    form.sshEnabled = v ? 1 : 0;
+  },
 });
 
 const descriptor = computed<DbTypeDescriptor>(() => resolveDbType(form.dbType));
@@ -180,6 +196,25 @@ const rules = computed(() => ({
       trigger: 'blur',
     },
   ],
+  sshHost: [
+    {
+      validator: (_r: unknown, v: string, cb: (e?: Error) => void) => {
+        if (sshEnabled.value && needsHost.value && !v?.trim()) {
+          cb(new Error('请输入 SSH 主机'));
+        } else cb();
+      },
+      trigger: 'blur',
+    },
+  ],
+  sshUsername: [
+    {
+      validator: (_r: unknown, v: string, cb: (e?: Error) => void) => {
+        if (sshEnabled.value && !v?.trim()) cb(new Error('请输入 SSH 用户名'));
+        else cb();
+      },
+      trigger: 'blur',
+    },
+  ],
 }));
 
 const dialogTitle = computed(() => {
@@ -202,7 +237,15 @@ function resetForm() {
     password: '',
     description: '',
     orderNum: 0,
+    sshEnabled: 0,
+    sshHost: '',
+    sshPort: 22,
+    sshUsername: '',
+    sshPassword: '',
+    sshPrivateKey: '',
+    sshPassphrase: '',
   });
+  sshAuthMode.value = 'password';
 }
 
 function fillForm(row: any) {
@@ -222,7 +265,15 @@ function fillForm(row: any) {
     password: row.password || '',
     description: row.description || '',
     orderNum: row.orderNum == null ? 0 : Number(row.orderNum),
+    sshEnabled: row.sshEnabled == null ? 0 : Number(row.sshEnabled),
+    sshHost: row.sshHost || '',
+    sshPort: row.sshPort == null ? 22 : Number(row.sshPort),
+    sshUsername: row.sshUsername || '',
+    sshPassword: '',
+    sshPrivateKey: '',
+    sshPassphrase: '',
   });
+  sshAuthMode.value = row.sshPrivateKey ? 'key' : 'password';
 }
 
 /**
@@ -337,7 +388,19 @@ async function handleSubmit() {
     if (!valid) return;
     saving.value = true;
     try {
-      await editDbConfig({ ...form });
+      const payload: Record<string, unknown> = { ...form };
+      if (form.id && !form.password) delete payload.password;
+      if (form.id && !form.sshPassword) delete payload.sshPassword;
+      if (form.id && !form.sshPrivateKey) delete payload.sshPrivateKey;
+      if (form.id && !form.sshPassphrase) delete payload.sshPassphrase;
+      if (sshAuthMode.value === 'password') {
+        payload.sshPrivateKey = '';
+      } else if (form.id) {
+        payload.sshPassword = '';
+      } else {
+        payload.sshPassword = '';
+      }
+      await editDbConfig(payload);
       ElMessage.success(form.id ? '保存成功' : '创建成功');
       await loadList();
       const saved = existingList.value.find((r) => r.id === form.id) ||
@@ -388,6 +451,13 @@ async function handleTest() {
       jdbcUrl: form.jdbcUrl,
       username: form.username,
       password: form.password,
+      sshEnabled: form.sshEnabled,
+      sshHost: form.sshHost,
+      sshPort: form.sshPort,
+      sshUsername: form.sshUsername,
+      sshPassword: sshAuthMode.value === 'password' ? form.sshPassword : '',
+      sshPrivateKey: sshAuthMode.value === 'key' ? form.sshPrivateKey : '',
+      sshPassphrase: form.sshPassphrase,
     }),
   );
 }
@@ -558,6 +628,63 @@ watch(
           :placeholder="credentialRequired ? '' : '可留空'"
         />
       </ElFormItem>
+
+      <template v-if="needsHost">
+        <ElDivider content-position="left">SSH 隧道（可选）</ElDivider>
+        <ElFormItem label="启用 SSH">
+          <ElSwitch v-model="sshEnabled" />
+          <span class="tip">经跳板机转发到上方数据库主机</span>
+        </ElFormItem>
+        <template v-if="sshEnabled">
+          <ElFormItem label="SSH 主机" prop="sshHost">
+            <ElInput v-model="form.sshHost" placeholder="跳板机 IP 或域名" />
+          </ElFormItem>
+          <ElFormItem label="SSH 端口" prop="sshPort">
+            <ElInputNumber
+              v-model="form.sshPort"
+              :min="1"
+              :max="65535"
+              controls-position="right"
+            />
+          </ElFormItem>
+          <ElFormItem label="SSH 用户" prop="sshUsername">
+            <ElInput v-model="form.sshUsername" />
+          </ElFormItem>
+          <ElFormItem label="SSH 认证">
+            <ElRadioGroup v-model="sshAuthMode">
+              <ElRadio value="password">密码</ElRadio>
+              <ElRadio value="key">私钥</ElRadio>
+            </ElRadioGroup>
+          </ElFormItem>
+          <ElFormItem v-if="sshAuthMode === 'password'" label="SSH 密码">
+            <ElInput
+              v-model="form.sshPassword"
+              type="password"
+              show-password
+              :placeholder="form.id ? '留空则沿用已保存' : ''"
+            />
+          </ElFormItem>
+          <template v-else>
+            <ElFormItem label="SSH 私钥">
+              <ElInput
+                v-model="form.sshPrivateKey"
+                type="textarea"
+                :rows="4"
+                placeholder="粘贴 PEM 私钥；留空则沿用已保存"
+              />
+            </ElFormItem>
+            <ElFormItem label="私钥口令">
+              <ElInput
+                v-model="form.sshPassphrase"
+                type="password"
+                show-password
+                placeholder="可选"
+              />
+            </ElFormItem>
+          </template>
+        </template>
+      </template>
+
       <ElFormItem label="描述" prop="description">
         <ElInput v-model="form.description" type="textarea" :rows="2" />
       </ElFormItem>

@@ -184,16 +184,6 @@ function collectRouteKeys(menus: RouteRecordStringComponent[]) {
  */
 const HIDDEN_PAGE_ROUTES: RouteRecordStringComponent[] = [
   {
-    name: 'CmsContentInfo',
-    path: '/cmsContent/detail',
-    component: '/cms/cmsContent/CmsContentEdit',
-    meta: {
-      hideInMenu: true,
-      title: '内容详情',
-      activePath: '/CMS/cmsContent',
-    },
-  },
-  {
     name: 'DbConfigCanvas',
     path: '/visual/dbConfig/canvas',
     component: '/visual/dbConfig/canvas',
@@ -213,25 +203,15 @@ const HIDDEN_PAGE_ROUTES: RouteRecordStringComponent[] = [
       activePath: '/visual/client',
     },
   },
-  {
-    name: 'VisualClient',
-    path: '/visual/client',
-    component: '/visual/client/index',
-    meta: {
-      hideInMenu: true,
-      title: '数据库客户端',
-    },
-  },
-  {
-    name: 'SavedQueryManage',
-    path: '/visual/client/savedQueries',
-    component: '/visual/client/savedQueryManage',
-    meta: {
-      hideInMenu: true,
-      title: '查询文件管理',
-      activePath: '/visual/client',
-    },
-  },
+  // {
+  //   name: 'VisualClient',
+  //   path: '/visual/client',
+  //   component: '/visual/client/index',
+  //   meta: {
+  //     hideInMenu: true,
+  //     title: '数据库客户端',
+  //   },
+  // },
   {
     name: 'QueryResultShare',
     path: '/visual/queryResult/share/:shareCode',
