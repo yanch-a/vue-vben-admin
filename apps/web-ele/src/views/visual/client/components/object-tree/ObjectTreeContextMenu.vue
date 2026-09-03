@@ -1,10 +1,8 @@
 <script lang="ts" setup>
 /**
  * 对象树右键菜单（SQLyog 风格）
- * - instance(库)：创建库 / 删除库 / 导入(预留) / 复制到不同主机 / 执行 SQL 脚本
- * - tables 文件夹：创建表 / 将表复制到不同主机
- * - table：打开表 / 删除表 / 改变表 / 复制 DDL / 复制到不同主机
- * - savedQuery：打开 / 重命名 / 删除 / 复制 SQL
+ * - instance / tables / table / savedQuery
+ * - views|procedures|functions|triggers|events 文件夹与叶子：执行/创建/改变/删除
  * @author yanch
  */
 defineOptions({ name: 'ObjectTreeContextMenu' });
@@ -26,16 +24,36 @@ export type TreeCtxAction =
   | 'openSavedQuery'
   | 'renameSavedQuery'
   | 'deleteSavedQuery'
-  | 'copySavedQuerySql';
+  | 'copySavedQuerySql'
+  | 'executeProgramObject'
+  | 'createProgramObject'
+  | 'alterProgramObject'
+  | 'dropProgramObject';
+
+const PROGRAM_KINDS = new Set([
+  'views',
+  'procedures',
+  'functions',
+  'triggers',
+  'events',
+]);
+
+const PROGRAM_LABEL: Record<string, string> = {
+  views: '视图',
+  procedures: '存储过程',
+  functions: '函数',
+  triggers: '触发器',
+  events: '事件',
+};
 
 const props = withDefaults(
   defineProps<{
     visible: boolean;
     x: number;
     y: number;
-    /** instance | folder | table | savedQuery */
+    /** instance | folder | table | savedQuery | views|... */
     targetType: string;
-    /** folder 时的 objectKind，如 tables / queries */
+    /** folder 时的 objectKind，如 tables / queries / views */
     objectKind?: string;
     /** 一级节点称呼：数据库 / 模式（Oracle 族） */
     instanceLabel?: string;
@@ -55,6 +73,20 @@ const isTablesFolder = () =>
   props.targetType === 'folder' && props.objectKind === 'tables';
 const isTable = () => props.targetType === 'table';
 const isSavedQuery = () => props.targetType === 'savedQuery';
+
+/** 可编程对象文件夹（创建入口） */
+const isProgramFolder = () =>
+  props.targetType === 'folder' && PROGRAM_KINDS.has(props.objectKind || '');
+
+/** 可编程对象叶子 */
+const isProgramLeaf = () => PROGRAM_KINDS.has(props.targetType);
+
+function programLabel() {
+  if (isProgramFolder()) {
+    return PROGRAM_LABEL[props.objectKind || ''] || '对象';
+  }
+  return PROGRAM_LABEL[props.targetType] || '对象';
+}
 
 function onAction(action: TreeCtxAction) {
   emit('action', action);
@@ -90,6 +122,25 @@ function onAction(action: TreeCtxAction) {
       <template v-else-if="isTablesFolder()">
         <div class="item" @click="onAction('createTable')">创建表</div>
         <div class="item" @click="onAction('copyDbToHost')">将表复制到不同主机</div>
+      </template>
+      <template v-else-if="isProgramFolder()">
+        <div class="item" @click="onAction('createProgramObject')">
+          创建{{ programLabel() }}
+        </div>
+      </template>
+      <template v-else-if="isProgramLeaf()">
+        <div class="item" @click="onAction('executeProgramObject')">
+          执行
+        </div>
+        <div class="item" @click="onAction('createProgramObject')">
+          创建{{ programLabel() }}
+        </div>
+        <div class="item" @click="onAction('alterProgramObject')">
+          改变{{ programLabel() }}
+        </div>
+        <div class="item danger" @click="onAction('dropProgramObject')">
+          删除{{ programLabel() }}
+        </div>
       </template>
       <template v-else-if="isTable()">
         <div class="item" @click="onAction('openTable')">打开表 (F11)</div>

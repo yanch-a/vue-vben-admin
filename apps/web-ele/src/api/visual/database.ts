@@ -297,3 +297,22 @@ export function getEvents(dbConfigId: any, instanceName: any) {
     method: 'get',
   })
 }
+
+/**
+ * 生成视图/过程/函数/触发器/事件的编辑脚本（后端按方言实现）
+ * action: execute | create | alter | drop
+ * objectKind: view | procedure | function | trigger | event（也可传复数）
+ */
+export function getObjectScript(data: {
+  dbConfigId: number | string
+  instanceName: string
+  objectKind: string
+  action: 'execute' | 'create' | 'alter' | 'drop' | string
+  objectName?: string
+}) {
+  return request({
+    url: databaseUrl + 'objectScript',
+    method: 'post',
+    data,
+  })
+}

@@ -285,7 +285,7 @@ function loadNode(node: any, resolve: (data: any[]) => void) {
   resolve([]);
 }
 
-/** 双击表：生成 SELECT；双击已保存查询：打开编辑器；其它：插入名称 */
+/** 双击表：生成 SELECT；双击已保存查询：打开编辑器；可编程对象：改变（拉定义）；其它：插入名称 */
 function onNodeDblClick(data: any) {
   if (data.nodeType === 'table') {
     emit('openTable', {
@@ -301,6 +301,19 @@ function onNodeDblClick(data: any) {
       queryName: data.name || data.label,
       sqlText: data.sqlText || '',
       instanceName: data.instanceName,
+    });
+    return;
+  }
+  if (
+    data.nodeType === 'views' ||
+    data.nodeType === 'procedures' ||
+    data.nodeType === 'functions' ||
+    data.nodeType === 'triggers' ||
+    data.nodeType === 'events'
+  ) {
+    emit('contextAction', {
+      action: 'alterProgramObject',
+      node: { ...data },
     });
     return;
   }
@@ -334,19 +347,28 @@ function onNodeClick(data: any, node: any) {
   }
 }
 
-/** 右键：库 / Tables / 表 / 已保存查询 */
+/** 右键：库 / Tables / 表 / 已保存查询 / 可编程对象 */
 function onNodeContextMenu(event: MouseEvent, data: any) {
+  const programKinds = new Set([
+    'views',
+    'procedures',
+    'functions',
+    'triggers',
+    'events',
+  ]);
   const allow =
     data.nodeType === 'instance' ||
     data.nodeType === 'table' ||
     data.nodeType === 'savedQuery' ||
-    (data.nodeType === 'folder' && data.objectKind === 'tables');
+    (data.nodeType === 'folder' &&
+      (data.objectKind === 'tables' || programKinds.has(data.objectKind))) ||
+    programKinds.has(data.nodeType);
   if (!allow) return;
   event.preventDefault();
   event.stopPropagation();
   const pad = 8;
   const menuW = 220;
-  const menuH = 180;
+  const menuH = 220;
   let x = event.clientX;
   let y = event.clientY;
   if (x + menuW > window.innerWidth - pad) x = window.innerWidth - menuW - pad;
@@ -354,7 +376,7 @@ function onNodeContextMenu(event: MouseEvent, data: any) {
   ctxMenu.x = x;
   ctxMenu.y = y;
   ctxMenu.targetType = data.nodeType;
-  ctxMenu.objectKind = data.objectKind || '';
+  ctxMenu.objectKind = data.objectKind || data.nodeType || '';
   ctxMenu.node = data;
   ctxMenu.visible = true;
 }
@@ -529,6 +551,7 @@ defineExpose({
   reload: loadInstances,
   reloadQueries,
   reloadTables,
+  reloadFolder,
   locateTarget,
   closeContextMenu: closeCtxMenu,
 });

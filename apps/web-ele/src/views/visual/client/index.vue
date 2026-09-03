@@ -18,7 +18,7 @@ import {
 } from 'vue';
 import { useRouter } from 'vue-router';
 
-import { executeDdl, executeDml, executeSql, cancelSql, exportSqlExcel, exportSqlInsert, getInstances, getTableColumns, getTableDDL, getTableInfo, getTables } from '#/api/visual/database';
+import { executeDdl, executeDml, executeSql, cancelSql, exportSqlExcel, exportSqlInsert, getInstances, getObjectScript, getTableColumns, getTableDDL, getTableInfo, getTables } from '#/api/visual/database';
 import {
   addSavedQuery,
   deleteSavedQuery,
@@ -65,6 +65,8 @@ import {
 } from './composables/useQueryTabs';
 import { visualClientConfig } from './config';
 import { resolveSqlDialect } from './dialect/sqlDialect';
+import { formatSqlByDialect } from './utils/formatSql';
+import { isDestructiveDdl, looksLikeControlledDdl } from './utils/controlledDdl';
 import { parseTableFromSql, type TableRef } from './utils/resultRowSql';
 import {
   clearColumnCache,
@@ -697,26 +699,31 @@ async function onTreeContextAction(payload: {
           ElMessage.warning(dropSql?.trim() || '当前数据库类型不支持在此删除实例');
           return;
         }
-        // 删库时尽量连到其它库/默认 schema，避免连在待删库上失败
-        const connectInst =
+        const otherInst =
           (activeConnection.value.schemaName &&
           activeConnection.value.schemaName !== instanceName
             ? activeConnection.value.schemaName
             : '') ||
           instanceOptions.value.find((n) => n !== instanceName) ||
-          instanceName;
+          '';
+        if (!otherInst) {
+          ElMessage.warning(
+            `请先确保连接上还有其它${instanceLabel.value}可切换，再删除「${instanceName}」`,
+          );
+          return;
+        }
         const res: any = await executeDdl({
           dbConfigId: activeConnection.value.id,
-          instanceName: connectInst,
+          instanceName: otherInst,
           sql: dropSql,
         });
         const data = res?.data || res;
         ElMessage.success(data?.message || `已删除 ${instanceName}`);
-        if (activeTab.value?.instanceName === instanceName) {
-          activeTab.value.instanceName =
-            instanceOptions.value.find((n) => n !== instanceName) ||
-            activeConnection.value.schemaName ||
-            '';
+        // 清理所有仍指向已删实例的查询 Tab
+        for (const t of tabs.value) {
+          if (t.instanceName === instanceName) {
+            t.instanceName = otherInst;
+          }
         }
         await refreshBrowseObjects(undefined, { silent: true });
       } catch (e: any) {
@@ -870,8 +877,80 @@ async function onTreeContextAction(payload: {
       }
       return;
     }
+    case 'executeProgramObject':
+      await openProgramObjectScript(node, 'execute');
+      return;
+    case 'createProgramObject':
+      await openProgramObjectScript(node, 'create');
+      return;
+    case 'alterProgramObject':
+      await openProgramObjectScript(node, 'alter');
+      return;
+    case 'dropProgramObject':
+      await openProgramObjectScript(node, 'drop');
+      return;
     default:
       break;
+  }
+}
+
+/**
+ * 视图/过程/函数/触发器/事件：向后端按方言取脚本，格式化后打开编辑器。
+ * 用户可在编辑器中执行：SELECT/SHOW 走只读查询；DDL/CALL 自动改走受控 executeDdl。
+ */
+async function openProgramObjectScript(
+  node: any,
+  action: 'execute' | 'create' | 'alter' | 'drop',
+) {
+  if (!activeConnection.value) {
+    ElMessage.warning('请先打开数据库连接');
+    return;
+  }
+  const instanceName = node.instanceName || activeTab.value?.instanceName || '';
+  if (!instanceName) {
+    ElMessage.warning(`请先选择${instanceLabel.value}实例`);
+    return;
+  }
+  const objectKind =
+    node.nodeType === 'folder'
+      ? node.objectKind
+      : node.nodeType || node.objectKind || '';
+  const objectName =
+    action === 'create' ? undefined : node.name || node.objectName || undefined;
+  if (action !== 'create' && !objectName) {
+    ElMessage.warning('对象名称不能为空');
+    return;
+  }
+  try {
+    const res: any = await getObjectScript({
+      dbConfigId: activeConnection.value.id,
+      instanceName,
+      objectKind,
+      action,
+      objectName,
+    });
+    const data = res?.data || res || {};
+    let sql = String(data.sql || '').trim();
+    if (!sql) {
+      ElMessage.warning('未生成脚本');
+      return;
+    }
+    // DELIMITER 脚本不宜被 sql-formatter 拆坏；其余尝试格式化
+    const hasDelimiter = /^\s*DELIMITER\b/im.test(sql);
+    if (!hasDelimiter) {
+      try {
+        sql = formatSqlByDialect(sql, activeConnection.value.dbType) || sql;
+      } catch {
+        // 保留后端原文
+      }
+    }
+    openSqlInNewTab(
+      sql,
+      data.title || `${action} ${objectName || objectKind}`,
+      instanceName,
+    );
+  } catch (e: any) {
+    ElMessage.error(e?.msg || e?.message || '生成脚本失败');
   }
 }
 
@@ -937,6 +1016,13 @@ async function runSql() {
     ElMessage.warning('请输入 SQL，或将光标放到要执行的语句上');
     return;
   }
+
+  // 视图/过程等 DDL 与 CALL：走受控 executeDdl（只读 executeSql 无法执行）
+  if (looksLikeControlledDdl(sql)) {
+    await runControlledDdl(sql);
+    return;
+  }
+
   const requestId = newSqlRequestId();
   const abort = new AbortController();
   sqlRunAbort = abort;
@@ -1002,6 +1088,99 @@ async function runSql() {
       sqlRunRequestId = null;
     }
     activeTab.value.executing = false;
+  }
+}
+
+/** 受控 DDL / CALL：确认后走 executeDdl，并尽量刷新对象树对应文件夹 */
+async function runControlledDdl(sql: string) {
+  if (!activeConnection.value || !activeTab.value) return;
+  if (isDestructiveDdl(sql)) {
+    try {
+      await ElMessageBox.confirm(
+        '即将执行删除类 DDL，确认继续？',
+        '危险操作确认',
+        { type: 'warning', confirmButtonText: '执行', cancelButtonText: '取消' },
+      );
+    } catch {
+      return;
+    }
+  }
+  activeTab.value.executing = true;
+  activeTab.value.resultVisible = true;
+  const t0 = performance.now();
+  try {
+    const res: any = await executeDdl({
+      dbConfigId: activeConnection.value.id,
+      instanceName: activeTab.value.instanceName,
+      sql,
+    });
+    const clientElapsedMs = Math.round(performance.now() - t0);
+    const data = res?.data || res;
+    const msg =
+      data?.message ||
+      `DDL/CALL OK${data?.affectedRows != null ? `, ${data.affectedRows} row(s)` : ''}`;
+    activeTab.value.result = {
+      columns: [],
+      rows: [],
+      rowCount: 0,
+      elapsedMs: data?.elapsedMs,
+      clientElapsedMs,
+      message: msg,
+      sourceSql: sql,
+    };
+    activeTab.value.resultTab = 'messages';
+    ElMessage.success(msg);
+    refreshObjectTreeAfterDdl(sql, activeTab.value.instanceName);
+  } catch (e: any) {
+    const clientElapsedMs = Math.round(performance.now() - t0);
+    const errText = pickErrorMsg(e, '执行 DDL 失败');
+    activeTab.value.result = {
+      columns: [],
+      rows: [],
+      rowCount: 0,
+      error: errText,
+      message: errText,
+      clientElapsedMs,
+      sourceSql: sql,
+    };
+    activeTab.value.resultTab = 'messages';
+  } finally {
+    activeTab.value.executing = false;
+  }
+}
+
+function refreshObjectTreeAfterDdl(sql: string, instanceName: string) {
+  if (!instanceName || !objectTreeRef.value) return;
+  const head = String(sql || '')
+    .replace(/\/\*[\s\S]*?\*\//g, ' ')
+    .replace(/^[ \t]*--[^\n]*$/gm, ' ')
+    .trim();
+  const m = head.match(
+    /^(?:CREATE\s+(?:OR\s+REPLACE\s+|OR\s+ALTER\s+)?|DROP\s+(?:IF\s+EXISTS\s+)?|ALTER\s+)(VIEW|PROCEDURE|FUNCTION|TRIGGER|EVENT|TABLE|DATABASE|SCHEMA)\b/i,
+  );
+  const kind = (m?.[1] || '').toUpperCase();
+  if (kind === 'TABLE') {
+    objectTreeRef.value.reloadTables?.(instanceName);
+  } else if (kind === 'DATABASE' || kind === 'SCHEMA') {
+    void refreshBrowseObjects(undefined, { silent: true });
+  } else if (kind) {
+    const folder =
+      kind === 'VIEW'
+        ? 'views'
+        : kind === 'PROCEDURE'
+          ? 'procedures'
+          : kind === 'FUNCTION'
+            ? 'functions'
+            : kind === 'TRIGGER'
+              ? 'triggers'
+              : kind === 'EVENT'
+                ? 'events'
+                : '';
+    if (folder) {
+      objectTreeRef.value.reloadFolder?.(folder, instanceName);
+    } else {
+      objectTreeRef.value.reload?.();
+    }
   }
 }
 
