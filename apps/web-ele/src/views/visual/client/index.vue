@@ -409,6 +409,56 @@ function onBundleImported() {
   objectTreeRef.value?.reloadQueries?.();
 }
 
+/**
+ * 刷新当前连接信息 + 左侧实例/对象树 + 编辑器库下拉。
+ * 工具栏「刷新」与连接栏右键「刷新当前浏览对象」共用。
+ */
+async function refreshBrowseObjects(
+  sessionId?: number | string,
+  opts?: { silent?: boolean },
+) {
+  if (sessionId != null && String(sessionId) !== String(activeConnectionId.value)) {
+    setActiveConnection(sessionId);
+    await nextTick();
+  }
+  const conn = activeConnection.value;
+  if (!conn) {
+    if (!opts?.silent) ElMessage.warning('请先打开数据库连接');
+    return;
+  }
+  try {
+    const res: any = await getDbConfigById({ id: conn.id });
+    const cfg = res?.data || res;
+    if (cfg?.id) {
+      updateConnection({
+        id: cfg.id,
+        dbName: cfg.dbName,
+        schemaName: cfg.schemaName,
+        dbType: cfg.dbType,
+        dbHost: cfg.dbHost,
+        dbPort: cfg.dbPort,
+        username: cfg.username,
+        description: cfg.description,
+        connectionStatus: cfg.connectionStatus,
+      });
+    }
+  } catch {
+    // 配置拉取失败仍继续刷对象树
+  }
+  try {
+    const res: any = await getInstances(conn.id);
+    const trees = res?.data || res || [];
+    const instances = trees[0]?.instances || [];
+    instanceOptions.value = instances
+      .map((i: any) => i.instanceName)
+      .filter(Boolean);
+  } catch {
+    instanceOptions.value = [];
+  }
+  await objectTreeRef.value?.reload?.();
+  if (!opts?.silent) ElMessage.success('已刷新浏览对象');
+}
+
 /** 防止管理页打开查询时并发重复消费 */
 let consumingPendingSavedQuery = false;
 
@@ -634,17 +684,45 @@ async function onTreeContextAction(payload: {
     case 'dropDatabase':
       try {
         await ElMessageBox.confirm(
-          `确认删除「${instanceName}」？将生成删除语句到查询编辑器（请自行确认后执行）。`,
+          `确认删除「${instanceName}」？此操作不可恢复。`,
           '删除确认',
-          { type: 'warning' },
+          { type: 'warning', confirmButtonText: '删除', cancelButtonText: '取消' },
         );
-        openSqlInNewTab(
-          activeDialect.value.dropDatabaseSql(instanceName),
-          `Drop ${instanceName}`,
-          instanceName,
-        );
-      } catch {
-        /* cancel */
+        if (!activeConnection.value) {
+          ElMessage.warning('请先打开数据库连接');
+          return;
+        }
+        const dropSql = activeDialect.value.dropDatabaseSql(instanceName);
+        if (!dropSql || dropSql.trim().startsWith('--')) {
+          ElMessage.warning(dropSql?.trim() || '当前数据库类型不支持在此删除实例');
+          return;
+        }
+        // 删库时尽量连到其它库/默认 schema，避免连在待删库上失败
+        const connectInst =
+          (activeConnection.value.schemaName &&
+          activeConnection.value.schemaName !== instanceName
+            ? activeConnection.value.schemaName
+            : '') ||
+          instanceOptions.value.find((n) => n !== instanceName) ||
+          instanceName;
+        const res: any = await executeDdl({
+          dbConfigId: activeConnection.value.id,
+          instanceName: connectInst,
+          sql: dropSql,
+        });
+        const data = res?.data || res;
+        ElMessage.success(data?.message || `已删除 ${instanceName}`);
+        if (activeTab.value?.instanceName === instanceName) {
+          activeTab.value.instanceName =
+            instanceOptions.value.find((n) => n !== instanceName) ||
+            activeConnection.value.schemaName ||
+            '';
+        }
+        await refreshBrowseObjects(undefined, { silent: true });
+      } catch (e: any) {
+        if (e !== 'cancel' && e !== 'close') {
+          ElMessage.error(e?.msg || e?.message || '删除失败');
+        }
       }
       return;
     case 'runSqlScript':
@@ -1582,7 +1660,7 @@ onBeforeUnmount(() => {
         :license-hint="licenseHint"
         @create="onCreateConnection"
         @open="onOpenConnection"
-        @refresh="filterText = filterText"
+        @refresh="refreshBrowseObjects"
         @group="goGroup"
         @relation="goRelation"
         @saved-queries="goSavedQueryManage"
@@ -1597,6 +1675,7 @@ onBeforeUnmount(() => {
         :active-id="activeConnectionId"
         @change="setActiveConnection"
         @close="closeConnection"
+        @refresh="refreshBrowseObjects"
       />
 
       <div

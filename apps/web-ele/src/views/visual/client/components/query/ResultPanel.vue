@@ -423,6 +423,7 @@ watch(
           size="small"
           highlight-current-row
           table-layout="fixed"
+          empty-text="查询成功，无数据"
           @current-change="onCurrentChange"
           @selection-change="onSelectionChange"
           @row-contextmenu="onRowContextMenu"

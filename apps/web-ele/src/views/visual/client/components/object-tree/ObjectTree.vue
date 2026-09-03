@@ -137,6 +137,7 @@ async function loadInstances() {
     const res: any = await getInstances(props.dbConfigId);
     const trees = res?.data || res || [];
     const instances = trees[0]?.instances || [];
+    // 整表替换，清掉 lazy 展开缓存
     treeData.value = instances.map((ins: any) => ({
       id: `ins-${ins.instanceName}`,
       label: ins.instanceName,
@@ -146,6 +147,7 @@ async function loadInstances() {
     }));
   } catch (error: any) {
     ElMessage.error(error?.message || '加载实例失败');
+    treeData.value = [];
   } finally {
     loading.value = false;
   }

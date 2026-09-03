@@ -3,6 +3,8 @@
  * 客户端顶栏工具条
  * @author yanch
  */
+import { Refresh } from '@element-plus/icons-vue';
+
 defineOptions({ name: 'ClientToolbar' });
 
 defineProps<{
@@ -37,9 +39,13 @@ const emit = defineEmits<{
     <ElButton type="primary" size="small" @click="emit('create')">新建连接</ElButton>
     <ElButton size="small" @click="emit('open')">打开连接</ElButton>
     <ElDivider direction="vertical" />
-    <ElButton size="small" :disabled="!hasConnection" @click="emit('refresh')">
-      刷新
-    </ElButton>
+    <ElButton
+      size="small"
+      :icon="Refresh"
+      title="刷新当前浏览对象"
+      :disabled="!hasConnection"
+      @click="emit('refresh')"
+    />
     <ElButton size="small" :disabled="!hasConnection" @click="emit('group')">
       表分组
     </ElButton>

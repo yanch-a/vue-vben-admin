@@ -20,6 +20,8 @@ export const overridesPreferences = defineOverridesPreferences({
     defaultHomePath: '/dashboard',
     accessMode: 'backend',
     enableRefreshToken: false,
+    // 关闭页面版本轮询（默认每分钟 HEAD BASE_URL），避免生产环境刷 /lmdb/view/ 404 日志
+    enableCheckUpdates: false,
     // 系统简短标题（菜单左侧文字）；启动后可被后台 ui.brand.appTitle 覆盖
     name: import.meta.env.VITE_APP_TITLE || 'lemonDbClient',
     // 默认双列菜单（侧边混合菜单 sidebar-mixed-nav）

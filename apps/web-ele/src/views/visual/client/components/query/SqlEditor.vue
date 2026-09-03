@@ -30,6 +30,7 @@ import {
 } from '../../utils/sqlEditorAssist';
 import { formatSqlByDialect } from '../../utils/formatSql';
 import { resolveSqlDialect } from '../../dialect/sqlDialect';
+import { useClientPreferences } from '../../composables/useClientPreferences';
 
 // monaco-editor 0.56+：exports 映射为 "./*" -> "./esm/vs/*.js"
 self.MonacoEnvironment = {
@@ -76,6 +77,7 @@ const emit = defineEmits<{
 }>();
 
 const { isDark } = usePreferences();
+const { sqlEditorFontSize } = useClientPreferences();
 const container = ref<HTMLDivElement>();
 const wrapEl = ref<HTMLDivElement>();
 const dragOver = ref(false);
@@ -311,7 +313,7 @@ onMounted(() => {
     theme: themeName(),
     automaticLayout: true,
     minimap: { enabled: false },
-    fontSize: 13,
+    fontSize: sqlEditorFontSize.value,
     tabSize: 2,
     scrollBeyondLastLine: false,
     readOnly: !!props.readOnly,
@@ -351,6 +353,10 @@ watch(
     editor?.updateOptions({ readOnly: !!v });
   },
 );
+
+watch(sqlEditorFontSize, (size) => {
+  editor?.updateOptions({ fontSize: size });
+});
 
 watch(
   () => props.modelValue,
