@@ -93,6 +93,10 @@ const form = reactive({
   sshPassword: '',
   sshPrivateKey: '',
   sshPassphrase: '',
+  /** 该连接是否允许 AI 助手（默认开） */
+  aiEnabled: 1,
+  /** 是否允许 AI 读取真实样例行（默认关） */
+  aiAllowSampleData: 0,
 });
 
 /** SSH 认证方式：password | key */
@@ -101,6 +105,18 @@ const sshEnabled = computed({
   get: () => form.sshEnabled === 1,
   set: (v: boolean) => {
     form.sshEnabled = v ? 1 : 0;
+  },
+});
+const aiEnabled = computed({
+  get: () => form.aiEnabled === 1,
+  set: (v: boolean) => {
+    form.aiEnabled = v ? 1 : 0;
+  },
+});
+const aiAllowSampleData = computed({
+  get: () => form.aiAllowSampleData === 1,
+  set: (v: boolean) => {
+    form.aiAllowSampleData = v ? 1 : 0;
   },
 });
 
@@ -244,6 +260,8 @@ function resetForm() {
     sshPassword: '',
     sshPrivateKey: '',
     sshPassphrase: '',
+    aiEnabled: 1,
+    aiAllowSampleData: 0,
   });
   sshAuthMode.value = 'password';
 }
@@ -272,6 +290,9 @@ function fillForm(row: any) {
     sshPassword: '',
     sshPrivateKey: '',
     sshPassphrase: '',
+    aiEnabled: row.aiEnabled == null ? 1 : Number(row.aiEnabled),
+    aiAllowSampleData:
+      row.aiAllowSampleData == null ? 0 : Number(row.aiAllowSampleData),
   });
   sshAuthMode.value = row.sshPrivateKey ? 'key' : 'password';
 }
@@ -458,6 +479,8 @@ async function handleTest() {
       sshPassword: sshAuthMode.value === 'password' ? form.sshPassword : '',
       sshPrivateKey: sshAuthMode.value === 'key' ? form.sshPrivateKey : '',
       sshPassphrase: form.sshPassphrase,
+      aiEnabled: form.aiEnabled,
+      aiAllowSampleData: form.aiAllowSampleData,
     }),
   );
 }
@@ -684,6 +707,16 @@ watch(
           </template>
         </template>
       </template>
+
+      <ElDivider content-position="left">AI 助手</ElDivider>
+      <ElFormItem label="启用 AI">
+        <ElSwitch v-model="aiEnabled" />
+        <span class="tip">关闭后该连接不可唤出 AI 助手</span>
+      </ElFormItem>
+      <ElFormItem label="允许样例数据">
+        <ElSwitch v-model="aiAllowSampleData" />
+        <span class="tip">开启后 Agent 可读取少量真实行（默认关闭）</span>
+      </ElFormItem>
 
       <ElFormItem label="描述" prop="description">
         <ElInput v-model="form.description" type="textarea" :rows="2" />

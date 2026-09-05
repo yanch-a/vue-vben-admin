@@ -31,6 +31,12 @@ const emit = defineEmits<{
   preferences: [];
   /** 产品授权 */
   license: [];
+  /** 打开 AI 助手浮窗 */
+  ai: [];
+  /** 打开 Schema 结构文档 */
+  schemaDoc: [];
+  /** 打开查询历史 */
+  history: [];
 }>();
 </script>
 
@@ -57,6 +63,15 @@ const emit = defineEmits<{
     </ElButton>
     <ElButton size="small" type="success" :disabled="!hasConnection" @click="emit('smart')">
       智能生成 SQL
+    </ElButton>
+    <ElButton size="small" type="primary" :disabled="!hasConnection" @click="emit('ai')">
+      AI 助手
+    </ElButton>
+    <ElButton size="small" :disabled="!hasConnection" @click="emit('schemaDoc')">
+      结构文档
+    </ElButton>
+    <ElButton size="small" :disabled="!hasConnection" @click="emit('history')">
+      查询历史
     </ElButton>
     <ElBadge
       :value="copyTaskCount || 0"

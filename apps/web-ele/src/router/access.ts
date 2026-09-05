@@ -224,6 +224,15 @@ const HIDDEN_PAGE_ROUTES: RouteRecordStringComponent[] = [
       title: '共享查询结果',
     },
   },
+  {
+    name: 'AiModelManage',
+    path: '/ai/model',
+    component: '/ai/model/index',
+    meta: {
+      hideInMenu: true,
+      title: 'AI 模型配置',
+    },
+  },
 ];
 
 function mergeHiddenPageRoutes(
@@ -264,6 +273,8 @@ const COMPONENT_ALIASES: Record<string, string> = {
   '/visual/client/savedQueries': '/visual/client/savedQueryManage',
   '/visual/queryResult/share/:shareCode': '/visual/visualQuery/share',
   '/visual/index': '/visual/client/index',
+  '/ai/model': '/ai/model/index',
+  '/ai/model/index': '/ai/model/index',
   '/setting/parameter/index': '/setting/parameter/index',
   '/setting/attachment/index': '/setting/attachment/index',
 };

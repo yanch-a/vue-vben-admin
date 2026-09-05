@@ -67,6 +67,7 @@ function stripConnection(c: DbConnection): DbConnection {
     username: c.username,
     description: c.description,
     connectionStatus: c.connectionStatus,
+    aiEnabled: c.aiEnabled == null ? 1 : Number(c.aiEnabled),
   };
 }
 

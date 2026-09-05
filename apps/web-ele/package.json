@@ -64,7 +64,9 @@
     "@vben/utils": "workspace:*",
     "@vueuse/core": "catalog:",
     "dayjs": "catalog:",
+    "dompurify": "^3.2.0",
     "element-plus": "catalog:",
+    "markdown-it": "^14.1.0",
     "monaco-editor": "^0.56.0",
     "pinia": "catalog:",
     "react": "18.3.1",
@@ -75,6 +77,7 @@
     "vue-router": "catalog:"
   },
   "devDependencies": {
+    "@types/markdown-it": "^14.1.2",
     "unplugin-element-plus": "catalog:"
   }
 }

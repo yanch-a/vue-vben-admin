@@ -43,6 +43,8 @@ const emit = defineEmits<{
   'export-excel': [];
   /** 请求后台重查并按方言导出 INSERT .sql */
   'export-sql': [];
+  /** Messages 报错：把 SQL + 错误交给 AI 修复 */
+  askAiFix: [{ sql: string; error: string }];
 }>();
 
 const canExport = computed(
@@ -442,6 +444,20 @@ watch(
       </template>
       <template v-else>
         <pre class="messages">{{ messagesText }}</pre>
+        <div v-if="result?.error" class="ai-fix">
+          <ElButton
+            size="small"
+            type="primary"
+            @click="
+              emit('askAiFix', {
+                sql: result?.sourceSql || '',
+                error: result?.error || messagesText,
+              })
+            "
+          >
+            让 AI 修复
+          </ElButton>
+        </div>
       </template>
     </div>
 
@@ -538,6 +554,9 @@ watch(
 .table-hint {
   font-size: 12px;
   color: var(--el-text-color-secondary);
+}
+.ai-fix {
+  padding: 0 12px 8px;
 }
 .tabs {
   flex: 1;

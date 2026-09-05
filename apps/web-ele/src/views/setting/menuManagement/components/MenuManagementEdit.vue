@@ -1,5 +1,5 @@
 <script>
-  import { defineComponent, inject, reactive, toRefs } from 'vue'
+  import { defineComponent, inject, nextTick, reactive, toRefs } from 'vue'
 
   import { doEdit, getById, getModules, getTree } from '@/api/menuManagement'
   import IconSelector from '@/components/IconSelector/index.vue'
@@ -155,6 +155,8 @@
         checkAll: false,
         /** 待添加的模块码（挂载器） */
         mountPickCode: '',
+        /** 强制刷新上级菜单树（避免 el-tree-select 复用旧 data） */
+        treeSelectKey: 0,
       })
 
       /** 按菜单类型 / 可见性刷新 path、component 校验 */
@@ -306,20 +308,53 @@
         }
       }
 
+      /** 规范化树节点 id，避免 number/string 混用导致 tree-select 选不中 */
+      const normalizeTreeNodes = (nodes) => {
+        if (!Array.isArray(nodes)) return []
+        return nodes.map((n) => ({
+          ...n,
+          menuId: Number(n.menuId),
+          parentId:
+            n.parentId === null || n.parentId === undefined || n.parentId === ''
+              ? 0
+              : Number(n.parentId),
+          children: normalizeTreeNodes(n.children || []),
+        }))
+      }
+
+      /**
+       * 拉取最新菜单树供「上级菜单」使用。
+       * 每次带时间戳防 GET 缓存；并插入「顶级菜单」根节点。
+       */
       const fetchData = async () => {
-        const res = await getTree()
+        const res = await getTree({ _t: Date.now() })
         const list = res?.data?.list ?? res?.list ?? res?.data ?? []
-        state.treeData = Array.isArray(list) ? list : []
+        const tree = normalizeTreeNodes(Array.isArray(list) ? list : [])
+        // 可选上级：虚拟根 + 最新全量树（含刚新增的菜单）
+        state.treeData = [
+          {
+            menuId: 0,
+            parentId: 0,
+            menuName: '顶级菜单',
+            children: tree,
+          },
+        ]
+        state.treeSelectKey += 1
       }
 
       const handleNodeClick = (node) => {
+        // 虚拟根仅表示 parentId=0，不改名称展示
+        if (Number(node.menuId) === 0) {
+          state.form.parentName = '顶级菜单'
+          state.form.parentId = 0
+          return
+        }
         state.form.parentName = node.menuName
         state.form.parentId = Number(node.menuId)
       }
 
       const showEdit = async (row) => {
-        await fetchData()
-        await getOptions()
+        // 先打开弹窗再拉树，保证每次新增都能看到最新上级选项
         if (!row) {
           state.title = '新增菜单'
           state.form = createDefaultForm()
@@ -338,11 +373,16 @@
           state.isEdit = true
         }
         state.showOperation = false
+        state.dialogFormVisible = true
+        // 清空旧树再拉新树，避免 tree-select 残留
+        state.treeData = []
+        await nextTick()
+        await fetchData()
+        await getOptions()
         if (Number(state.form.sysSelect) === 1) {
           await getOptions()
         }
         refreshFieldRules()
-        state.dialogFormVisible = true
       }
 
       const close = () => {
@@ -461,6 +501,7 @@
         <el-col :span="16">
           <el-form-item label="上级菜单" prop="parentId">
             <el-tree-select
+              :key="treeSelectKey"
               v-model="form.parentId"
               check-strictly
               clearable

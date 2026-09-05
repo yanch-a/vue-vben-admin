@@ -1,0 +1,141 @@
+{
+  "btn": [
+    {
+      "n": 0,
+      "layer": "UNLAYERED",
+      "border": false,
+      "height": false,
+      "s": ".el-button+.el-button{margin-left:0}"
+    },
+    {
+      "n": 1,
+      "layer": "UNLAYERED",
+      "border": false,
+      "height": false,
+      "s": ".el-button{margin-left:0}"
+    },
+    {
+      "n": 2,
+      "layer": "el",
+      "border": false,
+      "height": false,
+      "s": ".el-button-group>.el-button+.el-button{margin-left:0}"
+    },
+    {
+      "n": 3,
+      "layer": "el",
+      "border": false,
+      "height": false,
+      "s": ".el-button+.el-button{margin-left:0}"
+    },
+    {
+      "n": 4,
+      "layer": "el",
+      "border": false,
+      "height": false,
+      "s": ".el-button{margin-left:0}"
+    },
+    {
+      "n": 5,
+      "layer": "el",
+      "border": true,
+      "height": false,
+      "s": ".el-button-group>.el-button:first-child:last-child{border-top-right-radius:var(--el-border-radius-base);border-bottom-right-radius:var(--el-border-radius-base);border-top-left-radius:var(--el-border-radius-base);border-b"
+    }
+  ],
+  "table": [
+    {
+      "n": 0,
+      "layer": "el",
+      "border": false,
+      "height": false,
+      "s": ".el-table-column--selection .cell{padding-left:14px;padding-right:14px}"
+    },
+    {
+      "n": 1,
+      "layer": "el",
+      "border": true,
+      "height": false,
+      "s": ".el-table-filter{border:solid 1px var(--el-border-color-lighter);box-shadow:var(--el-box-shadow-light);box-sizing:border-box;background-color:#fff;border-radius:2px}"
+    },
+    {
+      "n": 2,
+      "layer": "el",
+      "border": false,
+      "height": false,
+      "s": ".el-table-filter__list{outline:none;min-width:100px;margin:0;padding:5px 0;list-style:none}"
+    },
+    {
+      "n": 3,
+      "layer": "el",
+      "border": false,
+      "height": true,
+      "s": ".el-table-filter__list-item{cursor:pointer;line-height:36px;font-size:var(--el-font-size-base);outline:none;padding:0 10px}"
+    },
+    {
+      "n": 4,
+      "layer": "el",
+      "border": false,
+      "height": false,
+      "s": ".el-table-filter__list-item:hover,.el-table-filter__list-item:focus{background-color:var(--el-color-primary-light-9);color:var(--el-color-primary)}"
+    },
+    {
+      "n": 5,
+      "layer": "el",
+      "border": false,
+      "height": false,
+      "s": ".el-table-filter__list-item:focus{background-color:var(--el-color-primary-light-9);color:var(--el-color-primary)}"
+    }
+  ],
+  "primaryBtn": {
+    "sel": ".el-button{",
+    "layer": "UNLAYERED",
+    "border": false,
+    "height": false,
+    "block": ".el-button{margin-left:0}"
+  },
+  "primaryTable": {
+    "sel": ".el-table{",
+    "layer": "el",
+    "border": true,
+    "height": false,
+    "block": ".el-table{--el-table-border-color:var(--el-border-color-lighter);--el-table-border:1px solid var(--el-table-border-color);--el-table-text-color:var(--el-text-color-regular);--el-table-header-text-color:var(--el-text-color-secondary);--el-table-row-hover-bg-color:var(--el-fill-color-light);--el-table-current-row-bg-color:var(--el-color-primary-light-9);--el-table-header-bg-color:var(--el-fill-color-blank);--el-table-fixed-box-shadow:var(--el-box-s"
+  },
+  "preflight": [
+    {
+      "mk": "button,input,optgroup,select,textarea",
+      "found": false
+    },
+    {
+      "mk": "border-collapse:collapse",
+      "found": true,
+      "layer": "base",
+      "pos": 22773,
+      "snip": "border-collapse:collapse}:-moz-focusring:where(:not(iframe)){outline:auto}progress{vertical-align:baseline}summary{display:list-item}ol,ul,m"
+    },
+    {
+      "mk": "background-color:transparent;background-image:none",
+      "found": false
+    },
+    {
+      "mk": "*,:after,:before",
+      "found": true,
+      "layer": "base",
+      "pos": 21356,
+      "snip": "*,:after,:before,::backdrop{box-sizing:border-box;border:0 solid;margin:0;padding:0}::file-selector-button{box-sizing:border-box;border:0 so"
+    },
+    {
+      "mk": "*,::after,::before",
+      "found": false
+    }
+  ],
+  "pos": {
+    "elButton": 142740,
+    "btnReset": -1,
+    "tableCollapse": 22773
+  },
+  "elStats": {
+    "layered": 5547,
+    "unlayered": 32
+  }
+}

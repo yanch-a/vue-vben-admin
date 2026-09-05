@@ -74,6 +74,8 @@ const emit = defineEmits<{
    * 内容已写入编辑器，父级负责保存到当前连接+库
    */
   importFile: [{ fileName: string; content: string }];
+  /** Ctrl+K / 右键「AI 助手」：把选区与全文交给浮窗 */
+  askAi: [{ selectedSql: string; editorSql: string }];
 }>();
 
 const { isDark } = usePreferences();
@@ -344,6 +346,15 @@ onMounted(() => {
   editor.addCommand(monaco.KeyCode.F12, () => {
     if (!props.readOnly) formatCurrentSql();
   });
+  // Ctrl+K + 右键菜单：唤出 AI 助手，携带选区 / 全文
+  editor.addAction({
+    id: 'lemon.askAi',
+    label: 'AI 助手：生成/优化/解释 SQL',
+    contextMenuGroupId: 'navigation',
+    contextMenuOrder: 0,
+    keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyK],
+    run: () => emitAskAi(),
+  });
   registerCompletion();
 });
 
@@ -390,6 +401,67 @@ function insertText(text: string) {
     editor.setValue((editor.getValue() || '') + text);
   }
   editor.focus();
+}
+
+/** 把当前选区与全文交给 AI 浮窗 */
+function emitAskAi() {
+  if (!editor) return;
+  const model = editor.getModel();
+  if (!model) return;
+  const sel = editor.getSelection();
+  const selected =
+    sel && !sel.isEmpty() ? model.getValueInRange(sel) : '';
+  emit('askAi', { selectedSql: selected, editorSql: model.getValue() });
+}
+
+/** 有选区替换选区；否则替换光标所在语句；再无则整体替换 */
+function replaceSelectionOrAll(text: string) {
+  if (!editor) return;
+  const model = editor.getModel();
+  if (!model) {
+    editor.setValue(text);
+    return;
+  }
+  const sel = editor.getSelection();
+  if (sel && !sel.isEmpty()) {
+    editor.pushUndoStop();
+    editor.executeEdits('ai-replace', [
+      { range: sel, text, forceMoveMarkers: true },
+    ]);
+    editor.pushUndoStop();
+    editor.focus();
+    return;
+  }
+  const value = model.getValue();
+  const pos = editor.getPosition() || sel?.getStartPosition();
+  const cursor = pos ? model.getOffsetAt(pos) : value.length;
+  const target = extractExecutableSqlRange(value, cursor, null);
+  if (target) {
+    const startPos = model.getPositionAt(target.range.start);
+    const endPos = model.getPositionAt(target.range.end);
+    const replaceRange = new monaco.Range(
+      startPos.lineNumber,
+      startPos.column,
+      endPos.lineNumber,
+      endPos.column,
+    );
+    editor.pushUndoStop();
+    editor.executeEdits('ai-replace', [
+      { range: replaceRange, text, forceMoveMarkers: true },
+    ]);
+    editor.pushUndoStop();
+  } else {
+    editor.setValue(text);
+  }
+  editor.focus();
+}
+
+function getSelectedText(): string {
+  if (!editor) return '';
+  const model = editor.getModel();
+  const sel = editor.getSelection();
+  if (!model || !sel || sel.isEmpty()) return '';
+  return model.getValueInRange(sel);
 }
 
 function getExecutableSql(): string {
@@ -475,6 +547,8 @@ defineExpose({
   getValue: () => editor?.getValue() || '',
   getExecutableSql,
   formatSql: formatCurrentSql,
+  replaceSelectionOrAll,
+  getSelectedText,
 });
 </script>
 

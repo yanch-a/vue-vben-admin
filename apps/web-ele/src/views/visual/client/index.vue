@@ -19,6 +19,7 @@ import {
 import { useRouter } from 'vue-router';
 
 import { executeDdl, executeDml, executeSql, cancelSql, exportSqlExcel, exportSqlInsert, getInstances, getObjectScript, getTableColumns, getTableDDL, getTableInfo, getTables } from '#/api/visual/database';
+import { feedbackSchemaDoc } from '#/api/ai/agent';
 import {
   addSavedQuery,
   deleteSavedQuery,
@@ -48,6 +49,10 @@ import SystemFunctionsDialog from './components/SystemFunctionsDialog.vue';
 import TableInfoDialog from './components/TableInfoDialog.vue';
 import ClientPreferencesDialog from './components/ClientPreferencesDialog.vue';
 import LicenseDialog from './components/LicenseDialog.vue';
+import AiChatWindow from './components/ai/AiChatWindow.vue';
+import AiDockBar from './components/ai/AiDockBar.vue';
+import SchemaDocDrawer from './components/ai/SchemaDocDrawer.vue';
+import QueryHistoryDrawer from './components/ai/QueryHistoryDrawer.vue';
 import { useClientPreferences } from './composables/useClientPreferences';
 import { getLicenseStatus } from '#/api/visual/license';
 import { useConnectionStore } from './composables/useConnectionStore';
@@ -132,6 +137,9 @@ const licenseHint = ref('');
 const licenseAllowed = ref(true);
 const sqlEditorRef = ref<InstanceType<typeof SqlEditor>>();
 const objectTreeRef = ref<InstanceType<typeof ObjectTree>>();
+const aiChatRef = ref<InstanceType<typeof AiChatWindow>>();
+const schemaDocVisible = ref(false);
+const historyVisible = ref(false);
 /** 右侧工作区 DOM，用于计算可拖拽高度上下限 */
 const rightPaneRef = ref<HTMLElement | null>(null);
 /** 导出 Excel loading */
@@ -408,7 +416,8 @@ function onLicenseActivated() {
 
 function onBundleImported() {
   objectTreeRef.value?.reload?.();
-  objectTreeRef.value?.reloadQueries?.();
+  const inst = activeTab.value?.instanceName;
+  if (inst) objectTreeRef.value?.reloadQueries?.(inst);
 }
 
 /**
@@ -501,6 +510,7 @@ async function tryConsumePendingSavedQuery() {
           username: cfg.username,
           description: cfg.description,
           connectionStatus: cfg.connectionStatus,
+          aiEnabled: cfg.aiEnabled == null ? 1 : Number(cfg.aiEnabled),
         });
         if (!result.ok) {
           if (result.reason === 'max') {
@@ -998,7 +1008,7 @@ function newSqlRequestId() {
 }
 
 /** 执行当前光标所在语句（或选中片段）；不重置用户已调好的结果区高度 */
-async function runSql() {
+async function runSql(opts?: { sql?: string; source?: string }) {
   if (!activeConnection.value || !activeTab.value) return;
   if (activeTab.value.executing) {
     ElMessage.warning('当前查询正在执行，请先停止或等待完成');
@@ -1009,6 +1019,7 @@ async function runSql() {
     return;
   }
   const sql =
+    opts?.sql?.trim() ||
     sqlEditorRef.value?.getExecutableSql?.()?.trim() ||
     activeTab.value.sql?.trim() ||
     '';
@@ -1016,6 +1027,7 @@ async function runSql() {
     ElMessage.warning('请输入 SQL，或将光标放到要执行的语句上');
     return;
   }
+  const source = opts?.source || 'manual';
 
   // 视图/过程等 DDL 与 CALL：走受控 executeDdl（只读 executeSql 无法执行）
   if (looksLikeControlledDdl(sql)) {
@@ -1039,6 +1051,7 @@ async function runSql() {
         sql,
         maxRows: 1000,
         requestId,
+        source,
       },
       { signal: abort.signal },
     );
@@ -1055,6 +1068,7 @@ async function runSql() {
       sourceSql: sql,
     };
     activeTab.value.resultTab = 'result';
+    void feedbackSchemaDocSilent(sql);
   } catch (e: any) {
     const clientElapsedMs = Math.round(performance.now() - t0);
     if (abort.signal.aborted || /查询已取消|canceled|cancelled/i.test(String(e?.msg || e?.message || ''))) {
@@ -1089,6 +1103,18 @@ async function runSql() {
     }
     activeTab.value.executing = false;
   }
+}
+
+/** 执行成功后把 JOIN 反馈给 Schema 文档（失败静默） */
+function feedbackSchemaDocSilent(sql: string) {
+  const conn = activeConnection.value;
+  const inst = activeTab.value?.instanceName;
+  if (!conn?.id || !inst || !sql) return;
+  feedbackSchemaDoc({
+    dbConfigId: conn.id,
+    instanceName: inst,
+    sql,
+  }).catch(() => {});
 }
 
 /** 受控 DDL / CALL：确认后走 executeDdl，并尽量刷新对象树对应文件夹 */
@@ -1130,7 +1156,7 @@ async function runControlledDdl(sql: string) {
     };
     activeTab.value.resultTab = 'messages';
     ElMessage.success(msg);
-    refreshObjectTreeAfterDdl(sql, activeTab.value.instanceName);
+    refreshObjectTreeAfterDdl(sql, activeTab.value.instanceName || '');
   } catch (e: any) {
     const clientElapsedMs = Math.round(performance.now() - t0);
     const errText = pickErrorMsg(e, '执行 DDL 失败');
@@ -1802,6 +1828,17 @@ onMounted(() => {
 });
 
 function onGlobalKeydown(e: KeyboardEvent) {
+  if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'k') {
+    const t = e.target as HTMLElement | null;
+    const tag = t?.tagName;
+    // 输入框内不抢；Monaco 自己走 addAction
+    if (tag === 'INPUT' || tag === 'TEXTAREA') return;
+    if (t?.closest?.('.monaco-editor')) return;
+    if (!activeConnection.value) return;
+    e.preventDefault();
+    openAiAssistant();
+    return;
+  }
   if (e.key !== 'F11') return;
   // 仅当焦点在客户端工作区时响应，避免整页全屏
   if (!activeConnection.value) return;
@@ -1811,6 +1848,106 @@ function onGlobalKeydown(e: KeyboardEvent) {
   } else {
     ElMessage.warning('请先在左侧 Tables 中单击选中一个表');
   }
+}
+
+function ensureAiReady(): boolean {
+  if (!activeConnection.value) {
+    ElMessage.warning('请先打开连接');
+    return false;
+  }
+  if (Number(activeConnection.value.aiEnabled) === 0) {
+    ElMessage.warning('该连接已关闭 AI 助手，请在连接编辑中开启');
+    return false;
+  }
+  if (!activeTab.value?.instanceName) {
+    ElMessage.warning(`请先选择${instanceLabel.value}实例`);
+    return false;
+  }
+  return true;
+}
+
+function openAiAssistant(payload?: {
+  scene?: 'sql' | 'chart' | 'schema_doc' | 'free';
+  prefill?: string;
+  context?: { selectedSql?: string; editorSql?: string; lastError?: string };
+}) {
+  if (!ensureAiReady()) return;
+  const selected = payload?.context?.selectedSql ?? sqlEditorRef.value?.getSelectedText?.() ?? '';
+  const editorSql =
+    payload?.context?.editorSql ??
+    sqlEditorRef.value?.getValue?.() ??
+    activeTab.value?.sql ??
+    '';
+  aiChatRef.value?.open({
+    scene: payload?.scene || 'sql',
+    prefill: payload?.prefill,
+    context: {
+      selectedSql: selected,
+      editorSql,
+      lastError: payload?.context?.lastError ?? activeTab.value?.result?.error,
+    },
+  });
+}
+
+function onAskAiFromEditor(payload: { selectedSql: string; editorSql: string }) {
+  openAiAssistant({ scene: 'sql', context: payload });
+}
+
+function onAskAiFix(payload: { sql: string; error: string }) {
+  openAiAssistant({
+    scene: 'sql',
+    prefill: '请根据报错修复 SQL。',
+    context: {
+      selectedSql: payload.sql,
+      editorSql: payload.sql,
+      lastError: payload.error,
+    },
+  });
+}
+
+function onAiInsertSql(sql: string) {
+  sqlEditorRef.value?.insertText?.(sql);
+}
+
+function onAiReplaceSql(sql: string) {
+  if (sqlEditorRef.value?.replaceSelectionOrAll) {
+    sqlEditorRef.value.replaceSelectionOrAll(sql);
+  } else if (activeTab.value) {
+    activeTab.value.sql = sql;
+  }
+}
+
+function onAiRunSql(sql: string) {
+  onAiReplaceSql(sql);
+  void runSql({ sql, source: 'ai' });
+}
+
+function onAiOpenSqlTab(sql: string) {
+  openSqlInNewTab(sql, 'AI SQL', activeTab.value?.instanceName);
+}
+
+function onOpenSchemaDoc() {
+  if (!ensureAiReady()) return;
+  schemaDocVisible.value = true;
+}
+
+function onOpenHistory() {
+  if (!activeConnection.value) {
+    ElMessage.warning('请先打开连接');
+    return;
+  }
+  historyVisible.value = true;
+}
+
+function onHistoryOpenSql(sql: string) {
+  openSqlInNewTab(sql, '历史 SQL', activeTab.value?.instanceName);
+}
+
+function onSchemaDocAskAi(payload: { message: string }) {
+  openAiAssistant({
+    scene: 'schema_doc',
+    prefill: payload.message,
+  });
 }
 
 /** 连接列表变化时再试一次（管理页先开连接再跳转时可能晚一拍） */
@@ -1848,6 +1985,9 @@ onBeforeUnmount(() => {
         @system="onOpenSystemFunctions"
         @preferences="onOpenPreferences"
         @license="onOpenLicense"
+        @ai="openAiAssistant()"
+        @schema-doc="onOpenSchemaDoc"
+        @history="onOpenHistory"
       />
       <ConnectionTabs
         :connections="openConnections"
@@ -2026,6 +2166,7 @@ onBeforeUnmount(() => {
               @execute="runSql"
               @save="onSaveQuery"
               @import-file="onImportSqlFile"
+              @ask-ai="onAskAiFromEditor"
             />
           </div>
 
@@ -2056,6 +2197,7 @@ onBeforeUnmount(() => {
               @run-dml="onRunDml"
               @export-excel="onExportExcel"
               @export-sql="onExportSqlInsert"
+              @ask-ai-fix="onAskAiFix"
             />
           </div>
           </div>
@@ -2064,7 +2206,33 @@ onBeforeUnmount(() => {
       <div v-else class="empty-workspace">
         从顶部「新建连接」或「打开连接」开始，像 SQLyog 一样工作。
       </div>
+      <AiDockBar />
     </div>
+
+    <AiChatWindow
+      ref="aiChatRef"
+      :db-config-id="activeConnection?.id"
+      :instance-name="activeTab?.instanceName"
+      :conn-label="activeConnection?.dbName"
+      @insert-sql="onAiInsertSql"
+      @replace-sql="onAiReplaceSql"
+      @run-sql="onAiRunSql"
+      @open-sql-in-new-tab="onAiOpenSqlTab"
+    />
+
+    <SchemaDocDrawer
+      v-model="schemaDocVisible"
+      :db-config-id="activeConnection?.id"
+      :instance-name="activeTab?.instanceName"
+      @ask-ai="onSchemaDocAskAi"
+    />
+
+    <QueryHistoryDrawer
+      v-model="historyVisible"
+      :db-config-id="activeConnection?.id"
+      :instance-name="activeTab?.instanceName"
+      @open-sql="onHistoryOpenSql"
+    />
 
     <ConnectionDialog
       v-model="dialogVisible"

@@ -29,6 +29,8 @@ export interface DbConnection {
   username?: string;
   description?: string;
   connectionStatus?: number;
+  /** 1=允许 AI 助手；缺省视为开启 */
+  aiEnabled?: number;
 }
 
 /** openConnection 结果，供 UI 提示 */

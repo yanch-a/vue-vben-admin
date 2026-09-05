@@ -26,6 +26,15 @@ export function testConnectionDraft(data: {
   jdbcUrl?: string
   username?: string
   password?: string
+  sshEnabled?: number
+  sshHost?: string
+  sshPort?: number | string
+  sshUsername?: string
+  sshPassword?: string
+  sshPrivateKey?: string
+  sshPassphrase?: string
+  aiEnabled?: number
+  aiAllowSampleData?: number
 }) {
   return request({
     url: databaseUrl + 'testConnectionDraft',
@@ -148,6 +157,8 @@ export function executeSql(data: {
   maxRows?: number
   /** 与 cancelSql 配对 */
   requestId?: string
+  /** 来源：manual / ai，写入 SQL 历史 */
+  source?: string
 }, opts?: { signal?: AbortSignal }) {
   return request({
     url: databaseUrl + 'executeSql',
