@@ -3,6 +3,7 @@
  * SQL 卡片：插入 / 替换 / 新 Tab / 运行 / 复制
  * @author yanch
  */
+import { computed } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 
 defineOptions({ name: 'AiSqlCard' });
@@ -21,16 +22,55 @@ const emit = defineEmits<{
   run: [string];
 }>();
 
+/** 统一成可执行字符串，避免对象/空值进编辑器 */
+const sqlText = computed(() => {
+  const s = props.sql;
+  if (s == null) return '';
+  if (typeof s === 'string') return s;
+  if (typeof s === 'object' && (s as any).sql) return String((s as any).sql);
+  return String(s);
+});
+
+const canUse = computed(() => !!sqlText.value.trim());
+
+function requireSql(): string | null {
+  const s = sqlText.value.trim();
+  if (!s) {
+    ElMessage.warning('没有可操作的 SQL');
+    return null;
+  }
+  return s;
+}
+
 async function copy() {
+  const s = requireSql();
+  if (!s) return;
   try {
-    await navigator.clipboard.writeText(props.sql);
+    await navigator.clipboard.writeText(s);
     ElMessage.success('已复制 SQL');
   } catch {
     ElMessage.error('复制失败');
   }
 }
 
+function onInsert() {
+  const s = requireSql();
+  if (s) emit('insert', s);
+}
+
+function onReplace() {
+  const s = requireSql();
+  if (s) emit('replace', s);
+}
+
+function onOpenTab() {
+  const s = requireSql();
+  if (s) emit('openTab', s);
+}
+
 async function onRun() {
+  const s = requireSql();
+  if (!s) return;
   if (props.writeOperation) {
     try {
       await ElMessageBox.confirm(
@@ -42,23 +82,23 @@ async function onRun() {
       return;
     }
   }
-  emit('run', props.sql);
+  emit('run', s);
 }
 </script>
 
 <template>
   <div class="ai-sql-card" :class="{ write: writeOperation }">
-    <pre class="sql">{{ sql }}</pre>
+    <pre class="sql">{{ sqlText || '（空 SQL）' }}</pre>
     <p v-if="explanation" class="exp">{{ explanation }}</p>
     <ul v-if="warnings?.length" class="warn">
       <li v-for="(w, i) in warnings" :key="i">{{ w }}</li>
     </ul>
     <div class="btns">
-      <ElButton size="small" @click="emit('insert', sql)">插入</ElButton>
-      <ElButton size="small" @click="emit('replace', sql)">替换</ElButton>
-      <ElButton size="small" @click="emit('openTab', sql)">新 Tab</ElButton>
-      <ElButton size="small" type="primary" @click="onRun">运行</ElButton>
-      <ElButton size="small" @click="copy">复制</ElButton>
+      <ElButton size="small" :disabled="!canUse" @click="onInsert">插入</ElButton>
+      <ElButton size="small" :disabled="!canUse" @click="onReplace">替换</ElButton>
+      <ElButton size="small" :disabled="!canUse" @click="onOpenTab">新 Tab</ElButton>
+      <ElButton size="small" type="primary" :disabled="!canUse" @click="onRun">运行</ElButton>
+      <ElButton size="small" :disabled="!canUse" @click="copy">复制</ElButton>
     </div>
   </div>
 </template>

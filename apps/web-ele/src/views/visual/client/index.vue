@@ -1906,24 +1906,47 @@ function onAskAiFix(payload: { sql: string; error: string }) {
 }
 
 function onAiInsertSql(sql: string) {
-  sqlEditorRef.value?.insertText?.(sql);
+  const s = (sql || '').trim();
+  if (!s) {
+    ElMessage.warning('没有可插入的 SQL');
+    return;
+  }
+  sqlEditorRef.value?.insertText?.(s);
+  ElMessage.success('已插入到编辑器光标处');
 }
 
-function onAiReplaceSql(sql: string) {
-  if (sqlEditorRef.value?.replaceSelectionOrAll) {
-    sqlEditorRef.value.replaceSelectionOrAll(sql);
-  } else if (activeTab.value) {
-    activeTab.value.sql = sql;
+function onAiReplaceSql(sql: string, silent = false) {
+  const s = (sql || '').trim();
+  if (!s) {
+    if (!silent) ElMessage.warning('没有可替换的 SQL');
+    return false;
   }
+  if (sqlEditorRef.value?.replaceSelectionOrAll) {
+    sqlEditorRef.value.replaceSelectionOrAll(s);
+  } else if (activeTab.value) {
+    activeTab.value.sql = s;
+  }
+  if (!silent) ElMessage.success('已替换编辑器中的 SQL');
+  return true;
 }
 
 function onAiRunSql(sql: string) {
-  onAiReplaceSql(sql);
-  void runSql({ sql, source: 'ai' });
+  const s = (sql || '').trim();
+  if (!s) {
+    ElMessage.warning('没有可运行的 SQL');
+    return;
+  }
+  onAiReplaceSql(s, true);
+  void runSql({ sql: s, source: 'ai' });
 }
 
 function onAiOpenSqlTab(sql: string) {
-  openSqlInNewTab(sql, 'AI SQL', activeTab.value?.instanceName);
+  const s = (sql || '').trim();
+  if (!s) {
+    ElMessage.warning('没有可打开的 SQL');
+    return;
+  }
+  openSqlInNewTab(s, 'AI SQL', activeTab.value?.instanceName);
 }
 
 function onOpenSchemaDoc() {

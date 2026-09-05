@@ -2,7 +2,7 @@
  * AI 会话状态机：消费 SSE 事件
  * @author yanch
  */
-import { reactive, ref } from 'vue';
+import { ref, triggerRef } from 'vue';
 
 import {
   cancelAgentRun,
@@ -53,12 +53,53 @@ function safeJson(raw: any) {
   }
 }
 
+/** 从 SSE data 里取出增量文本（兼容双重 JSON / 纯字符串） */
+function pickDeltaText(data: any): string {
+  if (data == null) return '';
+  if (typeof data === 'string') return data;
+  if (typeof data.text === 'string') return data.text;
+  if (typeof data.content === 'string') return data.content;
+  return '';
+}
+
+/** 规范化 sql.proposed 载荷 */
+function pickProposedSql(data: any): AiMsg['sql'] | undefined {
+  if (!data) return undefined;
+  let obj = data;
+  if (typeof data === 'string') {
+    try {
+      obj = JSON.parse(data);
+    } catch {
+      return { sql: data, explanation: '' };
+    }
+  }
+  const sql = obj?.sql ?? obj?.sqlText;
+  if (sql == null || sql === '') return undefined;
+  return {
+    sql: String(sql),
+    explanation: obj.explanation != null ? String(obj.explanation) : '',
+    warnings: Array.isArray(obj.warnings) ? obj.warnings : undefined,
+    writeOperation: !!obj.writeOperation,
+    replaceSelection: !!obj.replaceSelection,
+  };
+}
+
 export function useAiChat(getCtx: () => { dbConfigId: any; instanceName: string; modelId: any }) {
   const messages = ref<AiMsg[]>([]);
   const running = ref(false);
   const conversationId = ref<number | string | undefined>();
   let abort: null | (() => void) = null;
   let runId = '';
+  /** 当前助手消息在数组中的下标，便于原地更新后 triggerRef */
+  let curIdx = -1;
+
+  function touch() {
+    triggerRef(messages);
+  }
+
+  function curMsg(): AiMsg | null {
+    return curIdx >= 0 ? messages.value[curIdx] || null : null;
+  }
 
   function send(text: string, scene: AgentScene, context?: AgentChatRequest['context']) {
     const ctx = getCtx();
@@ -66,14 +107,16 @@ export function useAiChat(getCtx: () => { dbConfigId: any; instanceName: string;
       throw new Error('请先选择连接、实例和模型');
     }
     messages.value.push({ id: uid(), role: 'user', text, steps: [], done: true });
-    const cur: AiMsg = reactive({
+    const cur: AiMsg = {
       id: uid(),
       role: 'assistant',
       text: '',
       steps: [],
       done: false,
-    });
+    };
     messages.value.push(cur);
+    curIdx = messages.value.length - 1;
+    touch();
     running.value = true;
     abort = streamAgentChat(
       {
@@ -85,54 +128,72 @@ export function useAiChat(getCtx: () => { dbConfigId: any; instanceName: string;
       },
       {
         onEvent(event, data) {
+          const msg = curMsg();
+          if (!msg) return;
           switch (event) {
             case 'run.start':
-              runId = data.runId;
-              conversationId.value = data.conversationId;
+              runId = data?.runId || '';
+              if (data?.conversationId != null) {
+                conversationId.value = data.conversationId;
+              }
               break;
             case 'message.delta':
-              cur.text += data.text || '';
+              msg.text += pickDeltaText(data);
+              touch();
               break;
             case 'reasoning.delta':
-              cur.reasoning = (cur.reasoning || '') + (data.text || '');
+              msg.reasoning = (msg.reasoning || '') + pickDeltaText(data);
+              touch();
               break;
             case 'tool.call':
-              cur.steps.push({
-                callId: data.callId,
-                name: data.name,
-                arguments: safeJson(data.arguments),
+              msg.steps.push({
+                callId: data?.callId || uid(),
+                name: data?.name || 'tool',
+                arguments: safeJson(data?.arguments),
               });
+              touch();
               break;
             case 'tool.result': {
-              const s = cur.steps.find((x) => x.callId === data.callId);
+              const s = msg.steps.find((x) => x.callId === data?.callId);
               if (s) {
                 Object.assign(s, {
-                  ok: data.ok,
-                  elapsedMs: data.elapsedMs,
-                  data: data.data,
-                  truncated: data.truncated,
+                  ok: data?.ok,
+                  elapsedMs: data?.elapsedMs,
+                  data: data?.data,
+                  truncated: data?.truncated,
                 });
+                touch();
               }
               break;
             }
-            case 'sql.proposed':
-              cur.sql = data;
+            case 'sql.proposed': {
+              const proposed = pickProposedSql(data);
+              if (proposed) {
+                msg.sql = proposed;
+                touch();
+              }
               break;
+            }
             case 'chart':
-              cur.chart = data;
+              msg.chart = typeof data === 'string' ? safeJson(data) : data;
+              touch();
               break;
             case 'error':
-              cur.error = data?.message || '未知错误';
+              msg.error =
+                (typeof data === 'string' ? data : data?.message) || '未知错误';
+              touch();
               break;
             case 'run.cancelled':
-              cur.error = '已停止';
+              msg.error = '已停止';
+              touch();
               break;
             default:
               break;
           }
         },
         onError(e) {
-          cur.error = e.message;
+          const msg = curMsg();
+          if (msg) msg.error = e.message;
           finish();
         },
         onClose() {
@@ -141,9 +202,11 @@ export function useAiChat(getCtx: () => { dbConfigId: any; instanceName: string;
       },
     );
     function finish() {
-      cur.done = true;
+      const msg = curMsg();
+      if (msg) msg.done = true;
       running.value = false;
       abort = null;
+      touch();
     }
   }
 
@@ -155,6 +218,7 @@ export function useAiChat(getCtx: () => { dbConfigId: any; instanceName: string;
   function newConversation() {
     conversationId.value = undefined;
     messages.value = [];
+    curIdx = -1;
   }
 
   async function loadConversation(id: number | string) {
@@ -179,7 +243,7 @@ export function useAiChat(getCtx: () => { dbConfigId: any; instanceName: string;
         if (m.attachments) {
           try {
             const att = typeof m.attachments === 'string' ? JSON.parse(m.attachments) : m.attachments;
-            if (att.proposedSql) cur.sql = att.proposedSql;
+            if (att.proposedSql) cur.sql = pickProposedSql(att.proposedSql);
             if (att.chart) cur.chart = att.chart;
           } catch {
             /* ignore */
@@ -197,6 +261,7 @@ export function useAiChat(getCtx: () => { dbConfigId: any; instanceName: string;
       }
     }
     messages.value = out;
+    curIdx = -1;
   }
 
   return { messages, running, conversationId, send, stop, newConversation, loadConversation };

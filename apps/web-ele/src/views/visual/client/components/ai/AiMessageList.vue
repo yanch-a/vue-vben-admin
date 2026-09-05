@@ -3,7 +3,7 @@
  * 消息流
  * @author yanch
  */
-import { nextTick, ref, watch } from 'vue';
+import { computed, nextTick, ref, watch } from 'vue';
 
 import type { AiMsg } from '../../composables/useAiChat';
 import { splitSqlBlocks } from '../../utils/markdown';
@@ -28,60 +28,96 @@ const emit = defineEmits<{
 }>();
 
 const box = ref<HTMLElement | null>(null);
+
+/** 把每条助手消息拆成「正文片段 + SQL 卡片」，避免重复渲染 proposedSql */
+const viewMessages = computed(() =>
+  (props.messages || []).map((m) => {
+    if (m.role !== 'assistant') {
+      return { msg: m, parts: [] as ReturnType<typeof splitSqlBlocks> };
+    }
+    const parts = splitSqlBlocks(m.text || '');
+    // 正文里已有相同 SQL 代码块时，不再额外挂一张 proposed 卡片
+    const proposed = m.sql?.sql?.trim();
+    const alreadyInText =
+      !!proposed &&
+      parts.some((p) => p.type === 'sql' && p.sql.trim() === proposed);
+    return {
+      msg: m,
+      parts,
+      showProposed: !!proposed && !alreadyInText,
+    };
+  }),
+);
+
 watch(
-  () => props.messages.map((m) => m.text + (m.sql?.sql || '') + (m.steps.length || 0)),
+  () =>
+    props.messages.map(
+      (m) => m.text + (m.sql?.sql || '') + m.steps.length + (m.reasoning || ''),
+    ),
   () => nextTick(() => box.value && (box.value.scrollTop = box.value.scrollHeight)),
 );
+
+function onSqlAction(
+  type: 'insert' | 'replace' | 'run' | 'openTab',
+  sql: string,
+) {
+  const s = (sql || '').trim();
+  if (!s) return;
+  if (type === 'insert') emit('insertSql', s);
+  else if (type === 'replace') emit('replaceSql', s);
+  else if (type === 'run') emit('runSql', s);
+  else emit('openSqlInNewTab', s);
+}
 </script>
 
 <template>
   <div ref="box" class="msg-list">
     <div v-if="!messages.length" class="empty">输入需求，让 AI 帮你写 SQL 或出图表</div>
-    <div v-for="m in messages" :key="m.id" class="msg" :class="m.role">
-      <template v-if="m.role === 'user'">
-        <div class="bubble">{{ m.text }}</div>
+    <div v-for="item in viewMessages" :key="item.msg.id" class="msg" :class="item.msg.role">
+      <template v-if="item.msg.role === 'user'">
+        <div class="bubble">{{ item.msg.text }}</div>
       </template>
       <template v-else>
-        <ElCollapse v-if="m.reasoning" class="reason">
+        <ElCollapse v-if="item.msg.reasoning" class="reason">
           <ElCollapseItem title="思考过程" name="r">
-            <pre>{{ m.reasoning }}</pre>
+            <pre>{{ item.msg.reasoning }}</pre>
           </ElCollapseItem>
         </ElCollapse>
-        <AiToolStepView v-for="s in m.steps" :key="s.callId" :step="s" />
-        <template v-for="(p, i) in splitSqlBlocks(m.text)" :key="i">
+        <AiToolStepView v-for="s in item.msg.steps" :key="s.callId" :step="s" />
+        <template v-for="(p, i) in item.parts" :key="item.msg.id + '-p-' + i">
           <div v-if="p.type === 'md'" class="md" v-html="p.html" />
           <AiSqlCard
             v-else
             :sql="p.sql"
-            @insert="emit('insertSql', $event)"
-            @replace="emit('replaceSql', $event)"
-            @run="emit('runSql', $event)"
-            @open-tab="emit('openSqlInNewTab', $event)"
+            @insert="onSqlAction('insert', $event)"
+            @replace="onSqlAction('replace', $event)"
+            @run="onSqlAction('run', $event)"
+            @open-tab="onSqlAction('openTab', $event)"
           />
         </template>
         <AiSqlCard
-          v-if="m.sql"
-          :sql="m.sql.sql"
-          :explanation="m.sql.explanation"
-          :warnings="m.sql.warnings"
-          :write-operation="m.sql.writeOperation"
-          @insert="emit('insertSql', $event)"
-          @replace="emit('replaceSql', $event)"
-          @run="emit('runSql', $event)"
-          @open-tab="emit('openSqlInNewTab', $event)"
+          v-if="item.showProposed && item.msg.sql"
+          :sql="item.msg.sql.sql"
+          :explanation="item.msg.sql.explanation"
+          :warnings="item.msg.sql.warnings"
+          :write-operation="item.msg.sql.writeOperation"
+          @insert="onSqlAction('insert', $event)"
+          @replace="onSqlAction('replace', $event)"
+          @run="onSqlAction('run', $event)"
+          @open-tab="onSqlAction('openTab', $event)"
         />
         <AiChartCard
-          v-if="m.chart"
-          :title="m.chart.title"
-          :sql="m.chart.sql"
-          :spec="m.chart.spec"
-          :columns="m.chart.columns"
-          :rows="m.chart.rows"
+          v-if="item.msg.chart"
+          :title="item.msg.chart.title"
+          :sql="item.msg.chart.sql"
+          :spec="item.msg.chart.spec"
+          :columns="item.msg.chart.columns"
+          :rows="item.msg.chart.rows"
           :db-config-id="dbConfigId"
           :instance-name="instanceName"
-          @open-sql="emit('openSqlInNewTab', $event)"
+          @open-sql="onSqlAction('openTab', $event)"
         />
-        <div v-if="m.error" class="err">{{ m.error }}</div>
+        <div v-if="item.msg.error" class="err">{{ item.msg.error }}</div>
       </template>
     </div>
     <div v-if="running" class="typing">正在思考…</div>
@@ -93,6 +129,8 @@ watch(
   flex: 1;
   overflow: auto;
   padding: 8px 12px;
+  min-height: 0;
+  border-radius: 0;
 }
 .empty {
   color: var(--el-text-color-secondary);
@@ -110,7 +148,28 @@ watch(
   padding: 8px 10px;
   white-space: pre-wrap;
 }
+.md {
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--el-text-color-primary);
+  word-break: break-word;
+}
 .md :deep(p) {
+  margin: 6px 0;
+}
+.md :deep(pre) {
+  overflow: auto;
+  padding: 8px;
+  border-radius: 6px;
+  background: var(--el-fill-color-light);
+}
+.md :deep(code) {
+  font-family: ui-monospace, Consolas, monospace;
+  font-size: 12px;
+}
+.md :deep(ul),
+.md :deep(ol) {
+  padding-left: 1.25em;
   margin: 6px 0;
 }
 .err {

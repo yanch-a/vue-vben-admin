@@ -36,7 +36,7 @@ const dirs = ['n', 's', 'e', 'w', 'ne', 'nw', 'se', 'sw'] as const;
 const { rect, onDragStart, onResizeStart } = useFloatingWindow('visual-client-ai-win-rect', {
   x: 80,
   y: 80,
-  w: 480,
+  w: 600,
   h: 620,
 });
 const { state, open, minimize, restore, close, toggleMax } = useAiWindowState();
@@ -141,6 +141,9 @@ defineExpose({
           v-model="modelId"
           size="small"
           filterable
+          teleported
+          :popper-options="{ strategy: 'fixed' }"
+          popper-class="ai-model-select-popper"
           style="width: 200px"
           @mousedown.stop
           @change="onModelChange"
@@ -269,5 +272,12 @@ defineExpose({
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+</style>
+
+<!-- 下拉挂到 body，必须高于浮窗 z-index:3000 -->
+<style>
+.ai-model-select-popper {
+  z-index: 4000 !important;
 }
 </style>
