@@ -22,6 +22,8 @@ const props = defineProps<{
   dbConfigId?: number | string | null;
   instanceName?: string;
   connLabel?: string;
+  /** 1=允许真实行数据发给模型；缺省/0=脱敏模式 */
+  aiAllowSampleData?: number | null;
 }>();
 
 const emit = defineEmits<{
@@ -30,6 +32,11 @@ const emit = defineEmits<{
   runSql: [string];
   openSqlInNewTab: [string];
 }>();
+
+/** 当前是否脱敏（未允许样例数据） */
+const isMaskedMode = computed(
+  () => Number(props.aiAllowSampleData) !== 1,
+);
 
 const MODEL_KEY = 'visual-client-ai-model-id';
 const dirs = ['n', 's', 'e', 'w', 'ne', 'nw', 'se', 'sw'] as const;
@@ -159,6 +166,31 @@ defineExpose({
           <button title="关闭" @click="close">×</button>
         </div>
       </div>
+      <!-- 与 SQL 编辑器联动的上下文：实例 + 脱敏状态 -->
+      <div class="ai-win-ctx" @mousedown.stop>
+        <span class="ctx-item" :title="connLabel || ''">
+          连接
+          <strong>{{ connLabel || '未连接' }}</strong>
+        </span>
+        <span class="ctx-sep">|</span>
+        <span class="ctx-item" :class="{ warn: !instanceName }">
+          实例
+          <strong>{{ instanceName || '未选择' }}</strong>
+        </span>
+        <span class="ctx-sep">|</span>
+        <ElTag
+          size="small"
+          :type="isMaskedMode ? 'warning' : 'success'"
+          effect="plain"
+          :title="
+            isMaskedMode
+              ? 'run_sql 结果会脱敏后发给模型；sample_rows 不可用。可在连接设置中开启「允许样例数据」'
+              : '允许把真实行数据发给模型（含 run_sql / sample_rows）'
+          "
+        >
+          {{ isMaskedMode ? '脱敏模式' : '真实样例' }}
+        </ElTag>
+      </div>
       <AiMessageList
         :messages="messages"
         :running="running"
@@ -228,6 +260,29 @@ defineExpose({
   cursor: move;
   background: var(--el-fill-color-light);
   border-bottom: 1px solid var(--el-border-color);
+}
+.ai-win-ctx {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 8px;
+  padding: 4px 10px;
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+  background: var(--el-fill-color-blank);
+  border-bottom: 1px solid var(--el-border-color-lighter);
+  cursor: default;
+}
+.ctx-item strong {
+  margin-left: 4px;
+  color: var(--el-text-color-primary);
+  font-weight: 600;
+}
+.ctx-item.warn strong {
+  color: var(--el-color-warning);
+}
+.ctx-sep {
+  opacity: 0.45;
 }
 .title {
   flex: 1;

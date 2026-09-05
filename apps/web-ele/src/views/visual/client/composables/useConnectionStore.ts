@@ -31,6 +31,8 @@ export interface DbConnection {
   connectionStatus?: number;
   /** 1=允许 AI 助手；缺省视为开启 */
   aiEnabled?: number;
+  /** 1=允许把真实行数据发给模型；缺省 0=脱敏 */
+  aiAllowSampleData?: number;
 }
 
 /** openConnection 结果，供 UI 提示 */

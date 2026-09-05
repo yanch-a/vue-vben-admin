@@ -72,6 +72,11 @@ import { visualClientConfig } from './config';
 import { resolveSqlDialect } from './dialect/sqlDialect';
 import { formatSqlByDialect } from './utils/formatSql';
 import { isDestructiveDdl, looksLikeControlledDdl } from './utils/controlledDdl';
+import {
+  describeSqlWriteRisk,
+  isFreeDmlSql,
+  isWriteOrDangerousSql,
+} from './utils/sqlWriteGuard';
 import { parseTableFromSql, type TableRef } from './utils/resultRowSql';
 import {
   clearColumnCache,
@@ -511,6 +516,8 @@ async function tryConsumePendingSavedQuery() {
           description: cfg.description,
           connectionStatus: cfg.connectionStatus,
           aiEnabled: cfg.aiEnabled == null ? 1 : Number(cfg.aiEnabled),
+          aiAllowSampleData:
+            cfg.aiAllowSampleData == null ? 0 : Number(cfg.aiAllowSampleData),
         });
         if (!result.ok) {
           if (result.reason === 'max') {
@@ -1029,6 +1036,12 @@ async function runSql(opts?: { sql?: string; source?: string }) {
   }
   const source = opts?.source || 'manual';
 
+  // 自由 DML：只读 executeSql 会拒绝；确认后走 executeDml
+  if (isFreeDmlSql(sql)) {
+    await runFreeDml(sql, source);
+    return;
+  }
+
   // 视图/过程等 DDL 与 CALL：走受控 executeDdl（只读 executeSql 无法执行）
   if (looksLikeControlledDdl(sql)) {
     await runControlledDdl(sql);
@@ -1117,16 +1130,22 @@ function feedbackSchemaDocSilent(sql: string) {
   }).catch(() => {});
 }
 
-/** 受控 DDL / CALL：确认后走 executeDdl，并尽量刷新对象树对应文件夹 */
-async function runControlledDdl(sql: string) {
+/** 受控 DDL / CALL：默认仅 DROP 等删除类需确认；AI 入口可 forceConfirm */
+async function runControlledDdl(
+  sql: string,
+  opts?: { skipConfirm?: boolean; forceConfirm?: boolean },
+) {
   if (!activeConnection.value || !activeTab.value) return;
-  if (isDestructiveDdl(sql)) {
+  if (!opts?.skipConfirm && (opts?.forceConfirm || isDestructiveDdl(sql))) {
+    const tip = isDestructiveDdl(sql)
+      ? '即将执行删除类 DDL（DROP），确认继续？'
+      : describeSqlWriteRisk(sql);
     try {
-      await ElMessageBox.confirm(
-        '即将执行删除类 DDL，确认继续？',
-        '危险操作确认',
-        { type: 'warning', confirmButtonText: '执行', cancelButtonText: '取消' },
-      );
+      await ElMessageBox.confirm(tip, '写操作确认', {
+        type: 'warning',
+        confirmButtonText: '确认执行',
+        cancelButtonText: '取消',
+      });
     } catch {
       return;
     }
@@ -1160,6 +1179,66 @@ async function runControlledDdl(sql: string) {
   } catch (e: any) {
     const clientElapsedMs = Math.round(performance.now() - t0);
     const errText = pickErrorMsg(e, '执行 DDL 失败');
+    activeTab.value.result = {
+      columns: [],
+      rows: [],
+      rowCount: 0,
+      error: errText,
+      message: errText,
+      clientElapsedMs,
+      sourceSql: sql,
+    };
+    activeTab.value.resultTab = 'messages';
+  } finally {
+    activeTab.value.executing = false;
+  }
+}
+
+/**
+ * 自由 DML（INSERT/UPDATE/DELETE）：确认后走 executeDml
+ * （只读 executeSql 会直接拒绝写语句）
+ */
+async function runFreeDml(sql: string, _source?: string, opts?: { skipConfirm?: boolean }) {
+  if (!activeConnection.value || !activeTab.value) return;
+  if (!opts?.skipConfirm) {
+    try {
+      await ElMessageBox.confirm(describeSqlWriteRisk(sql), '写操作确认', {
+        type: 'warning',
+        confirmButtonText: '确认执行',
+        cancelButtonText: '取消',
+      });
+    } catch {
+      return;
+    }
+  }
+  activeTab.value.executing = true;
+  activeTab.value.resultVisible = true;
+  const t0 = performance.now();
+  try {
+    const res: any = await executeDml({
+      dbConfigId: activeConnection.value.id,
+      instanceName: activeTab.value.instanceName,
+      sql,
+    });
+    const clientElapsedMs = Math.round(performance.now() - t0);
+    const data = res?.data || res;
+    const msg =
+      data?.message ||
+      `DML OK, ${data?.affectedRows ?? '?'} row(s) affected`;
+    activeTab.value.result = {
+      columns: [],
+      rows: [],
+      rowCount: 0,
+      elapsedMs: data?.elapsedMs,
+      clientElapsedMs,
+      message: msg,
+      sourceSql: sql,
+    };
+    activeTab.value.resultTab = 'messages';
+    ElMessage.success(msg);
+  } catch (e: any) {
+    const clientElapsedMs = Math.round(performance.now() - t0);
+    const errText = pickErrorMsg(e, 'DML 执行失败');
     activeTab.value.result = {
       columns: [],
       rows: [],
@@ -1937,7 +2016,34 @@ function onAiRunSql(sql: string) {
     return;
   }
   onAiReplaceSql(s, true);
-  void runSql({ sql: s, source: 'ai' });
+  void (async () => {
+    // UPDATE/DELETE/INSERT：确认后走 DML 接口（只读 executeSql 会拒绝）
+    if (isFreeDmlSql(s)) {
+      await runFreeDml(s, 'ai');
+      return;
+    }
+    // DROP/CREATE/...：AI 运行一律先确认
+    if (looksLikeControlledDdl(s) || isWriteOrDangerousSql(s)) {
+      if (looksLikeControlledDdl(s)) {
+        await runControlledDdl(s, { forceConfirm: true });
+        return;
+      }
+      try {
+        await ElMessageBox.confirm(describeSqlWriteRisk(s), '写操作确认', {
+          type: 'warning',
+          confirmButtonText: '确认执行',
+          cancelButtonText: '取消',
+        });
+      } catch {
+        return;
+      }
+      ElMessage.warning(
+        '当前语句无法通过客户端安全通道执行，已写入编辑器，请确认后手工处理。',
+      );
+      return;
+    }
+    await runSql({ sql: s, source: 'ai' });
+  })();
 }
 
 function onAiOpenSqlTab(sql: string) {
@@ -2237,6 +2343,7 @@ onBeforeUnmount(() => {
       :db-config-id="activeConnection?.id"
       :instance-name="activeTab?.instanceName"
       :conn-label="activeConnection?.dbName"
+      :ai-allow-sample-data="activeConnection?.aiAllowSampleData"
       @insert-sql="onAiInsertSql"
       @replace-sql="onAiReplaceSql"
       @run-sql="onAiRunSql"

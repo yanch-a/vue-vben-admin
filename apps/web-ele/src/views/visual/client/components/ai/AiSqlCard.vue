@@ -1,10 +1,13 @@
 <script lang="ts" setup>
 /**
  * SQL 卡片：插入 / 替换 / 新 Tab / 运行 / 复制
+ * 运行写操作前强制二次确认（不依赖后端 writeOperation 标记）
  * @author yanch
  */
 import { computed } from 'vue';
-import { ElMessage, ElMessageBox } from 'element-plus';
+import { ElMessage } from 'element-plus';
+
+import { isWriteOrDangerousSql } from '../../utils/sqlWriteGuard';
 
 defineOptions({ name: 'AiSqlCard' });
 
@@ -32,6 +35,11 @@ const sqlText = computed(() => {
 });
 
 const canUse = computed(() => !!sqlText.value.trim());
+
+/** 后端标记或本地检测：任一成立即按写操作处理 */
+const isWrite = computed(
+  () => !!props.writeOperation || isWriteOrDangerousSql(sqlText.value),
+);
 
 function requireSql(): string | null {
   const s = sqlText.value.trim();
@@ -71,23 +79,14 @@ function onOpenTab() {
 async function onRun() {
   const s = requireSql();
   if (!s) return;
-  if (props.writeOperation) {
-    try {
-      await ElMessageBox.confirm(
-        '这是写操作 SQL，Agent 不会自动执行。确认要在编辑器中运行吗？',
-        '写操作确认',
-        { type: 'warning', confirmButtonText: '运行', cancelButtonText: '取消' },
-      );
-    } catch {
-      return;
-    }
-  }
+  // 写操作确认统一在父级 runFreeDml / runControlledDdl / onAiRunSql 中处理，避免弹两次
   emit('run', s);
 }
 </script>
 
 <template>
-  <div class="ai-sql-card" :class="{ write: writeOperation }">
+  <div class="ai-sql-card" :class="{ write: isWrite }">
+    <div v-if="isWrite" class="write-tip">写操作 / 危险语句 — 运行前需确认</div>
     <pre class="sql">{{ sqlText || '（空 SQL）' }}</pre>
     <p v-if="explanation" class="exp">{{ explanation }}</p>
     <ul v-if="warnings?.length" class="warn">
@@ -113,6 +112,12 @@ async function onRun() {
 }
 .ai-sql-card.write {
   border-color: var(--el-color-danger);
+}
+.write-tip {
+  font-size: 12px;
+  color: var(--el-color-danger);
+  margin-bottom: 6px;
+  font-weight: 600;
 }
 .sql {
   margin: 0;
