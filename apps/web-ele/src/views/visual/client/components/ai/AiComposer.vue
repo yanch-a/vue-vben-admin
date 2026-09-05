@@ -106,6 +106,7 @@ defineExpose({ setText });
 .composer {
   border-top: 1px solid var(--el-border-color);
   padding: 8px;
+  font-size: var(--vc-ai-font-size, 13px);
 }
 .chips {
   display: flex;

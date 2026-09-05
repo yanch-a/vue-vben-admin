@@ -110,9 +110,10 @@ async function copyOption() {
   justify-content: space-between;
   align-items: center;
   gap: 8px;
+  font-size: var(--vc-ai-font-size, 13px);
 }
 .kpi {
-  font-size: 36px;
+  font-size: calc(var(--vc-ai-font-size, 13px) * 2.75);
   font-weight: 700;
   padding: 16px 0;
   text-align: center;

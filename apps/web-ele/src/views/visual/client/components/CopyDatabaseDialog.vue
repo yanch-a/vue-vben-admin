@@ -385,7 +385,7 @@ async function onCopy() {
 <style scoped>
 .desc {
   margin: 0 0 12px;
-  font-size: 13px;
+  font-size: var(--vc-ui-font-size, 13px);
   color: var(--el-text-color-secondary);
 }
 .copy-body {
@@ -414,7 +414,7 @@ async function onCopy() {
 .label {
   width: 56px;
   flex-shrink: 0;
-  font-size: 13px;
+  font-size: var(--vc-ui-font-size, 13px);
   color: var(--el-text-color-regular);
 }
 .pane-title {
@@ -425,7 +425,7 @@ async function onCopy() {
   font-weight: 600;
 }
 .obj-tree {
-  font-size: 13px;
+  font-size: var(--vc-ui-font-size, 13px);
 }
 .folder-row {
   display: flex;
@@ -452,7 +452,7 @@ async function onCopy() {
   margin-bottom: 6px;
 }
 .note {
-  font-size: 12px;
+  font-size: var(--vc-ui-font-size-sm, 12px);
   color: var(--el-text-color-secondary);
   line-height: 1.5;
   margin: 0 0 10px;
@@ -471,7 +471,7 @@ async function onCopy() {
 }
 .hint {
   margin-top: 16px;
-  font-size: 12px;
+  font-size: var(--vc-ui-font-size-sm, 12px);
   color: var(--el-text-color-secondary);
   line-height: 1.5;
 }

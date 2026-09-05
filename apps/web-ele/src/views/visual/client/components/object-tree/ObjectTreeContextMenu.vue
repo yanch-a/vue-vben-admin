@@ -175,7 +175,7 @@ function onAction(action: TreeCtxAction) {
   border-radius: 6px;
   box-shadow: var(--el-box-shadow-light);
   color: var(--el-text-color-primary);
-  font-size: 13px;
+  font-size: var(--vc-ui-font-size, 13px);
 }
 .item {
   padding: 8px 14px;

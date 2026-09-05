@@ -172,7 +172,7 @@ onBeforeUnmount(() => {
   align-items: center;
   gap: 6px;
   padding: 6px 10px;
-  font-size: 13px;
+  font-size: var(--vc-ui-font-size, 13px);
   cursor: pointer;
   border: 1px solid transparent;
   white-space: nowrap;
@@ -237,7 +237,7 @@ onBeforeUnmount(() => {
   border-radius: 6px;
   box-shadow: var(--el-box-shadow-light);
   color: var(--el-text-color-primary);
-  font-size: 13px;
+  font-size: var(--vc-ui-font-size, 13px);
 }
 .query-tabs-ctx-menu .item {
   padding: 8px 14px;

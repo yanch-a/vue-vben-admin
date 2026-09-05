@@ -1,0 +1,55 @@
+/**
+ * 数据库客户端字号（与框架 theme.fontSize / --font-size-base 相互独立）
+ * 由 useClientPreferences 写入 --vc-ui-* / --vc-ai-*
+ */
+
+:root {
+  --vc-ui-font-size: 13px;
+  --vc-ui-font-size-sm: 12px;
+  --vc-ai-font-size: 13px;
+  --vc-ai-font-size-sm: 12px;
+  --vc-ai-font-size-xs: 11px;
+}
+
+/* 客户端主壳：覆盖 Element Plus 字号 token，不改框架布局/菜单 */
+.db-client,
+.visual-client-scope {
+  font-size: var(--vc-ui-font-size);
+  --el-font-size-base: var(--vc-ui-font-size);
+  --el-font-size-small: var(--vc-ui-font-size-sm);
+  --el-font-size-extra-small: var(--vc-ui-font-size-sm);
+}
+
+/* 停留在客户端页时：传送到 body 的弹层跟随界面字号 */
+body.visual-client-active .el-overlay .el-dialog,
+body.visual-client-active .el-overlay .el-drawer,
+body.visual-client-active .el-overlay .el-message-box,
+body.visual-client-active .el-popper,
+body.visual-client-active .el-dropdown-menu,
+body.visual-client-active .obj-ctx-menu,
+body.visual-client-active .conn-ctx-menu,
+body.visual-client-active .query-tabs-ctx-menu,
+body.visual-client-active .result-ctx-menu {
+  font-size: var(--vc-ui-font-size);
+  --el-font-size-base: var(--vc-ui-font-size);
+  --el-font-size-small: var(--vc-ui-font-size-sm);
+  --el-font-size-extra-small: var(--vc-ui-font-size-sm);
+}
+
+/* AI 浮窗 / Dock / 会话抽屉：独立对话字号 */
+.ai-win,
+.ai-dock,
+.ai-chat-drawer {
+  font-size: var(--vc-ai-font-size);
+  --el-font-size-base: var(--vc-ai-font-size);
+  --el-font-size-small: var(--vc-ai-font-size-sm);
+  --el-font-size-extra-small: var(--vc-ai-font-size-sm);
+}
+
+body.visual-client-active .ai-model-select-popper,
+body.visual-client-active .ai-chat-drawer {
+  font-size: var(--vc-ai-font-size);
+  --el-font-size-base: var(--vc-ai-font-size);
+  --el-font-size-small: var(--vc-ai-font-size-sm);
+  --el-font-size-extra-small: var(--vc-ai-font-size-sm);
+}

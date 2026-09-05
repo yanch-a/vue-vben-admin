@@ -190,7 +190,7 @@ onBeforeUnmount(() => {
   border-bottom: none;
   border-radius: 4px 4px 0 0;
   white-space: nowrap;
-  font-size: 13px;
+  font-size: var(--vc-ui-font-size, 13px);
 }
 .conn-tab.active {
   background: var(--el-bg-color);
@@ -201,7 +201,7 @@ onBeforeUnmount(() => {
 }
 .meta {
   color: var(--el-text-color-secondary);
-  font-size: 12px;
+  font-size: var(--vc-ui-font-size-sm, 12px);
 }
 .close {
   border: none;
@@ -214,7 +214,7 @@ onBeforeUnmount(() => {
 .empty {
   padding: 8px 4px;
   color: var(--el-text-color-secondary);
-  font-size: 13px;
+  font-size: var(--vc-ui-font-size, 13px);
 }
 .conn-ctx-menu {
   position: fixed;
@@ -226,7 +226,7 @@ onBeforeUnmount(() => {
   border-radius: 6px;
   box-shadow: var(--el-box-shadow-light);
   color: var(--el-text-color-primary);
-  font-size: 13px;
+  font-size: var(--vc-ui-font-size, 13px);
 }
 .item {
   padding: 8px 14px;

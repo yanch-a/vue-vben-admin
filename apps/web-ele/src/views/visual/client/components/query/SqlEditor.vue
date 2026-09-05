@@ -592,7 +592,7 @@ defineExpose({
   justify-content: center;
   background: color-mix(in srgb, var(--el-color-primary) 12%, transparent);
   color: var(--el-color-primary);
-  font-size: 14px;
+  font-size: calc(var(--vc-ui-font-size, 13px) + 1px);
   font-weight: 600;
   z-index: 2;
 }

@@ -171,7 +171,7 @@ watch(visible, (v) => {
   display: flex;
   align-items: center;
   gap: 8px;
-  font-size: 13px;
+  font-size: var(--vc-ui-font-size, 13px);
 }
 .label {
   color: var(--el-text-color-secondary);
@@ -182,11 +182,11 @@ watch(visible, (v) => {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 12px;
+  font-size: var(--vc-ui-font-size-sm, 12px);
 }
 .hint {
   margin: 0;
-  font-size: 12px;
+  font-size: var(--vc-ui-font-size-sm, 12px);
   color: var(--el-text-color-secondary);
   line-height: 1.5;
 }

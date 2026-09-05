@@ -114,7 +114,7 @@ async function onRun() {
   border-color: var(--el-color-danger);
 }
 .write-tip {
-  font-size: 12px;
+  font-size: var(--vc-ai-font-size-sm, 12px);
   color: var(--el-color-danger);
   margin-bottom: 6px;
   font-weight: 600;
@@ -122,20 +122,20 @@ async function onRun() {
 .sql {
   margin: 0;
   font-family: ui-monospace, Consolas, monospace;
-  font-size: 12px;
+  font-size: var(--vc-ai-font-size-sm, 12px);
   white-space: pre-wrap;
   word-break: break-all;
 }
 .exp {
   margin: 6px 0 0;
-  font-size: 12px;
+  font-size: var(--vc-ai-font-size-sm, 12px);
   color: var(--el-text-color-secondary);
 }
 .warn {
   margin: 4px 0 0;
   padding-left: 18px;
   color: var(--el-color-warning);
-  font-size: 12px;
+  font-size: var(--vc-ai-font-size-sm, 12px);
 }
 .btns {
   display: flex;

@@ -164,7 +164,7 @@ const propertyRows = computed(() => {
   padding: 10px 12px;
   background: var(--el-fill-color-light);
   border-radius: 6px;
-  font-size: 12px;
+  font-size: var(--vc-ui-font-size-sm, 12px);
   line-height: 1.5;
   white-space: pre-wrap;
   word-break: break-word;

@@ -282,7 +282,8 @@ const keyFields = computed(() => {
 .bar { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
 .body { display: grid; grid-template-columns: 260px 1fr; gap: 12px; min-height: 60vh; }
 .right { overflow: auto; }
+.md { font-size: var(--vc-ui-font-size, 13px); line-height: 1.55; }
 .md :deep(p) { margin: 6px 0; }
-.cov { margin-top: 8px; font-size: 12px; color: var(--el-text-color-secondary); }
-.hist { font-size: 12px; }
+.cov { margin-top: 8px; font-size: var(--vc-ui-font-size-sm, 12px); color: var(--el-text-color-secondary); }
+.hist { font-size: var(--vc-ui-font-size-sm, 12px); }
 </style>

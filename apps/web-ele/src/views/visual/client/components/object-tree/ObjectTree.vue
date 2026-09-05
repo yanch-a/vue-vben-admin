@@ -609,7 +609,7 @@ defineExpose({
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 13px;
+  font-size: var(--vc-ui-font-size, 13px);
   user-select: none;
 }
 /* 定位高亮：跟随 Element Plus 主题色（亮/暗模式均可用） */

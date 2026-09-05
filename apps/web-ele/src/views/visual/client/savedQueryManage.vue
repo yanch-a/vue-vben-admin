@@ -8,7 +8,7 @@
  *
  * @author yanch
  */
-import { computed, onMounted, reactive, ref } from 'vue';
+import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue';
 import { useRouter } from 'vue-router';
 
 import { getDbConfigById } from '#/api/visual/vq';
@@ -24,6 +24,7 @@ import {
 import { Page } from '@vben/common-ui';
 import { ElMessage, ElMessageBox } from 'element-plus';
 
+import { bindVisualClientFontScope } from './composables/useClientPreferences';
 import {
   useConnectionStore,
 } from '../client/composables/useConnectionStore';
@@ -355,14 +356,21 @@ function backToClient() {
   router.push({ name: 'VisualClient' });
 }
 
+let unbindClientFontScope: (() => void) | undefined;
+
 onMounted(() => {
+  unbindClientFontScope = bindVisualClientFontScope();
   void loadTree();
+});
+
+onBeforeUnmount(() => {
+  unbindClientFontScope?.();
 });
 </script>
 
 <template>
   <Page auto-content-height content-class="!p-0">
-    <div class="sq-manage">
+    <div class="sq-manage visual-client-scope">
       <div class="toolbar">
         <ElButton size="small" @click="backToClient">返回客户端</ElButton>
         <ElButton type="primary" size="small" @click="openCreateGroup(null)">
@@ -666,7 +674,7 @@ onMounted(() => {
 }
 .node-meta {
   color: var(--el-text-color-secondary);
-  font-size: 12px;
+  font-size: var(--vc-ui-font-size-sm, 12px);
 }
 .tag {
   display: inline-flex;
@@ -676,7 +684,7 @@ onMounted(() => {
   height: 18px;
   padding: 0 4px;
   border-radius: 3px;
-  font-size: 11px;
+  font-size: calc(var(--vc-ui-font-size, 13px) - 2px);
   flex-shrink: 0;
 }
 .tag-g {
@@ -716,12 +724,12 @@ onMounted(() => {
   font-weight: 600;
 }
 .row-main .meta {
-  font-size: 12px;
+  font-size: var(--vc-ui-font-size-sm, 12px);
   color: var(--el-text-color-secondary);
 }
 .preview {
   margin-top: 4px;
-  font-size: 12px;
+  font-size: var(--vc-ui-font-size-sm, 12px);
   color: var(--el-text-color-regular);
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
   white-space: nowrap;

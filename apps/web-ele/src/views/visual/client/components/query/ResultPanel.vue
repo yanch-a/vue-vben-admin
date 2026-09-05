@@ -552,7 +552,7 @@ watch(
   align-items: center;
 }
 .table-hint {
-  font-size: 12px;
+  font-size: var(--vc-ui-font-size-sm, 12px);
   color: var(--el-text-color-secondary);
 }
 .ai-fix {
@@ -582,7 +582,7 @@ watch(
 .messages {
   margin: 0;
   padding: 12px;
-  font-size: 13px;
+  font-size: var(--vc-ui-font-size, 13px);
   white-space: pre-wrap;
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
@@ -604,7 +604,7 @@ watch(
   border-radius: 6px;
   box-shadow: var(--el-box-shadow-light);
   color: var(--el-text-color-primary);
-  font-size: 13px;
+  font-size: var(--vc-ui-font-size, 13px);
 }
 .result-ctx-menu .item {
   padding: 8px 14px;

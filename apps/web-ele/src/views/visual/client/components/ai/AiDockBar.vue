@@ -40,7 +40,7 @@ function onCtx(e: MouseEvent) {
   padding: 0 10px;
   height: 22px;
   cursor: pointer;
-  font-size: 12px;
+  font-size: var(--vc-ai-font-size-sm, 12px);
 }
 .badge {
   margin-left: 4px;

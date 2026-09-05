@@ -58,12 +58,12 @@ const tableRows = computed(() => {
 <style scoped>
 .line {
   cursor: pointer;
-  font-size: 12px;
+  font-size: var(--vc-ai-font-size-sm, 12px);
   color: var(--el-text-color-secondary);
   padding: 2px 0;
 }
 .detail pre {
-  font-size: 11px;
+  font-size: var(--vc-ai-font-size-xs, 11px);
   white-space: pre-wrap;
   margin: 4px 0;
   max-height: 160px;

@@ -218,7 +218,13 @@ defineExpose({
         :class="['rs', 'rs-' + d]"
         @mousedown="onResizeStart(d, $event)"
       />
-      <ElDrawer v-model="convDrawer" title="会话" size="280px" append-to-body>
+      <ElDrawer
+        v-model="convDrawer"
+        title="会话"
+        size="280px"
+        append-to-body
+        class="ai-chat-drawer"
+      >
         <ElButton size="small" type="primary" @click="newConversation(); convDrawer = false">
           新建会话
         </ElButton>
@@ -267,7 +273,7 @@ defineExpose({
   flex-wrap: wrap;
   gap: 6px 8px;
   padding: 4px 10px;
-  font-size: 12px;
+  font-size: var(--vc-ai-font-size-sm, 12px);
   color: var(--el-text-color-secondary);
   background: var(--el-fill-color-blank);
   border-bottom: 1px solid var(--el-border-color-lighter);
@@ -286,7 +292,7 @@ defineExpose({
 }
 .title {
   flex: 1;
-  font-size: 13px;
+  font-size: var(--vc-ai-font-size, 13px);
   font-weight: 600;
   overflow: hidden;
   text-overflow: ellipsis;

@@ -362,7 +362,7 @@ async function onSubmit() {
 
 .tip {
   margin-left: 8px;
-  font-size: 12px;
+  font-size: var(--vc-ui-font-size-sm, 12px);
   color: var(--el-text-color-secondary);
 }
 
@@ -377,7 +377,7 @@ async function onSubmit() {
   padding: 10px 12px;
   overflow: auto;
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: 12px;
+  font-size: var(--vc-ui-font-size-sm, 12px);
   line-height: 1.5;
   white-space: pre-wrap;
   word-break: break-all;

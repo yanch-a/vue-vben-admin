@@ -148,21 +148,21 @@ const errors = computed(() => props.task?.errors || []);
   margin-bottom: 12px;
 }
 .label {
-  font-size: 13px;
+  font-size: var(--vc-ui-font-size, 13px);
   white-space: nowrap;
 }
 .meta {
   display: flex;
   justify-content: space-between;
   margin-bottom: 12px;
-  font-size: 13px;
+  font-size: var(--vc-ui-font-size, 13px);
 }
 .status {
   color: var(--el-text-color-secondary);
 }
 .detail {
   margin-top: 12px;
-  font-size: 13px;
+  font-size: var(--vc-ui-font-size, 13px);
   line-height: 1.7;
   color: var(--el-text-color-regular);
 }
@@ -177,10 +177,10 @@ const errors = computed(() => props.task?.errors || []);
 .err-title {
   font-weight: 600;
   margin-bottom: 6px;
-  font-size: 13px;
+  font-size: var(--vc-ui-font-size, 13px);
 }
 .err-item {
-  font-size: 12px;
+  font-size: var(--vc-ui-font-size-sm, 12px);
   line-height: 1.5;
   color: var(--el-color-danger);
   margin-bottom: 4px;

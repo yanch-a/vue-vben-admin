@@ -136,6 +136,7 @@ function onSqlAction(
   color: var(--el-text-color-secondary);
   text-align: center;
   padding: 32px 8px;
+  font-size: var(--vc-ai-font-size, 13px);
 }
 .msg.user {
   display: flex;
@@ -147,9 +148,10 @@ function onSqlAction(
   border-radius: 8px;
   padding: 8px 10px;
   white-space: pre-wrap;
+  font-size: var(--vc-ai-font-size, 13px);
 }
 .md {
-  font-size: 13px;
+  font-size: var(--vc-ai-font-size, 13px);
   line-height: 1.55;
   color: var(--el-text-color-primary);
   word-break: break-word;
@@ -165,7 +167,7 @@ function onSqlAction(
 }
 .md :deep(code) {
   font-family: ui-monospace, Consolas, monospace;
-  font-size: 12px;
+  font-size: var(--vc-ai-font-size-sm, 12px);
 }
 .md :deep(ul),
 .md :deep(ol) {
@@ -174,7 +176,7 @@ function onSqlAction(
 }
 .err {
   color: var(--el-color-danger);
-  font-size: 13px;
+  font-size: var(--vc-ai-font-size, 13px);
   margin-top: 6px;
 }
 .reason {
@@ -182,10 +184,10 @@ function onSqlAction(
 }
 .reason pre {
   white-space: pre-wrap;
-  font-size: 12px;
+  font-size: var(--vc-ai-font-size-sm, 12px);
 }
 .typing {
-  font-size: 12px;
+  font-size: var(--vc-ai-font-size-sm, 12px);
   color: var(--el-text-color-secondary);
 }
 </style>

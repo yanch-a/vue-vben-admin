@@ -23,7 +23,6 @@ const emit = defineEmits<{
   relation: [];
   /** 已保存查询文件管理 */
   savedQueries: [];
-  smart: [];
   copyTasks: [];
   /** 系统功能（导入/导出配置等） */
   system: [];
@@ -60,9 +59,6 @@ const emit = defineEmits<{
     </ElButton>
     <ElButton size="small" @click="emit('savedQueries')">
       查询文件
-    </ElButton>
-    <ElButton size="small" type="success" :disabled="!hasConnection" @click="emit('smart')">
-      智能生成 SQL
     </ElButton>
     <ElButton size="small" type="primary" :disabled="!hasConnection" @click="emit('ai')">
       AI 助手
@@ -114,7 +110,7 @@ const emit = defineEmits<{
 }
 .lic-hint {
   margin-left: 2px;
-  font-size: 12px;
+  font-size: var(--vc-ui-font-size-sm, 12px);
   color: var(--el-color-warning);
   font-weight: normal;
 }

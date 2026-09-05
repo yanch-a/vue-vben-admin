@@ -405,7 +405,7 @@ function statLine(key: string, stat: any) {
   margin-bottom: 4px;
 }
 .sys-item-desc {
-  font-size: 13px;
+  font-size: var(--vc-ui-font-size, 13px);
   color: var(--el-text-color-secondary);
 }
 .mb-3 {
@@ -413,7 +413,7 @@ function statLine(key: string, stat: any) {
 }
 .preview-box {
   width: 100%;
-  font-size: 13px;
+  font-size: var(--vc-ui-font-size, 13px);
   line-height: 1.6;
 }
 .preview-line {

@@ -267,7 +267,7 @@ async function onExport() {
   margin-bottom: 8px;
 }
 .label {
-  font-size: 13px;
+  font-size: var(--vc-ui-font-size, 13px);
   color: var(--el-text-color-regular);
   white-space: nowrap;
 }
@@ -298,7 +298,7 @@ async function onExport() {
 }
 .folder {
   margin: 4px 0;
-  font-size: 12px;
+  font-size: var(--vc-ui-font-size-sm, 12px);
   color: var(--el-text-color-secondary);
 }
 .opt-group {
@@ -315,7 +315,7 @@ async function onExport() {
 }
 .hint {
   margin-top: 16px;
-  font-size: 12px;
+  font-size: var(--vc-ui-font-size-sm, 12px);
   color: var(--el-text-color-secondary);
   line-height: 1.5;
 }

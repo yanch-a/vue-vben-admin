@@ -747,13 +747,13 @@ watch(
 <style scoped>
 .hint {
   margin-top: 8px;
-  font-size: 12px;
+  font-size: var(--vc-ui-font-size-sm, 12px);
   color: var(--el-text-color-secondary);
 }
 
 .tip {
   margin-left: 8px;
-  font-size: 12px;
+  font-size: var(--vc-ui-font-size-sm, 12px);
   color: var(--el-text-color-secondary);
 }
 
@@ -766,7 +766,7 @@ watch(
 
 .warn {
   width: 100%;
-  font-size: 12px;
+  font-size: var(--vc-ui-font-size-sm, 12px);
   line-height: 1.5;
   color: var(--el-color-warning);
 }

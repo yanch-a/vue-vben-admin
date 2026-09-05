@@ -1,7 +1,7 @@
 <script lang="ts" setup>
 /**
  * 数据库客户端主壳（SQLyog 风格）
- * - 顶栏：新建/打开连接、表分组、关系画布、智能 SQL
+ * - 顶栏：新建/打开连接、表分组、关系画布、AI 助手
  * - 连接 Tab：已打开的数据源会话
  * - 左：对象树（含 Queries 已保存查询）；右：多查询 Tab + 库下拉 + SQL 编辑器 + 结果区
  * @author yanch
@@ -40,7 +40,6 @@ import ObjectTree from './components/object-tree/ObjectTree.vue';
 import QueryTabs from './components/query/QueryTabs.vue';
 import ResultPanel from './components/query/ResultPanel.vue';
 import SqlEditor from './components/query/SqlEditor.vue';
-import SmartQueryDrawer from './components/SmartQueryDrawer.vue';
 import SqlDumpDialog from './components/SqlDumpDialog.vue';
 import CreateDatabaseDialog from './components/CreateDatabaseDialog.vue';
 import CopyDatabaseDialog from './components/CopyDatabaseDialog.vue';
@@ -53,7 +52,10 @@ import AiChatWindow from './components/ai/AiChatWindow.vue';
 import AiDockBar from './components/ai/AiDockBar.vue';
 import SchemaDocDrawer from './components/ai/SchemaDocDrawer.vue';
 import QueryHistoryDrawer from './components/ai/QueryHistoryDrawer.vue';
-import { useClientPreferences } from './composables/useClientPreferences';
+import {
+  bindVisualClientFontScope,
+  useClientPreferences,
+} from './composables/useClientPreferences';
 import { getLicenseStatus } from '#/api/visual/license';
 import { useConnectionStore } from './composables/useConnectionStore';
 import { useCopyTasks } from './composables/useCopyTasks';
@@ -125,6 +127,7 @@ const {
 
 const { queryTabsPlacement, queryTabsLeftWidth, TABS_LEFT_MIN, TABS_LEFT_MAX } =
   useClientPreferences();
+let unbindClientFontScope: (() => void) | undefined;
 
 const dialogVisible = ref(false);
 const dialogMode = ref<'create' | 'open'>('open');
@@ -133,7 +136,6 @@ const filterText = ref('');
 const leftWidth = ref(260);
 /** 结果区高度（可拖拽调整）；查询成功后默认按编辑器:结果 = 2:1 设置 */
 const resultHeight = ref(220);
-const smartVisible = ref(false);
 const systemFunctionsVisible = ref(false);
 const preferencesVisible = ref(false);
 const licenseVisible = ref(false);
@@ -1753,11 +1755,6 @@ async function refreshQueryResult(sql: string) {
   }
 }
 
-function onSmartSql(sql: string) {
-  const tab = openSqlInNewTab(sql, 'Smart SQL');
-  if (!tab) ElMessage.warning(`同一连接最多 ${MAX_TABS} 个查询编辑器`);
-}
-
 /** 打开复制任务列表面板 */
 async function onOpenCopyTasks() {
   await refreshCopyTasks();
@@ -1899,6 +1896,7 @@ function onTabsLeftSplitterUp() {
 }
 
 onMounted(() => {
+  unbindClientFontScope = bindVisualClientFontScope();
   nextTick(() => {
     void tryConsumePendingSavedQuery();
     void refreshLicenseStatus();
@@ -2088,6 +2086,7 @@ watch(
 );
 
 onBeforeUnmount(() => {
+  unbindClientFontScope?.();
   window.removeEventListener('keydown', onGlobalKeydown);
   onSplitterUp();
   onLeftSplitterUp();
@@ -2109,7 +2108,6 @@ onBeforeUnmount(() => {
         @group="goGroup"
         @relation="goRelation"
         @saved-queries="goSavedQueryManage"
-        @smart="smartVisible = true"
         @copy-tasks="onOpenCopyTasks"
         @system="onOpenSystemFunctions"
         @preferences="onOpenPreferences"
@@ -2438,12 +2436,6 @@ onBeforeUnmount(() => {
       </template>
     </ElDialog>
 
-    <SmartQueryDrawer
-      v-model="smartVisible"
-      :db-config-id="activeConnection?.id ?? null"
-      @open-sql="onSmartSql"
-    />
-
     <ElDialog
       v-model="promptDialog.visible"
       :title="promptDialog.title"
@@ -2500,6 +2492,7 @@ onBeforeUnmount(() => {
   flex-direction: column;
   height: 100%;
   background: var(--el-bg-color);
+  font-size: var(--vc-ui-font-size, 13px);
 }
 .workspace {
   display: flex;
@@ -2595,6 +2588,6 @@ onBeforeUnmount(() => {
   align-items: center;
   justify-content: center;
   color: var(--el-text-color-secondary);
-  font-size: 14px;
+  font-size: calc(var(--vc-ui-font-size, 13px) + 1px);
 }
 </style>
