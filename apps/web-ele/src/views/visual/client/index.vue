@@ -36,6 +36,7 @@ import type { TreeCtxAction } from './components/object-tree/ObjectTreeContextMe
 import ClientToolbar from './components/ClientToolbar.vue';
 import ConnectionDialog from './components/ConnectionDialog.vue';
 import ConnectionTabs from './components/ConnectionTabs.vue';
+import EmptyWorkspace from './components/EmptyWorkspace.vue';
 import ObjectTree from './components/object-tree/ObjectTree.vue';
 import QueryTabs from './components/query/QueryTabs.vue';
 import ResultPanel from './components/query/ResultPanel.vue';
@@ -2352,9 +2353,12 @@ onBeforeUnmount(() => {
           </div>
         </section>
       </div>
-      <div v-else class="empty-workspace">
-        从顶部「新建连接」或「打开连接」开始，像 SQLyog 一样工作。
-      </div>
+      <EmptyWorkspace
+        v-else
+        :active="!activeConnection"
+        @open="handleOpened"
+        @create="onCreateConnection"
+      />
       <AiDockBar />
     </div>
 
@@ -2607,13 +2611,5 @@ onBeforeUnmount(() => {
 .result-area {
   min-height: 100px;
   overflow: hidden;
-}
-.empty-workspace {
-  flex: 1;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: var(--el-text-color-secondary);
-  font-size: calc(var(--vc-ui-font-size, 13px) + 1px);
 }
 </style>

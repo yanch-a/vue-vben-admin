@@ -23,7 +23,7 @@ import {
   sendLoginCodeApi,
 } from '#/api';
 import { useAuthStore } from '#/store';
-import { branding } from '#/store/branding';
+import { branding, resolveAssetUrl } from '#/store/branding';
 
 defineOptions({ name: 'Login' });
 
@@ -399,46 +399,60 @@ onBeforeUnmount(() => {
 <template>
   <div class="lemon-login">
     <div class="lemon-login__card">
-      <h1 class="lemon-login__title">{{ branding.welcome || '欢迎登录' }}</h1>
+      <div class="lemon-login__mobile-brand">
+        <img
+          v-if="branding.logo"
+          alt="logo"
+          class="lemon-login__mobile-logo"
+          :src="resolveAssetUrl(branding.logo)"
+        />
+        <strong>{{ branding.accountMark || 'lemonDbClient' }}</strong>
+      </div>
+      <p class="lemon-login__hello">{{ branding.welcome || '欢迎回来' }}</p>
+      <h1 class="lemon-login__title">登录数据工作台</h1>
+      <p class="lemon-login__hint">
+        {{ loginType === 'admin' ? '管理员账号进入系统配置' : '会员账号进入查询与智能体' }}
+      </p>
 
-      <div class="lemon-login__tabs">
+      <div class="lemon-login__tabs" role="tablist">
         <button
           type="button"
           :class="{ active: loginType === 'member' }"
           @click="switchLoginType('member')"
         >
-          会员登录
+          会员
         </button>
         <button
           type="button"
           :class="{ active: loginType === 'admin' }"
           @click="switchLoginType('admin')"
         >
-          管理员登录
+          管理员
         </button>
       </div>
 
       <div v-if="loginType === 'member'" class="lemon-login__modes">
-        <span
+        <button
+          type="button"
           :class="{ active: authMode === 'password' }"
           @click="switchAuthMode('password')"
         >
-          密码登录
-        </span>
-        <span>|</span>
-        <span
+          密码
+        </button>
+        <button
+          type="button"
           :class="{ active: authMode === 'sms' }"
           @click="switchAuthMode('sms')"
         >
-          验证码登录
-        </span>
-        <span>|</span>
-        <span
+          验证码
+        </button>
+        <button
+          type="button"
           :class="{ active: authMode === 'wechat' }"
           @click="switchAuthMode('wechat')"
         >
-          微信扫码
-        </span>
+          微信
+        </button>
       </div>
 
       <div
@@ -540,7 +554,7 @@ onBeforeUnmount(() => {
           :loading="loading || authStore.loginLoading"
           @click="handleLogin"
         >
-          登录
+          进入工作台
         </ElButton>
       </ElForm>
     </div>
@@ -611,63 +625,93 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .lemon-login {
-  display: flex;
-  align-items: center;
-  justify-content: center;
   width: 100%;
-  min-height: 100%;
-  padding: 24px;
+  max-width: 400px;
 }
 
-.lemon-login__card {
-  width: 100%;
-  max-width: 420px;
+.lemon-login__mobile-brand {
+  display: none;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 18px;
+  font-size: 16px;
+}
+
+.lemon-login__mobile-logo {
+  width: 28px;
+  height: 28px;
+}
+
+@media (max-width: 959px) {
+  .lemon-login__mobile-brand {
+    display: flex;
+  }
+}
+
+.lemon-login__hello {
+  margin: 0 0 6px;
+  font-size: 13px;
+  color: hsl(var(--muted-foreground));
 }
 
 .lemon-login__title {
-  margin: 0 0 24px;
-  font-size: 28px;
-  font-weight: 600;
-  text-align: center;
+  margin: 0;
+  font-size: 26px;
+  font-weight: 680;
+  letter-spacing: -0.02em;
+}
+
+.lemon-login__hint {
+  margin: 8px 0 22px;
+  font-size: 13px;
+  color: hsl(var(--muted-foreground));
 }
 
 .lemon-login__tabs {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 8px;
-  margin-bottom: 16px;
+  padding: 4px;
+  margin-bottom: 14px;
+  background: hsl(var(--muted));
+  border-radius: 12px;
 }
 
 .lemon-login__tabs button {
-  height: 40px;
+  height: 36px;
+  font-size: 14px;
   cursor: pointer;
-  background: hsl(var(--muted));
-  border: 1px solid hsl(var(--border));
-  border-radius: 8px;
+  background: transparent;
+  border: 0;
+  border-radius: 9px;
 }
 
 .lemon-login__tabs button.active {
-  color: #fff;
-  background: hsl(var(--primary));
-  border-color: hsl(var(--primary));
+  font-weight: 650;
+  color: #1a1400;
+  background: #f2c14e;
+  box-shadow: 0 4px 12px rgb(242 193 78 / 28%);
 }
 
 .lemon-login__modes {
   display: flex;
   gap: 8px;
-  justify-content: center;
-  margin-bottom: 16px;
-  font-size: 14px;
-  color: hsl(var(--muted-foreground));
+  margin-bottom: 18px;
 }
 
-.lemon-login__modes span {
+.lemon-login__modes button {
+  height: 30px;
+  padding: 0 12px;
+  font-size: 13px;
   cursor: pointer;
+  background: transparent;
+  border: 1px solid hsl(var(--border));
+  border-radius: 999px;
 }
 
-.lemon-login__modes .active {
-  font-weight: 600;
-  color: hsl(var(--primary));
+.lemon-login__modes button.active {
+  color: #1a1400;
+  background: #f2c14e;
+  border-color: #f2c14e;
 }
 
 .lemon-login__wechat {
@@ -697,12 +741,12 @@ onBeforeUnmount(() => {
 
 .lemon-login__extra {
   display: flex;
-  justify-content: space-between;
-  margin-bottom: 8px;
+  justify-content: flex-end;
+  margin-bottom: 4px;
 }
 
 .privacy {
-  margin: 8px 0 16px;
+  margin: 4px 0 16px;
   font-size: 13px;
 }
 
@@ -713,6 +757,8 @@ onBeforeUnmount(() => {
 
 .submit {
   width: 100%;
+  height: 42px;
+  font-weight: 650;
 }
 
 .policy-content {

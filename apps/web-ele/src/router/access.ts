@@ -275,7 +275,11 @@ const COMPONENT_ALIASES: Record<string, string> = {
   '/visual/index': '/visual/client/index',
   '/ai/model': '/ai/model/index',
   '/ai/model/index': '/ai/model/index',
+  '/setting/parameter': '/setting/parameter/index',
   '/setting/parameter/index': '/setting/parameter/index',
+  '/setting/systemSetting': '/setting/systemSetting/index',
+  '/setting/systemSetting/index': '/setting/systemSetting/index',
+  '/setting/attachment': '/setting/attachment/index',
   '/setting/attachment/index': '/setting/attachment/index',
 };
 
@@ -285,6 +289,29 @@ function buildPageKeySet(pageMap: ComponentRecordType): Set<string> {
     keys.add(toPageKey(key));
   }
   return keys;
+}
+
+/**
+ * 解析实际存在的页面组件：别名 → 原路径 → 自动补 /index
+ * 菜单里常写成 /setting/systemSetting，真实文件是 /setting/systemSetting/index.vue
+ */
+function resolvePageComponent(
+  component: string,
+  pageKeys: Set<string>,
+): null | string {
+  const aliased = COMPONENT_ALIASES[component] || component;
+  const normalized = aliased.replace(/\/$/, '');
+  const candidates = [aliased, normalized];
+  if (!normalized.endsWith('/index')) {
+    candidates.push(`${normalized}/index`);
+  }
+  for (const item of candidates) {
+    const pageKey = toPageKey(item);
+    if (pageKey && pageKeys.has(pageKey)) {
+      return item.endsWith('.vue') ? item.replace(/\.vue$/, '') : item;
+    }
+  }
+  return null;
 }
 
 /**
@@ -312,8 +339,8 @@ function applyMissingComponentFallback(
       return route;
     }
 
-    const aliased = COMPONENT_ALIASES[component] || component;
-    if (typeof aliased !== 'string' || !aliased) {
+    const resolved = resolvePageComponent(component, pageKeys);
+    if (!resolved) {
       return {
         ...route,
         component: comingSoonComponent,
@@ -326,25 +353,10 @@ function applyMissingComponentFallback(
       };
     }
 
-    const pageKey = toPageKey(aliased);
-    if (!pageKey) {
+    if (resolved === component) {
       return route;
     }
-
-    if (pageKeys.has(pageKey)) {
-      return aliased === component ? route : { ...route, component: aliased };
-    }
-
-    return {
-      ...route,
-      component: comingSoonComponent,
-      meta: {
-        ...route.meta,
-        title:
-          route.meta?.title ?? String(route.name ?? route.path ?? '未命名'),
-        note: `missing:${component}`,
-      },
-    };
+    return { ...route, component: resolved };
   });
 }
 

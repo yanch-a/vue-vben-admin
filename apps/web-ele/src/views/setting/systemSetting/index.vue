@@ -5,7 +5,7 @@
  *
  * @author yanch
  */
-import { onMounted, reactive, ref } from 'vue';
+import { computed, onMounted, reactive, ref } from 'vue';
 
 import {
   ElButton,
@@ -41,8 +41,8 @@ function isBrandItem(item: SystemSettingItem) {
   return (item.configCode || '').startsWith(BRAND_PREFIX);
 }
 
-const brandConfigs = () => configs.filter(isBrandItem);
-const otherConfigs = () => configs.filter((item) => !isBrandItem(item));
+const brandConfigs = computed(() => configs.filter(isBrandItem));
+const otherConfigs = computed(() => configs.filter((item) => !isBrandItem(item)));
 
 async function initData() {
   loading.value = true;
@@ -97,7 +97,7 @@ onMounted(() => {
       <ElTabPane label="品牌与登录展示" name="brand">
         <ElRow :gutter="16">
           <ElCol
-            v-for="item in brandConfigs()"
+            v-for="item in brandConfigs"
             :key="item.configCode"
             :xs="24"
             :sm="24"
@@ -138,7 +138,7 @@ onMounted(() => {
           </ElCol>
         </ElRow>
         <ElEmpty
-          v-if="!brandConfigs().length"
+          v-if="!brandConfigs.length"
           description="暂无品牌配置，请先执行 doc/database/ui_brand_sys_setting.sql"
         />
       </ElTabPane>
@@ -146,7 +146,7 @@ onMounted(() => {
       <ElTabPane label="其他系统配置" name="other">
         <ElForm label-width="140px">
           <ElFormItem
-            v-for="item in otherConfigs()"
+            v-for="item in otherConfigs"
             :key="item.configCode"
             :label="item.configName"
           >
@@ -165,7 +165,7 @@ onMounted(() => {
           </ElFormItem>
         </ElForm>
         <div
-          v-if="!otherConfigs().length"
+          v-if="!otherConfigs.length"
           class="py-8 text-center text-gray-400"
         >
           暂无其他 type=1 配置

@@ -3,7 +3,7 @@
    * 菜单编辑抽屉：按 Vben 路由类型展示字段，不再保留旧 admin-plus 的来源/无分栏/单模块勾选
    * @author yanch
    */
-  import { defineComponent, inject, nextTick, reactive, toRefs } from 'vue'
+  import { computed, defineComponent, inject, nextTick, reactive, toRefs } from 'vue'
 
   import { doEdit, getById, getModules, getTree } from '@/api/menuManagement'
   import IconSelector from '@/components/IconSelector/index.vue'
@@ -211,6 +211,8 @@
         mountPickCode: '',
         treeSelectKey: 0,
         saving: false,
+        /** 打开弹窗时已落库的挂载快照，用来对比 Controller 里新增的 @Operation */
+        originalMounts: {},
       })
 
       const refreshFieldRules = () => {
@@ -341,11 +343,20 @@
           applyKind(state.form, 'page')
           state.isEdit = false
         }
+        snapshotOriginalMounts()
         state.visible = true
         state.treeData = []
         await nextTick()
         await Promise.all([fetchParentTree(), loadModules()])
         refreshFieldRules()
+      }
+
+      const snapshotOriginalMounts = () => {
+        const map = {}
+        for (const item of state.form.moduleMounts || []) {
+          map[item.moduleCode] = (item.operationCodes || []).map(String)
+        }
+        state.originalMounts = map
       }
 
       const close = () => {
@@ -356,6 +367,7 @@
         state.saving = false
         state.mountPickCode = ''
         state.uiType = 'page'
+        state.originalMounts = {}
       }
 
       const upsertMount = (moduleCode, operationCodes) => {
@@ -411,6 +423,69 @@
         upsertMount(moduleCode, checked ? Object.keys(ops) : [])
       }
 
+      const wasModuleMounted = (moduleCode) =>
+        Object.prototype.hasOwnProperty.call(state.originalMounts, moduleCode)
+
+      /** Controller 里有、上次保存时还没挂到本菜单的操作码 */
+      const getNewOpCodes = (moduleCode) => {
+        if (!wasModuleMounted(moduleCode)) return []
+        const saved = new Set(state.originalMounts[moduleCode] || [])
+        return Object.keys(getModuleOpsMap(moduleCode))
+          .map(String)
+          .filter((code) => !saved.has(code))
+      }
+
+      const isNewOp = (moduleCode, code) => getNewOpCodes(moduleCode).includes(String(code))
+
+      /** 代码里新增、当前表单也还没勾上的 */
+      const getPendingNewOpCodes = (moduleCode) => {
+        const current = new Set(
+          (
+            (state.form.moduleMounts || []).find((m) => m.moduleCode === moduleCode)
+              ?.operationCodes || []
+          ).map(String),
+        )
+        return getNewOpCodes(moduleCode).filter((code) => !current.has(code))
+      }
+
+      const mountNewOps = (moduleCode) => {
+        const extra = getPendingNewOpCodes(moduleCode)
+        if (!extra.length) return
+        const current =
+          (state.form.moduleMounts || []).find((m) => m.moduleCode === moduleCode)
+            ?.operationCodes || []
+        upsertMount(moduleCode, [...new Set([...current.map(String), ...extra])])
+      }
+
+      const moduleOptionLabel = (item) => {
+        const n = getPendingNewOpCodes(item.code).length
+        if (n > 0) return `${item.name} · ${n} 个未挂载`
+        return `${item.name} (${item.code})`
+      }
+
+      /** 下拉选中模块后的对照预览 */
+      const pickPreview = computed(() => {
+        const code = state.mountPickCode
+        if (!code) return null
+        const mod = state.modules.find((m) => m.code === code)
+        if (!mod) return null
+        const all = Object.entries(mod.operations || {}).map(([key, op]) => ({
+          code: String(key),
+          name: op?.name || key,
+        }))
+        const mounted = wasModuleMounted(code)
+        return {
+          name: mod.name,
+          code,
+          mounted,
+          total: all.length,
+          savedCount: mounted ? (state.originalMounts[code] || []).length : 0,
+          newOps: mounted
+            ? all.filter((op) => getPendingNewOpCodes(code).includes(op.code))
+            : all,
+        }
+      })
+
       const save = () => {
         refreshFieldRules()
         state.formRef.validate(async (valid) => {
@@ -453,6 +528,12 @@
         getModuleOpsMap,
         getModuleName,
         toggleMountAll,
+        getNewOpCodes,
+        getPendingNewOpCodes,
+        isNewOp,
+        mountNewOps,
+        moduleOptionLabel,
+        pickPreview,
       }
     },
   })
@@ -693,7 +774,7 @@
         <div class="mount-card__title">
           接口权限
           <el-tooltip
-            content="从后端 @Module 挂到本菜单。角色授权时勾选本菜单即可分配这些按钮权限。"
+            content="Controller 新增 @Operation 后，这里会标出未挂载项。勾选并保存后才写入。角色若要立刻拥有新权限，需到角色管理里再勾一次该菜单。"
             placement="top"
           >
             <el-icon><InfoFilled /></el-icon>
@@ -704,18 +785,77 @@
             v-model="mountPickCode"
             clearable
             filterable
-            placeholder="选择后端模块"
+            placeholder="选择后端模块，可对照新增接口"
             style="flex: 1"
           >
             <el-option
               v-for="item in modules"
               :key="item.code"
-              :label="`${item.name} (${item.code})`"
+              :label="moduleOptionLabel(item)"
               :value="item.code"
-            />
+            >
+              <span>{{ item.name }}</span>
+              <span class="op-code">{{ item.code }}</span>
+              <el-tag
+                v-if="getPendingNewOpCodes(item.code).length"
+                class="option-tag"
+                size="small"
+                type="warning"
+              >
+                {{ getPendingNewOpCodes(item.code).length }} 个未挂载
+              </el-tag>
+            </el-option>
           </el-select>
           <el-button type="primary" @click="addModuleMount(false)">挂载</el-button>
           <el-button @click="addModuleMount(true)">挂载并填名称</el-button>
+        </div>
+
+        <div v-if="pickPreview" class="mount-preview">
+          <template v-if="pickPreview.mounted">
+            <div class="mount-preview__title">
+              {{ pickPreview.name }} 已挂到本菜单
+              （上次 {{ pickPreview.savedCount }} 个 / 代码里 {{ pickPreview.total }} 个）
+            </div>
+            <el-alert
+              v-if="pickPreview.newOps.length"
+              :closable="false"
+              show-icon
+              type="warning"
+              :title="`有 ${pickPreview.newOps.length} 个新接口未挂载`"
+            />
+            <el-alert
+              v-else
+              :closable="false"
+              show-icon
+              type="success"
+              title="该模块没有未挂载的新接口"
+            />
+            <ul v-if="pickPreview.newOps.length" class="mount-preview__list">
+              <li v-for="op in pickPreview.newOps" :key="op.code">
+                {{ op.name }}
+                <span class="op-code">({{ op.code }})</span>
+              </li>
+            </ul>
+            <el-button
+              v-if="pickPreview.newOps.length"
+              size="small"
+              type="warning"
+              @click="mountNewOps(pickPreview.code)"
+            >
+              勾选这些新接口
+            </el-button>
+          </template>
+          <template v-else>
+            <div class="mount-preview__title">
+              {{ pickPreview.name }} 尚未挂到本菜单，共 {{ pickPreview.total }} 个接口
+            </div>
+            <ul class="mount-preview__list">
+              <li v-for="op in pickPreview.newOps" :key="op.code">
+                {{ op.name }}
+                <span class="op-code">({{ op.code }})</span>
+              </li>
+            </ul>
+          </template>
         </div>
 
         <el-empty
@@ -733,8 +873,23 @@
             <div>
               <strong>{{ getModuleName(mount.moduleCode) }}</strong>
               <span class="op-code">{{ mount.moduleCode }}</span>
+              <el-tag
+                v-if="getPendingNewOpCodes(mount.moduleCode).length"
+                size="small"
+                type="warning"
+              >
+                {{ getPendingNewOpCodes(mount.moduleCode).length }} 个未挂载
+              </el-tag>
             </div>
             <el-space>
+              <el-button
+                v-if="getPendingNewOpCodes(mount.moduleCode).length"
+                link
+                type="warning"
+                @click="mountNewOps(mount.moduleCode)"
+              >
+                勾选新增
+              </el-button>
               <el-button link type="primary" @click="toggleMountAll(mount.moduleCode, true)">
                 全选
               </el-button>
@@ -750,10 +905,14 @@
             <el-checkbox
               v-for="(op, key) in getModuleOpsMap(mount.moduleCode)"
               :key="String(key)"
+              :class="{ 'is-new-op': isNewOp(mount.moduleCode, key) }"
               :label="String(key)"
             >
               {{ op.name }}
               <span class="op-code">({{ key }})</span>
+              <el-tag v-if="isNewOp(mount.moduleCode, key)" size="small" type="warning">
+                新
+              </el-tag>
             </el-checkbox>
           </el-checkbox-group>
         </div>
@@ -875,5 +1034,38 @@
   margin-left: 6px;
   font-size: 12px;
   color: var(--el-text-color-secondary);
+}
+
+.option-tag {
+  margin-left: 8px;
+}
+
+.mount-preview {
+  padding: 10px 12px;
+  margin-bottom: 12px;
+  background: var(--el-fill-color-light);
+  border-radius: 6px;
+}
+
+.mount-preview__title {
+  margin-bottom: 8px;
+  font-size: 13px;
+  color: var(--el-text-color-regular);
+}
+
+.mount-preview__list {
+  padding-left: 18px;
+  margin: 8px 0;
+  font-size: 13px;
+}
+
+.mount-preview :deep(.el-alert) {
+  margin-bottom: 4px;
+}
+
+.is-new-op {
+  padding: 2px 6px;
+  background: var(--el-color-warning-light-9);
+  border-radius: 4px;
 }
 </style>

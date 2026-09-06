@@ -59,6 +59,9 @@ export const overridesPreferences = defineOverridesPreferences({
   },
   transition: {
     enable: false,
+    // enable 关掉后 loading/progress 仍会单独转圈，必须一并关
+    loading: false,
+    progress: false,
   },
   // 隐藏顶栏通知铃铛
   widget: {

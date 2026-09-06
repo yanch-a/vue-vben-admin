@@ -634,6 +634,7 @@ const keyFields = computed(() => {
 <style scoped>
 .scope {
   display: flex;
+  flex-shrink: 0;
   align-items: center;
   gap: 8px;
   margin-bottom: 8px;
@@ -647,16 +648,18 @@ const keyFields = computed(() => {
 }
 .bar {
   display: flex;
+  flex-shrink: 0;
   flex-wrap: wrap;
   gap: 6px;
   margin-bottom: 8px;
 }
+/* 占满抽屉剩余高度，避免 calc(100vh - N) 留下底部空白 */
 .body {
   display: grid;
   grid-template-columns: 280px 1fr;
   gap: 12px;
-  height: calc(100vh - 260px);
-  min-height: 360px;
+  flex: 1 1 auto;
+  min-height: 0;
 }
 .left,
 .right {
@@ -664,11 +667,16 @@ const keyFields = computed(() => {
   overflow: auto;
 }
 .left {
+  display: flex;
+  flex-direction: column;
   padding-right: 8px;
   border-right: 1px solid var(--el-border-color-lighter);
 }
 .table-tree {
+  flex: 1 1 auto;
+  min-height: 0;
   margin-top: 8px;
+  overflow: auto;
 }
 .left-empty {
   margin-top: 16px;
@@ -683,7 +691,10 @@ const keyFields = computed(() => {
   margin: 6px 0;
 }
 .cov {
+  flex-shrink: 0;
   margin-top: 8px;
+  padding-top: 6px;
+  border-top: 1px solid var(--el-border-color-lighter);
   font-size: var(--vc-ui-font-size-sm, 12px);
   color: var(--el-text-color-secondary);
 }
@@ -719,9 +730,21 @@ const keyFields = computed(() => {
   background: var(--el-fill-color-light);
   color: var(--el-color-primary);
 }
-.schema-doc-drawer .el-drawer__body {
+/* 收紧标题与「当前目标」间距，正文区用 flex 铺满到底 */
+.schema-doc-drawer.el-drawer {
   display: flex;
   flex-direction: column;
+}
+.schema-doc-drawer .el-drawer__header {
+  margin-bottom: 0;
+  padding: 12px 16px 8px;
+}
+.schema-doc-drawer .el-drawer__body {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+  padding: 8px 16px 12px;
   overflow: hidden;
 }
 </style>
