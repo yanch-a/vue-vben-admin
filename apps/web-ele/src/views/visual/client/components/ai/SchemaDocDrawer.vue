@@ -7,6 +7,7 @@
  * - selectInstance → onSelectInstance：编辑器实例下拉跟随
  * - openSql → onSchemaDocOpenSql：新开查询 Tab
  *
+ * 耗时任务（初始化/生成/分析）提交后走右上角后台任务面板，不再在抽屉里轮询。
  * 后端：/admin/aiSchemaDoc/* ；记忆面板：/admin/aiAgentMemory/*
  * @author yanch
  */
@@ -17,7 +18,6 @@ import { ElMessage, ElMessageBox } from 'element-plus';
 
 import { listSelectableModels } from '#/api/ai/model';
 import {
-  cancelSchemaDocTask,
   digestAgentMemory,
   exportSchemaDoc,
   extractSchemaDocTaskId,
@@ -29,12 +29,12 @@ import {
   saveSchemaDoc,
   schemaDocDrift,
   schemaDocHistory,
-  schemaDocTask,
   schemaDocTree,
   unlockSchemaDoc,
   analyzeHistory,
 } from '#/api/ai/schemaDoc';
 import { getInstances } from '#/api/visual/database';
+import { useClientTasks } from '../../composables/useClientTasks';
 
 defineOptions({ name: 'SchemaDocDrawer' });
 
@@ -66,7 +66,6 @@ const memoryPair = ref<any>(null);
 const editing = ref(false);
 const editMd = ref('');
 const history = ref<any[]>([]);
-const task = ref<any>(null);
 const models = ref<any[]>([]);
 const modelId = ref<any>();
 const selectedInstance = ref('');
@@ -80,7 +79,9 @@ const ctxMenu = reactive({
   y: 0,
   table: null as any,
 });
-let poll: any = null;
+/** 本抽屉提交过的 taskId，完成后刷新左侧树 */
+const submittedTaskIds = new Set<string>();
+const { trackSchema, tasks: clientTasks } = useClientTasks();
 
 const instLabel = computed(() => props.instanceLabel || '实例');
 const instanceList = computed(() => {
@@ -246,14 +247,20 @@ async function doInit() {
       dbConfigId: props.dbConfigId!,
       instanceName: selectedInstance.value,
     });
-    const r = unwrap(res) || {};
-    const name = r.dbName || props.connLabel || '';
-    ElMessage.success(
-      `已初始化「${name} / ${r.instanceName || selectedInstance.value}」：表 ${r.tables || 0}，新建 ${r.created || 0}，已有跳过 ${r.skipped || 0}${r.canvasUsed ? '（已吸收画布关联）' : ''}`,
-    );
-    await loadTree();
+    const taskId = extractSchemaDocTaskId(res);
+    if (!taskId) {
+      ElMessage.error('已提交但未拿到任务编号，请查看后台日志');
+      return;
+    }
+    submittedTaskIds.add(taskId);
+    await trackSchema(taskId, {
+      kind: 'SCHEMA_INIT',
+      title: '初始化骨架',
+      subtitle: currentScopeText.value,
+    });
+    ElMessage.success(`已提交初始化（${currentScopeText.value}），进度见右上角`);
   } catch (e: any) {
-    ElMessage.error(e?.message || e?.msg || '初始化失败');
+    ElMessage.error(e?.message || e?.msg || '提交初始化失败');
   } finally {
     initLoading.value = false;
   }
@@ -291,8 +298,13 @@ async function startGen(mode: 'FULL' | 'INCREMENTAL' | 'TABLES', tables?: string
     }
     const label =
       mode === 'FULL' ? '全量生成' : mode === 'INCREMENTAL' ? '增量更新' : `生成表 ${picked?.join(', ')}`;
-    ElMessage.success(`已提交「${label}」任务（${currentScopeText.value}）`);
-    startPoll(taskId);
+    submittedTaskIds.add(taskId);
+    await trackSchema(taskId, {
+      kind: 'SCHEMA_GENERATE',
+      title: label,
+      subtitle: currentScopeText.value,
+    });
+    ElMessage.success(`已提交「${label}」（${currentScopeText.value}），进度见右上角`);
   } catch (e: any) {
     ElMessage.error(e?.message || e?.msg || '提交生成任务失败');
   } finally {
@@ -317,50 +329,40 @@ async function doAnalyze() {
       ElMessage.error('分析任务未返回编号');
       return;
     }
-    ElMessage.success('已提交查询历史分析');
-    startPoll(taskId);
+    submittedTaskIds.add(taskId);
+    await trackSchema(taskId, {
+      kind: 'SCHEMA_ANALYZE',
+      title: '分析查询历史',
+      subtitle: currentScopeText.value,
+    });
+    ElMessage.success('已提交查询历史分析，进度见右上角');
   } catch (e: any) {
     ElMessage.error(e?.message || e?.msg || '分析失败');
   }
 }
 
-function startPoll(taskId: string) {
-  // 历史上 String(res) 会把整个对象拼进 /task/object,object；这里拦掉脏 id
-  if (!taskId || taskId.includes('[object') || taskId.includes(',')) {
-    ElMessage.error(`任务编号异常：${taskId}`);
-    return;
-  }
-  stopPoll();
-  task.value = { taskId, status: 'PENDING', done: 0, total: 0, message: '排队中' };
-  const tick = async () => {
-    try {
-      const res: any = await schemaDocTask(taskId);
-      task.value = unwrap(res);
-      const st = task.value?.status;
-      if (['SUCCESS', 'PARTIAL', 'FAILED', 'CANCELLED'].includes(st)) {
-        stopPoll();
-        if (st === 'SUCCESS') ElMessage.success(task.value?.message || '任务完成');
-        else if (st === 'PARTIAL') ElMessage.warning(task.value?.message || '部分完成');
-        else if (st === 'FAILED') ElMessage.error(task.value?.message || '任务失败');
+watch(
+  clientTasks,
+  (list) => {
+    // 本抽屉提交的任务一旦终态，刷新左侧树（进度本身在右上角面板）
+    let needReload = false;
+    for (const t of list) {
+      if (t.source !== 'schema' || !submittedTaskIds.has(t.id)) continue;
+      if (['SUCCESS', 'PARTIAL', 'FAILED', 'CANCELLED'].includes(t.status)) {
+        submittedTaskIds.delete(t.id);
+        if (t.status === 'SUCCESS') ElMessage.success(t.message || '任务完成');
+        else if (t.status === 'PARTIAL') ElMessage.warning(t.message || '部分完成');
+        else if (t.status === 'FAILED') ElMessage.error(t.message || '任务失败');
         else ElMessage.info('任务已取消');
-        await loadTree();
+        needReload = true;
       }
-    } catch (e: any) {
-      stopPoll();
-      ElMessage.error(e?.message || e?.msg || '查询任务进度失败');
     }
-  };
-  void tick();
-  // 立刻打一次，再每 2s 轮询；终态在 tick 里 stopPoll
-  poll = setInterval(tick, 2000);
-}
-function stopPoll() {
-  if (poll) clearInterval(poll);
-  poll = null;
-}
+    if (needReload && visible.value) void loadTree();
+  },
+  { deep: true },
+);
 
 onBeforeUnmount(() => {
-  stopPoll();
   hideCtx();
 });
 
@@ -508,12 +510,6 @@ const keyFields = computed(() => {
     return [];
   }
 });
-const taskPercent = computed(() => {
-  const t = task.value;
-  // total=0（排队/无目标表）时不能除；成功直接 100，其余显示 0
-  if (!t?.total) return t?.status === 'SUCCESS' ? 100 : 0;
-  return Math.min(100, Math.round((t.done / t.total) * 100));
-});
 </script>
 
 <template>
@@ -556,22 +552,6 @@ const taskPercent = computed(() => {
       <ElButton size="small" @click="refreshMemory">刷新记忆</ElButton>
       <ElButton size="small" @click="doExport">导出 .md</ElButton>
       <ElButton size="small" type="success" @click="askAi()">问 AI</ElButton>
-      <ElButton
-        v-if="task && ['PENDING', 'RUNNING'].includes(task.status)"
-        size="small"
-        type="danger"
-        @click="cancelSchemaDocTask(task.taskId)"
-      >
-        取消任务
-      </ElButton>
-    </div>
-    <div v-if="task" class="task-bar">
-      <ElProgress :percentage="taskPercent" :status="task.status === 'FAILED' ? 'exception' : undefined" />
-      <span class="task-msg">
-        {{ task.status }} {{ task.message || '' }}
-        <template v-if="task.currentTable"> · {{ task.currentTable }}</template>
-        <template v-if="task.total"> · {{ task.done }}/{{ task.total }}</template>
-      </span>
     </div>
     <div class="body">
       <div class="left">
@@ -670,15 +650,6 @@ const taskPercent = computed(() => {
   flex-wrap: wrap;
   gap: 6px;
   margin-bottom: 8px;
-}
-.task-bar {
-  margin-bottom: 8px;
-}
-.task-msg {
-  display: block;
-  margin-top: 4px;
-  font-size: var(--vc-ui-font-size-sm, 12px);
-  color: var(--el-text-color-secondary);
 }
 .body {
   display: grid;

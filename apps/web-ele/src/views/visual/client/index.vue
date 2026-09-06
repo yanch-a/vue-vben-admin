@@ -43,7 +43,7 @@ import SqlEditor from './components/query/SqlEditor.vue';
 import SqlDumpDialog from './components/SqlDumpDialog.vue';
 import CreateDatabaseDialog from './components/CreateDatabaseDialog.vue';
 import CopyDatabaseDialog from './components/CopyDatabaseDialog.vue';
-import CopyTaskProgressPanel from './components/CopyTaskProgressPanel.vue';
+import ClientTaskPanel from './components/ClientTaskPanel.vue';
 import SystemFunctionsDialog from './components/SystemFunctionsDialog.vue';
 import TableInfoDialog from './components/TableInfoDialog.vue';
 import ClientPreferencesDialog from './components/ClientPreferencesDialog.vue';
@@ -58,7 +58,7 @@ import {
 } from './composables/useClientPreferences';
 import { getLicenseStatus } from '#/api/visual/license';
 import { useConnectionStore } from './composables/useConnectionStore';
-import { useCopyTasks } from './composables/useCopyTasks';
+import { useClientTasks } from './composables/useClientTasks';
 import { setupClientSessionPersist } from './composables/useClientSessionPersist';
 import { notifyClientSessionChange } from './composables/clientSessionNotify';
 import {
@@ -101,16 +101,17 @@ const {
 } = useConnectionStore();
 
 const {
-  tasks: copyTasks,
-  activeTask: copyActiveTask,
-  progressVisible: copyProgressVisible,
-  runningCount: copyRunningCount,
-  onTaskStarted,
-  openTask: openCopyTask,
-  hideProgress: hideCopyProgress,
-  cancelActive: cancelCopyTask,
-  refreshList: refreshCopyTasks,
-} = useCopyTasks();
+  runningTasks,
+  doneTasks,
+  runningCount,
+  panelVisible,
+  activeTab: taskPanelTab,
+  bootstrap: bootstrapTasks,
+  dispose: disposeTasks,
+  trackCopy,
+  cancel: cancelClientTask,
+  togglePanel: toggleTaskPanel,
+} = useClientTasks();
 
 const {
   MAX_TABS,
@@ -1755,33 +1756,17 @@ async function refreshQueryResult(sql: string) {
   }
 }
 
-/** 打开复制任务列表面板 */
-async function onOpenCopyTasks() {
-  await refreshCopyTasks();
-  if (!copyTasks.value.length) {
-    ElMessage.info('暂无复制任务');
-    return;
-  }
-  const running = copyTasks.value.find(
-    (t) => t.status === 'PENDING' || t.status === 'RUNNING',
-  );
-  const first = running || copyTasks.value[0];
-  if (!first?.taskId) {
-    ElMessage.info('暂无复制任务');
-    return;
-  }
-  openCopyTask(first.taskId);
+/** 打开右上角后台任务面板（复制 + 结构文档） */
+function onOpenTaskPanel() {
+  toggleTaskPanel();
 }
 
-async function onCancelCopyTask() {
+async function onCancelClientTask(task: Parameters<typeof cancelClientTask>[0]) {
   try {
-    await ElMessageBox.confirm('确认取消当前复制任务？', '取消确认', {
-      type: 'warning',
-    });
-    await cancelCopyTask();
+    await cancelClientTask(task);
     ElMessage.success('已请求取消');
-  } catch {
-    /* 用户取消确认框 */
+  } catch (e: any) {
+    ElMessage.error(e?.message || '取消失败');
   }
 }
 
@@ -1900,6 +1885,7 @@ onMounted(() => {
   nextTick(() => {
     void tryConsumePendingSavedQuery();
     void refreshLicenseStatus();
+    void bootstrapTasks();
   });
   window.addEventListener('keydown', onGlobalKeydown);
 });
@@ -2109,6 +2095,7 @@ onBeforeUnmount(() => {
   onLeftSplitterUp();
   onTabsLeftSplitterUp();
   sessionPersist.stop();
+  disposeTasks();
 });
 </script>
 
@@ -2117,7 +2104,7 @@ onBeforeUnmount(() => {
     <div class="db-client">
       <ClientToolbar
         :has-connection="hasConnection"
-        :copy-task-count="copyRunningCount"
+        :task-count="runningCount"
         :license-hint="licenseHint"
         @create="onCreateConnection"
         @open="onOpenConnection"
@@ -2125,7 +2112,7 @@ onBeforeUnmount(() => {
         @group="goGroup"
         @relation="goRelation"
         @saved-queries="goSavedQueryManage"
-        @copy-tasks="onOpenCopyTasks"
+        @progress="onOpenTaskPanel"
         @system="onOpenSystemFunctions"
         @preferences="onOpenPreferences"
         @license="onOpenLicense"
@@ -2413,16 +2400,15 @@ onBeforeUnmount(() => {
       :source-instance="copyDb.instanceName"
       :preselected-tables="copyDb.preselectedTables"
       :open-connections="openConnections"
-      @started="onTaskStarted"
+      @started="trackCopy"
     />
 
-    <CopyTaskProgressPanel
-      v-model="copyProgressVisible"
-      :task="copyActiveTask"
-      :tasks="copyTasks"
-      @hide="hideCopyProgress"
-      @cancel="onCancelCopyTask"
-      @select="openCopyTask"
+    <ClientTaskPanel
+      v-model="panelVisible"
+      v-model:tab="taskPanelTab"
+      :running="runningTasks"
+      :done="doneTasks"
+      @cancel="onCancelClientTask"
     />
 
     <ElDialog

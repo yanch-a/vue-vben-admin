@@ -60,6 +60,11 @@ export function schemaDocTask(taskId: string) {
   return request({ url: url + 'task/' + taskId, method: 'get' });
 }
 
+/** 当前用户结构文档任务（进行中 + 缓存里近 7 天已完成） */
+export function schemaDocTaskList() {
+  return request({ url: url + 'task/list', method: 'get' });
+}
+
 export function cancelSchemaDocTask(taskId: string) {
   return request({ url: url + 'task/cancel/' + taskId, method: 'post' });
 }
@@ -83,15 +88,17 @@ export function extractSchemaDocTaskId(res: any): string {
   // 最多剥 4 层 { data: { data: ... } }，防循环引用死转
   for (let i = 0; i < 4; i++) {
     if (v == null) return '';
-    if (typeof v === 'string' || typeof v === 'number') {
-      const s = String(v).trim();
-      // String(整个响应对象) 会变成 "[object Object]"，绝不能当 taskId
-      if (!s || s === 'undefined' || s === 'null' || s.includes('[object')) return '';
-      return s;
-    }
+    const fromScalar = asTaskId(v);
+    if (fromScalar) return fromScalar;
     if (typeof v === 'object') {
-      if (v.taskId != null && typeof v.taskId !== 'object') return String(v.taskId);
-      if (v.data !== undefined && v.data !== v) {
+      if (v.taskId != null && typeof v.taskId !== 'object') {
+        const s = asTaskId(v.taskId);
+        if (s) return s;
+      }
+      // R.ok(String) 重载会把 taskId 写进 msg、data 为空，这里兜底
+      const fromMsg = asTaskId(v.msg);
+      if (fromMsg) return fromMsg;
+      if (v.data !== undefined && v.data !== v && v.data != null) {
         v = v.data;
         continue;
       }
@@ -99,6 +106,15 @@ export function extractSchemaDocTaskId(res: any): string {
     return '';
   }
   return '';
+}
+
+/** 只接受像 UUID/无横线 hex 的任务号，避免把「操作成功」当 taskId */
+function asTaskId(v: any): string {
+  if (v == null || typeof v === 'object') return '';
+  const s = String(v).trim();
+  if (!s || s === 'undefined' || s === 'null' || s.includes('[object')) return '';
+  if (!/^[a-zA-Z0-9-]{8,64}$/.test(s)) return '';
+  return s;
 }
 
 export function getAgentMemoryPair(params: { dbConfigId: number | string; instanceName: string }) {

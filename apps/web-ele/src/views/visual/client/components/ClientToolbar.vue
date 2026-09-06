@@ -9,8 +9,8 @@ defineOptions({ name: 'ClientToolbar' });
 
 defineProps<{
   hasConnection: boolean;
-  /** 运行中的复制任务数（角标） */
-  copyTaskCount?: number;
+  /** 运行中的后台任务数（角标） */
+  taskCount?: number;
   /** 授权状态短提示（试用剩余 / 已授权） */
   licenseHint?: string;
 }>();
@@ -23,7 +23,8 @@ const emit = defineEmits<{
   relation: [];
   /** 已保存查询文件管理 */
   savedQueries: [];
-  copyTasks: [];
+  /** 打开右上角任务进度 */
+  progress: [];
   /** 系统功能（导入/导出配置等） */
   system: [];
   /** 偏好设置（Tabs 位置等） */
@@ -69,19 +70,6 @@ const emit = defineEmits<{
     <ElButton size="small" :disabled="!hasConnection" @click="emit('history')">
       查询历史
     </ElButton>
-    <ElBadge
-      :value="copyTaskCount || 0"
-      :hidden="!copyTaskCount"
-      class="copy-badge"
-    >
-      <ElButton
-        size="small"
-        :type="copyTaskCount ? 'warning' : 'default'"
-        @click="emit('copyTasks')"
-      >
-        复制任务
-      </ElButton>
-    </ElBadge>
     <ElDivider direction="vertical" />
     <ElButton size="small" @click="emit('system')">
       系统功能
@@ -93,6 +81,19 @@ const emit = defineEmits<{
       授权
       <span v-if="licenseHint" class="lic-hint">（{{ licenseHint }}）</span>
     </ElButton>
+    <ElBadge
+      :value="taskCount || 0"
+      :hidden="!taskCount"
+      class="task-badge"
+    >
+      <ElButton
+        size="small"
+        :type="taskCount ? 'warning' : 'default'"
+        @click="emit('progress')"
+      >
+        进度
+      </ElButton>
+    </ElBadge>
   </div>
 </template>
 
@@ -105,7 +106,7 @@ const emit = defineEmits<{
   border-bottom: 1px solid var(--el-border-color);
   background: var(--el-bg-color);
 }
-.copy-badge {
+.task-badge {
   margin-left: 4px;
 }
 .lic-hint {

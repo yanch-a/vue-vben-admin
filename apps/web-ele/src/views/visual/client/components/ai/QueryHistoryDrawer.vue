@@ -1,15 +1,15 @@
 <script lang="ts" setup>
 /**
  * 查询历史抽屉：GET /admin/sqlHistory/page。
- * 「分析查询历史」提交 POST /aiSchemaDoc/analyzeHistory 后只提示去结构文档看进度，
- * 本抽屉不轮询 task（与 SchemaDocDrawer.startPoll 分开）。
+ * 「分析查询历史」提交后交给右上角后台任务面板轮询。
  * @author yanch
  */
 import { computed, reactive, ref, watch } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 
 import { listSelectableModels } from '#/api/ai/model';
-import { analyzeHistory } from '#/api/ai/schemaDoc';
+import { analyzeHistory, extractSchemaDocTaskId } from '#/api/ai/schemaDoc';
+import { useClientTasks } from '../../composables/useClientTasks';
 import { clearSqlHistory, deleteSqlHistory, pageSqlHistory } from '#/api/ai/sqlHistory';
 
 defineOptions({ name: 'QueryHistoryDrawer' });
@@ -41,6 +41,7 @@ const total = ref(0);
 const selected = ref<any[]>([]);
 const models = ref<any[]>([]);
 const modelId = ref<any>();
+const { trackSchema } = useClientTasks();
 
 async function load() {
   if (!props.dbConfigId) return;
@@ -80,13 +81,23 @@ async function onAnalyze() {
     return;
   }
   const ids = selected.value.map((r) => r.id);
-  await analyzeHistory({
+  const res: any = await analyzeHistory({
     dbConfigId: props.dbConfigId!,
     instanceName: props.instanceName!,
     modelId: modelId.value,
     historyIds: ids,
   });
-  ElMessage.success('已提交任务，可在结构文档抽屉查看进度');
+  const taskId = extractSchemaDocTaskId(res);
+  if (!taskId) {
+    ElMessage.error('已提交但未拿到任务编号');
+    return;
+  }
+  await trackSchema(taskId, {
+    kind: 'SCHEMA_ANALYZE',
+    title: '分析查询历史',
+    subtitle: props.instanceName || '',
+  });
+  ElMessage.success('已提交分析，进度见右上角');
 }
 
 async function copySql(sql: string) {
