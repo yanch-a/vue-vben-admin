@@ -1,45 +1,38 @@
 <script>
+  /**
+   * 菜单编辑抽屉：按 Vben 路由类型展示字段，不再保留旧 admin-plus 的来源/无分栏/单模块勾选
+   * @author yanch
+   */
   import { defineComponent, inject, nextTick, reactive, toRefs } from 'vue'
 
   import { doEdit, getById, getModules, getTree } from '@/api/menuManagement'
   import IconSelector from '@/components/IconSelector/index.vue'
-  import { activeValue, getDictData } from '@/utils/convert'
+  import { activeValue } from '@/utils/convert'
   import { InfoFilled } from '@element-plus/icons-vue'
 
-  function toMenuTypeOptions() {
-    const data = getDictData('menuType')?.data || {
-      M: '目录',
-      C: '菜单',
-      F: '按钮',
-    }
-    return Object.entries(data).map(([value, label]) => ({
-      value,
-      label,
-    }))
-  }
+  const KIND_OPTIONS = [
+    { key: 'catalog', label: '目录', desc: '侧栏分组，不挂页面' },
+    { key: 'page', label: '页面', desc: '对应 views 下的 Vue 文件' },
+    { key: 'link', label: '外链', desc: '新窗口打开 http 地址' },
+    { key: 'iframe', label: '内嵌', desc: '在系统内嵌外部页面' },
+  ]
 
   function createDefaultForm() {
     return {
-      visible: activeValue.active,
-      isCache: activeValue.active,
-      isFrame: activeValue.inActive,
-      noColumn: activeValue.inActive,
-      orderNum: 10,
       menuType: 'C',
-      // 默认自定义菜单：页面路由与权限模块解耦，通过「接口权限挂载」绑定
-      sysSelect: 0,
-      operations: [],
-      moduleMounts: [],
-      icon: '',
-      activeIcon: '',
       parentId: 0,
-      parentName: '',
       menuName: '',
       name: '',
       path: '',
       component: '',
       queryParam: '',
+      orderNum: 10,
       remark: '',
+      icon: '',
+      activeIcon: '',
+      visible: activeValue.active,
+      isCache: activeValue.active,
+      isFrame: activeValue.inActive,
       redirect: '',
       activePath: '',
       iframeSrc: '',
@@ -51,6 +44,7 @@
       hideInBreadcrumb: activeValue.inActive,
       hideChildrenInMenu: activeValue.inActive,
       openInNewWindow: activeValue.inActive,
+      moduleMounts: [],
     }
   }
 
@@ -59,10 +53,58 @@
     return Number(val)
   }
 
-  /** 后端常把数字字段序列化成字符串，导致 el-select / switch 对不上 */
+  function resolveKind(form) {
+    if (form.menuType === 'M') return 'catalog'
+    if (form.menuType === 'F') return 'button'
+    if (Number(form.isFrame) === 1) return 'link'
+    if (form.iframeSrc) return 'iframe'
+    return 'page'
+  }
+
+  function applyKind(form, kind) {
+    if (kind === 'catalog') {
+      form.menuType = 'M'
+      form.isFrame = activeValue.inActive
+      form.iframeSrc = ''
+      form.component = ''
+    } else if (kind === 'link') {
+      form.menuType = 'C'
+      form.isFrame = activeValue.active
+      form.iframeSrc = ''
+      form.component = ''
+      if (!form.openInNewWindow) form.openInNewWindow = activeValue.active
+    } else if (kind === 'iframe') {
+      form.menuType = 'C'
+      form.isFrame = activeValue.inActive
+      form.component = ''
+    } else if (kind === 'button') {
+      form.menuType = 'F'
+      form.isFrame = activeValue.inActive
+      form.component = ''
+    } else {
+      form.menuType = 'C'
+      form.isFrame = activeValue.inActive
+    }
+  }
+
+  /** path 末段转 PascalCase，用作路由 name 初值 */
+  function pathToRouteName(path) {
+    const raw = String(path || '')
+      .replace(/^https?:\/\//i, '')
+      .split(/[/?#]/)
+      .filter(Boolean)
+      .pop()
+    if (!raw) return ''
+    return raw
+      .replace(/[^a-zA-Z0-9]+/g, ' ')
+      .trim()
+      .split(/\s+/)
+      .map((s) => s.charAt(0).toUpperCase() + s.slice(1))
+      .join('')
+  }
+
   function normalizeMenuForm(data) {
     const form = { ...createDefaultForm(), ...data }
-    form.sysSelect = Number(form.sysSelect ?? 1)
     form.parentId =
       form.parentId === null || form.parentId === undefined || form.parentId === ''
         ? 0
@@ -71,7 +113,6 @@
     form.visible = toFlag(form.visible, activeValue.active)
     form.isCache = toFlag(form.isCache, activeValue.active)
     form.isFrame = toFlag(form.isFrame, activeValue.inActive)
-    form.noColumn = toFlag(form.noColumn, activeValue.inActive)
     form.affixTab = toFlag(form.affixTab, activeValue.inActive)
     form.hideInTab = toFlag(form.hideInTab, activeValue.inActive)
     form.hideInBreadcrumb = toFlag(form.hideInBreadcrumb, activeValue.inActive)
@@ -84,9 +125,6 @@
     form.badge = form.badge || ''
     form.badgeType = form.badgeType || ''
     form.badgeVariants = form.badgeVariants || ''
-    form.operations = Array.isArray(form.operations)
-      ? form.operations.map(String)
-      : []
     form.moduleMounts = Array.isArray(form.moduleMounts)
       ? form.moduleMounts.map((m) => ({
           moduleCode: m.moduleCode,
@@ -98,9 +136,44 @@
     return form
   }
 
+  function normalizeTreeNodes(nodes) {
+    if (!Array.isArray(nodes)) return []
+    return nodes.map((n) => ({
+      ...n,
+      menuId: Number(n.menuId),
+      parentId:
+        n.parentId === null || n.parentId === undefined || n.parentId === ''
+          ? 0
+          : Number(n.parentId),
+      children: normalizeTreeNodes(n.children || []),
+    }))
+  }
+
+  function collectIds(node, set) {
+    set.add(Number(node.menuId))
+    ;(node.children || []).forEach((c) => collectIds(c, set))
+  }
+
+  function findNode(nodes, id) {
+    for (const n of nodes || []) {
+      if (Number(n.menuId) === Number(id)) return n
+      const hit = findNode(n.children || [], id)
+      if (hit) return hit
+    }
+    return null
+  }
+
+  function applyDisabled(nodes, banned) {
+    return (nodes || []).map((n) => ({
+      ...n,
+      disabled: banned.has(Number(n.menuId)),
+      children: applyDisabled(n.children || [], banned),
+    }))
+  }
+
   export default defineComponent({
     name: 'MenuManagementEdit',
-    components: { IconSelector, InfoFilled },
+    components: { IconSelector },
     emits: ['fetchData'],
     setup(_props, { emit }) {
       const $baseMessage = inject('$baseMessage')
@@ -112,153 +185,193 @@
           children: 'children',
           label: 'menuName',
           value: 'menuId',
+          disabled: 'disabled',
         },
-        menuTypeOptions: toMenuTypeOptions(),
         form: createDefaultForm(),
+        uiType: 'page',
         rules: {
           parentId: [
-            { required: true, trigger: 'change', message: '请选择父级菜单' },
+            { required: true, trigger: 'change', message: '请选择上级菜单' },
           ],
           menuName: [
             { required: true, trigger: 'blur', message: '请输入菜单名称' },
           ],
-          name: [{ required: true, trigger: 'blur', message: '请输入 name' }],
-          menuType: [
-            { required: true, trigger: 'change', message: '请选择菜单类型' },
-          ],
-          sysSelect: [
-            { required: true, trigger: 'change', message: '请选择菜单来源' },
+          name: [
+            { required: true, trigger: 'blur', message: '请输入路由 name' },
           ],
           path: [],
           component: [],
-        },
-        componentValid: {
-          required: true,
-          trigger: 'blur',
-          message: '请输入 component',
-        },
-        pathValid: {
-          required: true,
-          trigger: 'blur',
-          message: '请输入 path',
+          iframeSrc: [],
         },
         title: '',
-        dialogFormVisible: false,
-        options: [],
+        visible: false,
         modules: [],
-        selectMenu: '',
-        nameFlag: false,
-        custom: true,
-        operations: {},
         isEdit: false,
-        showOperation: false,
-        checkAll: false,
-        /** 待添加的模块码（挂载器） */
+        nameTouched: false,
         mountPickCode: '',
-        /** 强制刷新上级菜单树（避免 el-tree-select 复用旧 data） */
         treeSelectKey: 0,
+        saving: false,
       })
 
-      /** 按菜单类型 / 可见性刷新 path、component 校验 */
       const refreshFieldRules = () => {
-        const type = state.form.menuType
-        const visible = Number(state.form.visible)
-        if (type === 'M' || type === 'F') {
-          state.rules.path = []
-          state.rules.component = []
-          return
-        }
-        // 页面 C：可见时 path+component 必填；隐藏权限桩可不填 component
-        state.rules.path = [state.pathValid]
-        state.rules.component =
-          visible === activeValue.active ? [state.componentValid] : []
-      }
-
-      const getOptions = async () => {
-        const { data } = await getModules()
-        const list = Array.isArray(data) ? data : []
-        list.forEach((item) => {
-          item.label = item.name
-          item.value = item.code
-        })
-        state.modules = list
-        state.options = list
-        // 旧：单系统模块勾选回显
-        if (Number(state.form.sysSelect) === 1 && state.form.name) {
-          const hit = list.find((m) => m.code === state.form.name)
-          if (hit) {
-            state.operations = hit.operations || {}
-            state.showOperation = true
-            state.selectMenu = hit.code
-            operationChange()
+        const kind = state.uiType
+        state.rules.path = []
+        state.rules.component = []
+        state.rules.iframeSrc = []
+        if (kind === 'page') {
+          state.rules.path = [
+            { required: true, trigger: 'blur', message: '请输入路由 path' },
+          ]
+          if (Number(state.form.visible) === activeValue.active) {
+            state.rules.component = [
+              {
+                required: true,
+                trigger: 'blur',
+                message: '请输入 views 相对路径，如 /visual/client/index',
+              },
+            ]
           }
+        } else if (kind === 'link') {
+          state.rules.path = [
+            {
+              required: true,
+              trigger: 'blur',
+              validator: (_rule, value, callback) => {
+                if (!value || !/^https?:\/\//i.test(String(value))) {
+                  callback(new Error('外链必须以 http(s):// 开头'))
+                } else {
+                  callback()
+                }
+              },
+            },
+          ]
+        } else if (kind === 'iframe') {
+          state.rules.path = [
+            { required: true, trigger: 'blur', message: '请输入路由 path' },
+          ]
+          state.rules.iframeSrc = [
+            {
+              required: true,
+              trigger: 'blur',
+              validator: (_rule, value, callback) => {
+                if (!value || !/^https?:\/\//i.test(String(value))) {
+                  callback(new Error('内嵌地址必须以 http(s):// 开头'))
+                } else {
+                  callback()
+                }
+              },
+            },
+          ]
+        } else if (kind === 'catalog' && Number(state.form.parentId) === 0) {
+          state.rules.path = [
+            { required: true, trigger: 'blur', message: '顶级目录请填写 path，如 /setting' },
+          ]
         }
       }
 
-      const onSelectMenuChange = (code) => {
-        if (!code) return
-        const item = state.modules.find((m) => m.code === code || m.value === code)
-        if (item) menuChange(item)
-      }
-
-      const sysSelectChange = (val) => {
-        if (Number(val) === 1) {
-          state.nameFlag = true
-          state.custom = false
-          getOptions()
-        } else {
-          state.nameFlag = false
-          state.custom = true
-          state.operations = {}
-          state.showOperation = false
-          state.selectMenu = ''
-        }
-      }
-
-      const menuTypeChange = (val) => {
-        if (val === 'M' || val === 'F') {
-          state.form.sysSelect = 0
-        }
-        sysSelectChange(state.form.sysSelect)
+      const setUiType = (kind) => {
+        state.uiType = kind
+        applyKind(state.form, kind)
         refreshFieldRules()
       }
 
-      const menuChange = (val) => {
-        // 仅回填模块码与展示名；不覆盖用户已填的 path（避免 DataBaseOperate → dataBaseOperate）
-        state.form.name = val.code
-        if (!state.form.menuName) {
-          state.form.menuName = val.name
+      const onPathInput = () => {
+        if (!state.nameTouched && !state.isEdit) {
+          const generated = pathToRouteName(state.form.path)
+          if (generated) state.form.name = generated
         }
-        state.nameFlag = true
-        state.form.operations = Object.keys(val.operations || {})
-        state.operations = val.operations || {}
-        state.showOperation = true
-        state.selectMenu = val.code
-        operationChange()
-        // 同步进挂载列表（单模块快捷）
-        upsertMount(val.code, state.form.operations)
+        if (
+          Number(state.form.parentId) === 0 &&
+          state.uiType !== 'link' &&
+          state.form.path &&
+          !String(state.form.path).startsWith('/')
+        ) {
+          state.form.path = `/${state.form.path}`
+        }
+      }
+
+      const fetchParentTree = async () => {
+        const res = await getTree({ _t: Date.now() })
+        const list = normalizeTreeNodes(res?.data?.list ?? res?.list ?? [])
+        const banned = new Set()
+        if (state.form.menuId) {
+          const self = findNode(list, state.form.menuId)
+          if (self) collectIds(self, banned)
+        }
+        state.treeData = [
+          {
+            menuId: 0,
+            parentId: 0,
+            menuName: '顶级菜单',
+            children: applyDisabled(list, banned),
+          },
+        ]
+        state.treeSelectKey += 1
+      }
+
+      const loadModules = async () => {
+        const { data } = await getModules()
+        state.modules = Array.isArray(data) ? data : []
+      }
+
+      /**
+       * row 为空：新增顶级；仅有 parentId：在该节点下新增；有 menuId：编辑
+       */
+      const showEdit = async (row) => {
+        state.nameTouched = false
+        state.mountPickCode = ''
+        if (row?.menuId) {
+          state.title = `编辑菜单 · ${row.menuName || ''}`
+          const { data } = await getById(row)
+          if (!data) {
+            $baseMessage('未查到相关数据', 'error')
+            return
+          }
+          state.form = normalizeMenuForm(data)
+          state.uiType = resolveKind(state.form)
+          state.isEdit = true
+          state.nameTouched = true
+        } else {
+          state.title = row?.parentId ? '新增子菜单' : '新增菜单'
+          state.form = createDefaultForm()
+          if (row?.parentId != null) {
+            state.form.parentId = Number(row.parentId)
+          }
+          state.uiType = 'page'
+          applyKind(state.form, 'page')
+          state.isEdit = false
+        }
+        state.visible = true
+        state.treeData = []
+        await nextTick()
+        await Promise.all([fetchParentTree(), loadModules()])
+        refreshFieldRules()
+      }
+
+      const close = () => {
+        state.formRef?.resetFields?.()
+        state.form = createDefaultForm()
+        state.visible = false
+        state.isEdit = false
+        state.saving = false
+        state.mountPickCode = ''
+        state.uiType = 'page'
       }
 
       const upsertMount = (moduleCode, operationCodes) => {
         if (!moduleCode) return
         const list = state.form.moduleMounts || []
         const idx = list.findIndex((m) => m.moduleCode === moduleCode)
-        const item = {
-          moduleCode,
-          operationCodes: [...(operationCodes || [])],
-        }
-        if (idx >= 0) {
-          list[idx] = item
-        } else {
-          list.push(item)
-        }
+        const item = { moduleCode, operationCodes: [...(operationCodes || [])] }
+        if (idx >= 0) list[idx] = item
+        else list.push(item)
         state.form.moduleMounts = [...list]
       }
 
-      const addModuleMount = () => {
+      const addModuleMount = (fillBasic = false) => {
         const code = state.mountPickCode
         if (!code) {
-          $baseMessage('请先选择要挂载的后端模块', 'warning')
+          $baseMessage('请先选择要挂载的接口模块', 'warning')
           return
         }
         const mod = state.modules.find((m) => m.code === code)
@@ -266,8 +379,14 @@
           $baseMessage('模块不存在或未加载', 'warning')
           return
         }
-        const codes = Object.keys(mod.operations || {})
-        upsertMount(code, codes)
+        upsertMount(code, Object.keys(mod.operations || {}))
+        if (fillBasic) {
+          if (!state.form.menuName) state.form.menuName = mod.name
+          if (!state.form.name) {
+            state.form.name = mod.code
+            state.nameTouched = true
+          }
+        }
         state.mountPickCode = ''
       }
 
@@ -282,503 +401,311 @@
         return mod?.operations || {}
       }
 
+      const getModuleName = (moduleCode) => {
+        const mod = state.modules.find((m) => m.code === moduleCode)
+        return mod?.name || moduleCode
+      }
+
       const toggleMountAll = (moduleCode, checked) => {
         const ops = getModuleOpsMap(moduleCode)
-        const codes = checked ? Object.keys(ops) : []
-        upsertMount(moduleCode, codes)
-      }
-
-      const checkAllHandler = (val) => {
-        if (val) {
-          state.form.operations = Object.keys(state.operations)
-        } else {
-          state.form.operations = []
-        }
-        if (state.form.name) {
-          upsertMount(state.form.name, state.form.operations)
-        }
-      }
-
-      const operationChange = () => {
-        const total = Object.keys(state.operations).length
-        state.checkAll =
-          total > 0 && total === (state.form.operations || []).length
-        if (Number(state.form.sysSelect) === 1 && state.form.name) {
-          upsertMount(state.form.name, state.form.operations || [])
-        }
-      }
-
-      /** 规范化树节点 id，避免 number/string 混用导致 tree-select 选不中 */
-      const normalizeTreeNodes = (nodes) => {
-        if (!Array.isArray(nodes)) return []
-        return nodes.map((n) => ({
-          ...n,
-          menuId: Number(n.menuId),
-          parentId:
-            n.parentId === null || n.parentId === undefined || n.parentId === ''
-              ? 0
-              : Number(n.parentId),
-          children: normalizeTreeNodes(n.children || []),
-        }))
-      }
-
-      /**
-       * 拉取最新菜单树供「上级菜单」使用。
-       * 每次带时间戳防 GET 缓存；并插入「顶级菜单」根节点。
-       */
-      const fetchData = async () => {
-        const res = await getTree({ _t: Date.now() })
-        const list = res?.data?.list ?? res?.list ?? res?.data ?? []
-        const tree = normalizeTreeNodes(Array.isArray(list) ? list : [])
-        // 可选上级：虚拟根 + 最新全量树（含刚新增的菜单）
-        state.treeData = [
-          {
-            menuId: 0,
-            parentId: 0,
-            menuName: '顶级菜单',
-            children: tree,
-          },
-        ]
-        state.treeSelectKey += 1
-      }
-
-      const handleNodeClick = (node) => {
-        // 虚拟根仅表示 parentId=0，不改名称展示
-        if (Number(node.menuId) === 0) {
-          state.form.parentName = '顶级菜单'
-          state.form.parentId = 0
-          return
-        }
-        state.form.parentName = node.menuName
-        state.form.parentId = Number(node.menuId)
-      }
-
-      const showEdit = async (row) => {
-        // 先打开弹窗再拉树，保证每次新增都能看到最新上级选项
-        if (!row) {
-          state.title = '新增菜单'
-          state.form = createDefaultForm()
-          state.selectMenu = ''
-          state.isEdit = false
-        } else {
-          state.title = `编辑菜单-【${row.menuName}】`
-          const { data } = await getById(row)
-          if (!data) {
-            $baseMessage('未查到相关数据', 'error')
-            return
-          }
-          state.form = normalizeMenuForm(data)
-          isFrameChange(state.form.isFrame, true)
-          state.selectMenu = data.name || ''
-          state.isEdit = true
-        }
-        state.showOperation = false
-        state.dialogFormVisible = true
-        // 清空旧树再拉新树，避免 tree-select 残留
-        state.treeData = []
-        await nextTick()
-        await fetchData()
-        await getOptions()
-        if (Number(state.form.sysSelect) === 1) {
-          await getOptions()
-        }
-        refreshFieldRules()
-      }
-
-      const close = () => {
-        state.formRef?.resetFields?.()
-        state.form = createDefaultForm()
-        state.dialogFormVisible = false
-        state.isEdit = false
-        state.checkAll = false
-        state.nameFlag = false
-        state.custom = true
-        state.selectMenu = ''
-        state.options = []
-        state.operations = {}
-        state.showOperation = false
-        state.mountPickCode = ''
+        upsertMount(moduleCode, checked ? Object.keys(ops) : [])
       }
 
       const save = () => {
         refreshFieldRules()
         state.formRef.validate(async (valid) => {
           if (!valid) return
-          // 兼容：系统单模块勾选写入 moduleMounts
-          if (
-            Number(state.form.sysSelect) === 1 &&
-            state.form.name &&
-            (!state.form.moduleMounts || !state.form.moduleMounts.length)
-          ) {
-            upsertMount(state.form.name, state.form.operations || [])
+          applyKind(state.form, state.uiType)
+          if (!Array.isArray(state.form.moduleMounts)) {
+            state.form.moduleMounts = []
           }
-          const { msg } = await doEdit(state.form)
-          $baseMessage(msg, 'success')
-          emit('fetchData')
-          close()
+          // 不再提交旧 admin-plus 字段，避免覆盖成脏数据
+          const payload = { ...state.form }
+          delete payload.operations
+          delete payload.parentName
+          delete payload.boundModuleCodes
+          delete payload.children
+          state.saving = true
+          try {
+            const { msg } = await doEdit(payload)
+            $baseMessage(msg, 'success')
+            emit('fetchData')
+            close()
+          } finally {
+            state.saving = false
+          }
         })
-      }
-
-      const isFrameChange = (val, flag) => {
-        if (!flag && Number(val) === activeValue.active) {
-          state.form.sysSelect = 0
-        }
-        sysSelectChange(state.form.sysSelect)
-        refreshFieldRules()
-      }
-
-      const setPath = () => {
-        // 不再根据 name 自动改写 path，避免模块码污染路由
-      }
-
-      const onVisibleChange = () => {
-        refreshFieldRules()
       }
 
       return {
         ...toRefs(state),
-        handleNodeClick,
+        KIND_OPTIONS,
+        InfoFilled,
+        activeValue,
         showEdit,
         close,
         save,
-        isFrameChange,
-        setPath,
-        activeValue,
-        InfoFilled,
-        menuChange,
-        onSelectMenuChange,
-        sysSelectChange,
-        menuTypeChange,
-        checkAllHandler,
-        operationChange,
+        setUiType,
+        onPathInput,
+        refreshFieldRules,
         addModuleMount,
         removeModuleMount,
         getModuleOpsMap,
+        getModuleName,
         toggleMountAll,
-        upsertMount,
-        onVisibleChange,
       }
     },
   })
 </script>
 
 <template>
-  <el-dialog
-    v-model="dialogFormVisible"
+  <el-drawer
+    v-model="visible"
     append-to-body
     destroy-on-close
+    size="760px"
     :title="title"
-    width="1220px"
     @close="close"
   >
     <el-form
       ref="formRef"
-      label-width="120px"
+      class="menu-edit-form"
+      label-width="108px"
       :model="form"
       :rules="rules"
     >
-      <el-divider content-position="left">基础信息（新旧共用）</el-divider>
+      <div class="kind-grid">
+        <button
+          v-for="item in KIND_OPTIONS"
+          :key="item.key"
+          class="kind-card"
+          :class="{ active: uiType === item.key }"
+          type="button"
+          @click="setUiType(item.key)"
+        >
+          <strong>{{ item.label }}</strong>
+          <span>{{ item.desc }}</span>
+        </button>
+        <button
+          v-if="uiType === 'button'"
+          class="kind-card active"
+          type="button"
+        >
+          <strong>按钮</strong>
+          <span>旧数据兼容，不进侧栏路由</span>
+        </button>
+      </div>
 
-      <el-row :gutter="12">
-        <el-col :span="8">
-          <el-form-item label="菜单类型" prop="menuType">
-            <el-select
-              v-model="form.menuType"
-              :disabled="isEdit"
-              placeholder="菜单类型"
-              style="width: 100%"
-              @change="menuTypeChange"
-            >
-              <el-option
-                v-for="item in menuTypeOptions"
-                :key="item.value"
-                :label="item.label"
-                :value="item.value"
-              />
-            </el-select>
-          </el-form-item>
-        </el-col>
-        <el-col :span="16">
-          <el-form-item label="上级菜单" prop="parentId">
-            <el-tree-select
-              :key="treeSelectKey"
-              v-model="form.parentId"
-              check-strictly
-              clearable
-              :data="treeData"
-              default-expand-all
-              highlight-current
-              node-key="menuId"
-              :props="defaultProps"
-              :render-after-expand="false"
-              style="width: 100%"
-              @node-click="handleNodeClick"
-            />
-          </el-form-item>
-        </el-col>
-      </el-row>
-
-      <el-row :gutter="12">
-        <el-col :span="8">
-          <el-form-item label="菜单来源" prop="sysSelect">
-            <el-select
-              v-model="form.sysSelect"
-              :disabled="isEdit"
-              style="width: 100%"
-              @change="sysSelectChange"
-            >
-              <el-option label="系统菜单" :value="1" />
-              <el-option label="自定义菜单" :value="0" />
-            </el-select>
-          </el-form-item>
-        </el-col>
-        <el-col :span="16">
-          <el-form-item label="选择菜单">
-            <el-select
-              v-model="selectMenu"
-              clearable
-              :disabled="custom || isEdit"
-              filterable
-              placeholder="选择菜单"
-              style="width: 100%"
-              @change="onSelectMenuChange"
-            >
-              <el-option
-                v-for="item in options"
-                :key="item.value"
-                :label="`${item.name} (${item.code})`"
-                :value="item.value"
-              >
-                <span>{{ item.name }}</span>
-                <span style="float: right; font-size: 12px; color: var(--el-text-color-secondary)">
-                  {{ item.code }}
-                </span>
-              </el-option>
-            </el-select>
-          </el-form-item>
-        </el-col>
-      </el-row>
-
-      <el-row :gutter="12">
-        <el-col :span="8">
-          <el-form-item label="菜单名称" prop="menuName">
-            <el-input v-model="form.menuName" placeholder="侧栏/面包屑标题" />
-          </el-form-item>
-        </el-col>
-        <el-col :span="8">
-          <el-form-item label="router-name" prop="name">
-            <el-input
-              v-model="form.name"
-              :disabled="nameFlag"
-              placeholder="路由 name，vben 必填"
-              @input="setPath"
-            />
-          </el-form-item>
-        </el-col>
-        <el-col :span="8">
-          <el-form-item label="path" prop="path">
-            <el-input
-              v-model="form.path"
-              placeholder="相对段，如 client（拼到父级成 /visual/client）"
-            />
-          </el-form-item>
-        </el-col>
-      </el-row>
-
-      <el-form-item label="vue文件路径" prop="component">
-        <template #label>
-          <span>
-            <el-tooltip placement="top">
-              <template #content>
-                <div>目录 M / 按钮 F：可留空</div>
-                <div>可见页面 C：填 /visual/client/index（相对 views）</div>
-                <div>隐藏权限桩（visible=关）：component 可留空，不进路由</div>
-              </template>
-              <el-icon style="vertical-align: middle"><InfoFilled /></el-icon>
-            </el-tooltip>
-            vue文件路径
-          </span>
-        </template>
-        <el-input
-          v-model="form.component"
-          placeholder="/visual/client/index 或留空"
+      <el-form-item label="上级菜单" prop="parentId">
+        <el-tree-select
+          :key="treeSelectKey"
+          v-model="form.parentId"
+          check-strictly
+          :data="treeData"
+          default-expand-all
+          filterable
+          highlight-current
+          node-key="menuId"
+          :props="defaultProps"
+          :render-after-expand="false"
+          style="width: 100%"
         />
       </el-form-item>
 
       <el-row :gutter="12">
-        <el-col :span="6">
-          <el-form-item label="路由参数" prop="queryParam">
-            <el-input v-model="form.queryParam" placeholder="JSON，如 {&quot;id&quot;:1}" />
+        <el-col :span="12">
+          <el-form-item label="菜单名称" prop="menuName">
+            <el-input v-model="form.menuName" maxlength="50" placeholder="侧栏 / 面包屑标题" />
           </el-form-item>
         </el-col>
-        <el-col :span="6">
-          <el-form-item label="排序" prop="orderNum">
-            <el-input-number
-              v-model="form.orderNum"
-              :max="1000"
-              :min="0"
-              style="width: 100%"
+        <el-col :span="12">
+          <el-form-item label="路由 name" prop="name">
+            <el-input
+              v-model="form.name"
+              maxlength="40"
+              placeholder="Vue Router name，同级唯一"
+              @input="nameTouched = true"
             />
           </el-form-item>
         </el-col>
-        <el-col :span="6">
-          <el-form-item label="备注">
-            <el-input v-model="form.remark" />
-          </el-form-item>
-        </el-col>
-        <el-col :span="6">
+      </el-row>
+
+      <el-form-item label="path" prop="path">
+        <el-input
+          v-model="form.path"
+          :placeholder="
+            uiType === 'link'
+              ? 'https://example.com'
+              : Number(form.parentId) === 0
+                ? '顶级如 /setting，子级填相对段如 menuManagement'
+                : '相对父级的路径段，如 menuManagement'
+          "
+          @blur="onPathInput"
+        />
+      </el-form-item>
+
+      <el-form-item v-if="uiType === 'page'" label="组件路径" prop="component">
+        <template #label>
+          <span class="label-with-tip">
+            组件路径
+            <el-tooltip
+              content="相对 src/views，例如 /visual/client/index。隐藏页可不填。"
+              placement="top"
+            >
+              <el-icon><InfoFilled /></el-icon>
+            </el-tooltip>
+          </span>
+        </template>
+        <el-input v-model="form.component" placeholder="/visual/client/index" />
+      </el-form-item>
+
+      <el-form-item v-if="uiType === 'iframe'" label="内嵌地址" prop="iframeSrc">
+        <el-input v-model="form.iframeSrc" placeholder="https://..." />
+      </el-form-item>
+
+      <el-form-item v-if="uiType === 'catalog'" label="重定向">
+        <el-input v-model="form.redirect" placeholder="进入目录时跳转，如 /setting/menuManagement" />
+      </el-form-item>
+
+      <el-row :gutter="12">
+        <el-col :span="12">
           <el-form-item label="图标">
             <IconSelector v-model="form.icon" />
           </el-form-item>
         </el-col>
-      </el-row>
-
-      <el-form-item label="基础开关">
-        <el-space wrap>
-          <span>外链</span>
-          <el-switch
-            v-model="form.isFrame"
-            :active-value="activeValue.active"
-            :disabled="nameFlag"
-            :inactive-value="activeValue.inActive"
-            @change="isFrameChange"
-          />
-          <span>缓存</span>
-          <el-switch
-            v-model="form.isCache"
-            :active-value="activeValue.active"
-            :inactive-value="activeValue.inActive"
-          />
-          <span>可见</span>
-          <el-switch
-            v-model="form.visible"
-            :active-value="activeValue.active"
-            :inactive-value="activeValue.inActive"
-            @change="onVisibleChange"
-          />
-          <span>无分栏</span>
-          <el-switch
-            v-model="form.noColumn"
-            :active-value="activeValue.active"
-            :inactive-value="activeValue.inActive"
-          />
-        </el-space>
-      </el-form-item>
-
-      <el-divider content-position="left">Vben 扩展（新旧接口共用库字段）</el-divider>
-
-      <el-row :gutter="12">
-        <el-col :span="8">
-          <el-form-item label="redirect">
-            <el-input v-model="form.redirect" placeholder="目录重定向，如 /setting/menu" />
-          </el-form-item>
-        </el-col>
-        <el-col :span="8">
-          <el-form-item label="activePath">
-            <template #label>
-              <span>
-                <el-tooltip content="隐藏页高亮的父菜单 path，对应 meta.activePath / 旧 activeMenu" placement="top">
-                  <el-icon style="vertical-align: middle"><InfoFilled /></el-icon>
-                </el-tooltip>
-                activePath
-              </span>
-            </template>
-            <el-input v-model="form.activePath" placeholder="如 /setting/menuManagement" />
-          </el-form-item>
-        </el-col>
-        <el-col :span="8">
-          <el-form-item label="激活图标">
-            <el-input v-model="form.activeIcon" placeholder="meta.activeIcon，可空" />
-          </el-form-item>
-        </el-col>
-      </el-row>
-
-      <el-row :gutter="12">
         <el-col :span="12">
-          <el-form-item label="iframeSrc">
-            <el-input v-model="form.iframeSrc" placeholder="内嵌地址，对应 IFrameView" />
-          </el-form-item>
-        </el-col>
-        <el-col :span="4">
-          <el-form-item label="徽标">
-            <el-input v-model="form.badge" placeholder="badge" />
-          </el-form-item>
-        </el-col>
-        <el-col :span="4">
-          <el-form-item label="徽标类型">
-            <el-select v-model="form.badgeType" clearable placeholder="类型" style="width: 100%">
-              <el-option label="normal" value="normal" />
-              <el-option label="dot" value="dot" />
-            </el-select>
-          </el-form-item>
-        </el-col>
-        <el-col :span="4">
-          <el-form-item label="徽标色">
-            <el-select v-model="form.badgeVariants" clearable placeholder="色" style="width: 100%">
-              <el-option label="primary" value="primary" />
-              <el-option label="success" value="success" />
-              <el-option label="warning" value="warning" />
-              <el-option label="destructive" value="destructive" />
-            </el-select>
+          <el-form-item label="排序">
+            <el-input-number v-model="form.orderNum" :max="9999" :min="0" style="width: 100%" />
           </el-form-item>
         </el-col>
       </el-row>
 
-      <el-form-item label="Vben 开关">
-        <el-space wrap>
-          <span>固定Tab</span>
-          <el-switch
-            v-model="form.affixTab"
-            :active-value="activeValue.active"
-            :inactive-value="activeValue.inActive"
-          />
-          <span>隐藏Tab</span>
-          <el-switch
-            v-model="form.hideInTab"
-            :active-value="activeValue.active"
-            :inactive-value="activeValue.inActive"
-          />
-          <span>隐藏面包屑</span>
-          <el-switch
-            v-model="form.hideInBreadcrumb"
-            :active-value="activeValue.active"
-            :inactive-value="activeValue.inActive"
-          />
-          <span>隐藏子菜单</span>
-          <el-switch
-            v-model="form.hideChildrenInMenu"
-            :active-value="activeValue.active"
-            :inactive-value="activeValue.inActive"
-          />
-          <span>新窗口打开</span>
-          <el-switch
-            v-model="form.openInNewWindow"
-            :active-value="activeValue.active"
-            :inactive-value="activeValue.inActive"
-          />
-        </el-space>
+      <el-form-item label="常用开关">
+        <div class="switch-list">
+          <label>
+            <span>侧栏显示</span>
+            <el-switch
+              v-model="form.visible"
+              :active-value="activeValue.active"
+              :inactive-value="activeValue.inActive"
+              @change="refreshFieldRules"
+            />
+          </label>
+          <label v-if="uiType === 'page'">
+            <span>页面缓存</span>
+            <el-switch
+              v-model="form.isCache"
+              :active-value="activeValue.active"
+              :inactive-value="activeValue.inActive"
+            />
+          </label>
+          <label v-if="uiType === 'link' || uiType === 'iframe'">
+            <span>新窗口打开</span>
+            <el-switch
+              v-model="form.openInNewWindow"
+              :active-value="activeValue.active"
+              :inactive-value="activeValue.inActive"
+            />
+          </label>
+          <label v-if="uiType === 'catalog'">
+            <span>隐藏子菜单</span>
+            <el-switch
+              v-model="form.hideChildrenInMenu"
+              :active-value="activeValue.active"
+              :inactive-value="activeValue.inActive"
+            />
+          </label>
+        </div>
       </el-form-item>
 
-      <vab-card shadow="hover">
-        <template #header>
-          <span>接口权限挂载</span>
+      <el-collapse class="advanced-collapse">
+        <el-collapse-item name="advanced" title="高级（徽标 / 高亮 / Tab）">
+          <el-row :gutter="12">
+            <el-col :span="12">
+              <el-form-item label="高亮 path">
+                <el-input v-model="form.activePath" placeholder="隐藏页高亮的父菜单 path" />
+              </el-form-item>
+            </el-col>
+            <el-col :span="12">
+              <el-form-item label="激活图标">
+                <el-input v-model="form.activeIcon" placeholder="meta.activeIcon，可空" />
+              </el-form-item>
+            </el-col>
+            <el-col v-if="uiType === 'page'" :span="12">
+              <el-form-item label="路由参数">
+                <el-input v-model="form.queryParam" placeholder='JSON，如 {"id":1}' />
+              </el-form-item>
+            </el-col>
+            <el-col :span="12">
+              <el-form-item label="徽标">
+                <el-input v-model="form.badge" placeholder="如 New" />
+              </el-form-item>
+            </el-col>
+            <el-col :span="12">
+              <el-form-item label="徽标类型">
+                <el-select v-model="form.badgeType" clearable placeholder="类型" style="width: 100%">
+                  <el-option label="文字" value="normal" />
+                  <el-option label="圆点" value="dot" />
+                </el-select>
+              </el-form-item>
+            </el-col>
+            <el-col :span="12">
+              <el-form-item label="徽标颜色">
+                <el-select v-model="form.badgeVariants" clearable placeholder="颜色" style="width: 100%">
+                  <el-option label="primary" value="primary" />
+                  <el-option label="success" value="success" />
+                  <el-option label="warning" value="warning" />
+                  <el-option label="destructive" value="destructive" />
+                </el-select>
+              </el-form-item>
+            </el-col>
+          </el-row>
+          <div class="switch-list">
+            <label>
+              <span>固定 Tab</span>
+              <el-switch
+                v-model="form.affixTab"
+                :active-value="activeValue.active"
+                :inactive-value="activeValue.inActive"
+              />
+            </label>
+            <label>
+              <span>隐藏 Tab</span>
+              <el-switch
+                v-model="form.hideInTab"
+                :active-value="activeValue.active"
+                :inactive-value="activeValue.inActive"
+              />
+            </label>
+            <label>
+              <span>隐藏面包屑</span>
+              <el-switch
+                v-model="form.hideInBreadcrumb"
+                :active-value="activeValue.active"
+                :inactive-value="activeValue.inActive"
+              />
+            </label>
+          </div>
+        </el-collapse-item>
+      </el-collapse>
+
+      <div v-if="uiType === 'page' || uiType === 'catalog'" class="mount-card">
+        <div class="mount-card__title">
+          接口权限
           <el-tooltip
-            content="从后端 @Module 勾选操作，挂到本菜单。一个页面可挂多个模块（如客户端挂 DataBaseOperate+SavedQuery）。权限码仍是 Module:op"
+            content="从后端 @Module 挂到本菜单。角色授权时勾选本菜单即可分配这些按钮权限。"
             placement="top"
           >
-            <el-icon style="margin-left: 6px; vertical-align: middle">
-              <InfoFilled />
-            </el-icon>
+            <el-icon><InfoFilled /></el-icon>
           </el-tooltip>
-        </template>
-
+        </div>
         <div class="mount-toolbar">
           <el-select
             v-model="mountPickCode"
             clearable
             filterable
             placeholder="选择后端模块"
-            style="width: 320px"
+            style="flex: 1"
           >
             <el-option
               v-for="item in modules"
@@ -787,14 +714,13 @@
               :value="item.code"
             />
           </el-select>
-          <el-button type="primary" style="margin-left: 8px" @click="addModuleMount">
-            添加挂载
-          </el-button>
+          <el-button type="primary" @click="addModuleMount(false)">挂载</el-button>
+          <el-button @click="addModuleMount(true)">挂载并填名称</el-button>
         </div>
 
         <el-empty
           v-if="!(form.moduleMounts && form.moduleMounts.length)"
-          description="尚未挂载接口权限，请从上方选择模块添加"
+          description="页面接口权限可选挂，目录一般不需要"
           :image-size="48"
         />
 
@@ -804,26 +730,18 @@
           class="mount-block"
         >
           <div class="mount-block-head">
-            <strong>{{ mount.moduleCode }}</strong>
+            <div>
+              <strong>{{ getModuleName(mount.moduleCode) }}</strong>
+              <span class="op-code">{{ mount.moduleCode }}</span>
+            </div>
             <el-space>
-              <el-button
-                link
-                type="primary"
-                @click="toggleMountAll(mount.moduleCode, true)"
-              >
+              <el-button link type="primary" @click="toggleMountAll(mount.moduleCode, true)">
                 全选
               </el-button>
-              <el-button
-                link
-                @click="toggleMountAll(mount.moduleCode, false)"
-              >
+              <el-button link @click="toggleMountAll(mount.moduleCode, false)">
                 清空
               </el-button>
-              <el-button
-                link
-                type="danger"
-                @click="removeModuleMount(mount.moduleCode)"
-              >
+              <el-button link type="danger" @click="removeModuleMount(mount.moduleCode)">
                 移除
               </el-button>
             </el-space>
@@ -832,7 +750,6 @@
             <el-checkbox
               v-for="(op, key) in getModuleOpsMap(mount.moduleCode)"
               :key="String(key)"
-              border
               :label="String(key)"
             >
               {{ op.name }}
@@ -840,62 +757,123 @@
             </el-checkbox>
           </el-checkbox-group>
         </div>
+      </div>
 
-        <!-- 兼容旧：系统菜单单模块快捷勾选 -->
-        <div v-if="showOperation" class="legacy-ops">
-          <el-divider content-position="left">系统菜单快捷勾选（同步到上方挂载）</el-divider>
-          <el-checkbox
-            v-model="checkAll"
-            border
-            label="全选"
-            @change="checkAllHandler"
-          />
-          <el-checkbox-group v-model="form.operations" style="margin-top: 8px">
-            <el-checkbox
-              v-for="(item, key) in operations"
-              :key="String(key)"
-              border
-              :label="String(key)"
-              @change="operationChange"
-            >
-              {{ item.name }}
-            </el-checkbox>
-          </el-checkbox-group>
-        </div>
-      </vab-card>
+      <el-form-item label="备注">
+        <el-input v-model="form.remark" maxlength="200" placeholder="仅后台备注，不影响路由" />
+      </el-form-item>
     </el-form>
 
     <template #footer>
-      <el-button @click="close">取 消</el-button>
-      <el-button type="primary" @click="save">确 定</el-button>
+      <el-button @click="close">取消</el-button>
+      <el-button :loading="saving" type="primary" @click="save">保存</el-button>
     </template>
-  </el-dialog>
+  </el-drawer>
 </template>
 
 <style scoped>
-.mount-toolbar {
-  display: flex;
-  align-items: center;
-  margin-bottom: 12px;
+.menu-edit-form {
+  padding-right: 8px;
 }
-.mount-block {
-  margin-bottom: 14px;
+
+.kind-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.kind-card {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
   padding: 10px 12px;
-  border: 1px solid var(--el-border-color-lighter);
-  border-radius: 6px;
+  text-align: left;
+  cursor: pointer;
+  background: var(--el-fill-color-blank);
+  border: 1px solid var(--el-border-color);
+  border-radius: 8px;
 }
-.mount-block-head {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 8px;
+
+.kind-card strong {
+  font-size: 14px;
 }
-.op-code {
-  margin-left: 4px;
+
+.kind-card span {
   font-size: 12px;
   color: var(--el-text-color-secondary);
 }
-.legacy-ops {
-  margin-top: 8px;
+
+.kind-card.active {
+  background: var(--el-color-primary-light-9);
+  border-color: var(--el-color-primary);
+}
+
+.label-with-tip {
+  display: inline-flex;
+  gap: 4px;
+  align-items: center;
+}
+
+.switch-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px 24px;
+}
+
+.switch-list label {
+  display: inline-flex;
+  gap: 8px;
+  align-items: center;
+  font-size: 13px;
+  color: var(--el-text-color-regular);
+}
+
+.advanced-collapse {
+  margin-bottom: 16px;
+  border: none;
+}
+
+.mount-card {
+  padding: 12px;
+  margin-bottom: 16px;
+  border: 1px solid var(--el-border-color-lighter);
+  border-radius: 8px;
+}
+
+.mount-card__title {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  margin-bottom: 10px;
+  font-weight: 600;
+}
+
+.mount-toolbar {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 12px;
+}
+
+.mount-block {
+  padding: 10px 12px;
+  margin-bottom: 10px;
+  background: var(--el-fill-color-blank);
+  border: 1px solid var(--el-border-color-extra-light);
+  border-radius: 6px;
+}
+
+.mount-block-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.op-code {
+  margin-left: 6px;
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
 }
 </style>

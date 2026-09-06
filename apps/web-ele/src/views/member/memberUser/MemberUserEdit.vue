@@ -16,6 +16,7 @@
     doEdit,
     getById,
   } from '@/api/member/memberUserApi'
+  import { getOptionselect } from '@/api/roleManagement'
   import { getDictData } from '@/utils/convert'
   import { backToListPage } from '@/utils/route-back'
   import { Refresh } from '@element-plus/icons-vue'
@@ -75,12 +76,16 @@
       const state = reactive({
         elForm: null,
         userGroupOptions: [],
+        /** 系统角色下拉（会员单角色 roleId） */
+        roleOptions: [],
         userStatusOptions: getDictData('userStatus').data,
         route: { query: { title: '加载中' } },
         /** 编辑回显的原始用户名，用于跳过未改名时的唯一性请求 */
         originalUserName: '',
         form: {
           userStatus: '1',
+          /** 与自助注册一致：默认普通会员角色 */
+          roleId: 2,
           password: '',
           repassword: '',
         },
@@ -93,6 +98,9 @@
           ],
           repassword: [
             { required: true, trigger: 'blur', validator: repasswordValidator },
+          ],
+          roleId: [
+            { required: true, trigger: 'change', message: '请选择角色' },
           ],
           userStatus: [
             { required: true, trigger: 'change', message: '请选择状态' },
@@ -120,8 +128,12 @@
       }
 
       const fetchData = async () => {
-        const groupRes = await getMemberUserGroupList({})
+        const [groupRes, roleRes] = await Promise.all([
+          getMemberUserGroupList({}),
+          getOptionselect(),
+        ])
         state.userGroupOptions = groupRes.data || []
+        state.roleOptions = roleRes.data || []
         if (route.query.id) {
           const { data } = await getById({ id: route.query.id })
           state.form = {
@@ -223,6 +235,23 @@
                 :key="item.id"
                 :label="item.groupName"
                 :value="item.id"
+              />
+            </el-select>
+          </el-form-item>
+        </el-col>
+        <el-col :span="12">
+          <el-form-item label="角色" prop="roleId">
+            <el-select
+              v-model="form.roleId"
+              filterable
+              placeholder="请选择角色（决定登录后菜单权限）"
+              style="width: 100%"
+            >
+              <el-option
+                v-for="item in roleOptions"
+                :key="item.roleId"
+                :label="item.roleName"
+                :value="item.roleId"
               />
             </el-select>
           </el-form-item>
