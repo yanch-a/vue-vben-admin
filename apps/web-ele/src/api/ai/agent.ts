@@ -29,6 +29,17 @@ export interface AgentChatRequest {
     editorSql?: string;
     lastError?: string;
     resultColumns?: string[];
+    /** visual=配置查询（勾选），sql=SQL 编辑器 */
+    workMode?: 'visual' | 'sql' | string;
+    groupId?: number | string;
+    canvasGroupIds?: Array<number | string>;
+    selectedFields?: Array<{
+      fieldId?: number | string;
+      table?: string;
+      column?: string;
+      displayName?: string;
+    }>;
+    draftItems?: any[];
   };
 }
 

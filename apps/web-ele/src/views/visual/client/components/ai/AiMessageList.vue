@@ -1,6 +1,6 @@
 <script lang="ts" setup>
 /**
- * 消息流。SQL/图表卡片 emit → AiChatWindow → index.vue 插入/替换/运行。
+ * 消息流。SQL/配置/图表卡片 emit → AiChatWindow → 父页插入 SQL 或应用到界面。
  * @author yanch
  */
 import { computed, nextTick, ref, watch } from 'vue';
@@ -8,6 +8,7 @@ import { computed, nextTick, ref, watch } from 'vue';
 import type { AiMsg } from '../../composables/useAiChat';
 import { splitSqlBlocks } from '../../utils/markdown';
 import AiChartCard from './AiChartCard.vue';
+import AiQueryConfigCard from './AiQueryConfigCard.vue';
 import AiSqlCard from './AiSqlCard.vue';
 import AiToolStepView from './AiToolStep.vue';
 
@@ -25,6 +26,7 @@ const emit = defineEmits<{
   replaceSql: [string];
   runSql: [string];
   openSqlInNewTab: [string];
+  applyQueryConfig: [NonNullable<AiMsg['queryConfig']>];
 }>();
 
 const box = ref<HTMLElement | null>(null);
@@ -52,7 +54,12 @@ const viewMessages = computed(() =>
 watch(
   () =>
     props.messages.map(
-      (m) => m.text + (m.sql?.sql || '') + m.steps.length + (m.reasoning || ''),
+      (m) =>
+        m.text +
+        (m.sql?.sql || '') +
+        (m.queryConfig?.previewSql || '') +
+        m.steps.length +
+        (m.reasoning || ''),
     ),
   () => nextTick(() => box.value && (box.value.scrollTop = box.value.scrollHeight)),
 );
@@ -95,8 +102,14 @@ function onSqlAction(
             @open-tab="onSqlAction('openTab', $event)"
           />
         </template>
+        <AiQueryConfigCard
+          v-if="item.msg.queryConfig"
+          :config="item.msg.queryConfig"
+          @apply="emit('applyQueryConfig', $event)"
+          @open-sql="onSqlAction('openTab', $event)"
+        />
         <AiSqlCard
-          v-if="item.showProposed && item.msg.sql"
+          v-if="item.showProposed && item.msg.sql && !item.msg.queryConfig"
           :sql="item.msg.sql.sql"
           :explanation="item.msg.sql.explanation"
           :warnings="item.msg.sql.warnings"

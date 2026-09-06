@@ -11,13 +11,22 @@
     toRefs,
     watch,
   } from 'vue'
+  import { onBeforeRouteLeave, useRoute, useRouter } from 'vue-router'
+  import { ElMessageBox } from 'element-plus'
 
   import { Page } from '@vben/common-ui'
 
   import { usePreferences } from '@vben/preferences'
 
-  import { deleteQueryConfig, editQueryConfig, executeQueryConfig, exportQueryExcel, getDbConfigList, getGroupTablesWithColumns, getQueryConfigById, getQueryConfigItems, getQueryConfigList, getTableGroupList, getVqDict, listRelationCanvasGroups, previewSqlBySelection, saveQueryItems } from '@/api/visual/vq'
-  import { getLatestQueryResultByConfig, saveQueryResultFile, shareQueryResultFile } from '@/api/visual/queryResultFile'
+  import { deleteQueryConfig, editQueryConfig, executeQueryByDraft, exportQueryExcelByDraft, getDbConfigList, getGroupTablesWithColumns, getQueryConfigById, getQueryConfigItems, getQueryConfigList, getTableGroupList, getVqDict, listRelationCanvasGroups, previewSqlBySelection, saveQueryItems } from '@/api/visual/vq'
+  import { exportQueryResultExcel, getLatestQueryResultByConfig, saveQueryResultFile, shareQueryResultFile } from '@/api/visual/queryResultFile'
+  import { cancelSql, executeDdl, executeDml, executeSql, exportSqlExcel, getInstances } from '@/api/visual/database'
+  import SqlEditor from '../client/components/query/SqlEditor.vue'
+  import AiChatWindow from '../client/components/ai/AiChatWindow.vue'
+  import AiDockBar from '../client/components/ai/AiDockBar.vue'
+  import { describeSqlWriteRisk, isFreeDmlSql, isWriteOrDangerousSql } from '../client/utils/sqlWriteGuard'
+  import { looksLikeControlledDdl } from '../client/utils/controlledDdl'
+  import '../client/styles/client-fonts.css'
   import { formatSqlByDialect } from '../client/utils/formatSql'
   // Univer 0.25+
   import { LocaleType, mergeLocales, Univer } from "@univerjs/core";
@@ -59,14 +68,17 @@
   
   export default defineComponent({
     name: 'VisualQuery',
-    components: { Page },
+    components: { Page, SqlEditor, AiChatWindow, AiDockBar },
     setup() {
       const $baseConfirm = inject('$baseConfirm')
       const $baseMessage = inject('$baseMessage')
+      const route = useRoute()
+      const router = useRouter()
       const { isDark } = usePreferences()
       const univerContainer = ref(null)
       const dbTree = ref(null);
       const configFormRef = ref(null);
+      const aiChatRef = ref(null)
       let univerInstance = null;
       let univerAPI = null;
       
@@ -92,6 +104,9 @@
       const hasSelectedFields = computed(() => {
         return state.columnList.length > 0
       })
+
+      /** 当前库是否已有表分组（配置查询依赖分组） */
+      const hasTableGroups = computed(() => state.tableGroupList.length > 0)
 
       /** 当前会话是否有可保存/分享的执行结果 */
       const hasSessionResult = computed(() => {
@@ -166,6 +181,30 @@
       
       /** 左右面板占比 localStorage 键；默认 7:3 */
       const PANEL_RATIO_STORAGE_KEY = 'visualQueryPanelRatioV2'
+      /** 记住上次使用的库 / 分组 / 模式 */
+      const LAST_CTX_KEY = 'visual-query-last-ctx-v1'
+
+      const loadLastCtx = () => {
+        try {
+          return JSON.parse(localStorage.getItem(LAST_CTX_KEY) || '{}') || {}
+        } catch {
+          return {}
+        }
+      }
+
+      const saveLastCtx = () => {
+        try {
+          localStorage.setItem(LAST_CTX_KEY, JSON.stringify({
+            dbConfigId: state.currentDbConfig || '',
+            groupId: state.currentTableGroup || '',
+            workMode: state.workMode || 'visual',
+            instance: state.currentInstance || '',
+            queryLimit: state.queryLimit || 1000,
+          }))
+        } catch {
+          // ignore quota / private mode
+        }
+      }
 
       // 响应式状态
       const state = reactive({
@@ -223,8 +262,8 @@
         dbConfigList: [],
         tableGroupList: [],
         
-        // 查询配置历史记录
-        configVisible: false,
+        // 我的视图
+        configVisible: true,
         queryConfigList: [],
         configDialogVisible: false,
         configDialogMode: 'add', // 'add' | 'edit'
@@ -238,6 +277,7 @@
           orderNum: 0,
           /** 选用画布分组；空=全库画布寻路 */
           canvasGroupIds: [],
+          queryMode: 'visual',
         },
         /** 当前库下可选画布分组 */
         canvasGroupOptions: [],
@@ -263,7 +303,91 @@
           shareMode: 'READ',
           shareExpireTime: null,
         },
+
+        /**
+         * visual：勾选字段配查询（默认）
+         * sql：左侧直接写 SQL，右侧仍是在线表格
+         */
+        workMode: 'visual',
+        rawSql: '',
+        instanceList: [],
+        currentInstance: '',
+        /** 执行/导出行数上限 */
+        queryLimit: 1000,
+        /** 左侧常驻预览 */
+        livePreviewSql: '',
+        livePreviewError: '',
+        livePreviewLoading: false,
+        livePreviewPathFailed: false,
+        lastSqlError: '',
       })
+
+      const isSqlMode = computed(() => state.workMode === 'sql')
+      const isSqlView = computed(() => state.currentConfig?.queryMode === 'sql')
+      const currentDbType = computed(() => {
+        const hit = state.dbConfigList.find((d) => String(d.id) === String(state.currentDbConfig))
+        return hit?.dbType || ''
+      })
+      const currentDbRow = computed(() =>
+        state.dbConfigList.find((d) => String(d.id) === String(state.currentDbConfig)) || null,
+      )
+
+      /** 勾选/条件变化时刷新左侧底部预览（防抖） */
+      let livePreviewTimer = null
+      let livePreviewSeq = 0
+      const livePreviewKey = computed(() => {
+        if (state.workMode === 'sql') return ''
+        return JSON.stringify({
+          db: state.currentDbConfig,
+          group: state.currentTableGroup,
+          distinct: state.currentConfig.selectDistinct ? 1 : 0,
+          canvas: state.currentConfig.canvasGroupIds || [],
+          cols: state.columnList.map((c) => [c.id, c.alias, c.functionType, c.customSql]),
+          where: state.whereItems,
+          having: state.havingItems,
+          groupBy: state.groupItems,
+          order: state.orderItems,
+        })
+      })
+
+      const refreshLivePreview = async () => {
+        if (state.workMode === 'sql') return
+        if (!state.currentDbConfig || !state.columnList.length) {
+          state.livePreviewSql = ''
+          state.livePreviewError = ''
+          state.livePreviewPathFailed = false
+          state.livePreviewLoading = false
+          return
+        }
+        const seq = ++livePreviewSeq
+        state.livePreviewLoading = true
+        try {
+          const res = await previewSqlBySelection(buildPreviewPayload())
+          if (seq !== livePreviewSeq) return
+          const sql = formatPreviewSql(res.data?.previewSql, res.data?.dbType)
+          state.livePreviewSql = sql || ''
+          state.livePreviewError = ''
+          state.livePreviewPathFailed = false
+        } catch (error) {
+          if (seq !== livePreviewSeq) return
+          state.livePreviewSql = ''
+          state.livePreviewError = getRequestErrorMessage(error, '预览失败')
+          state.livePreviewPathFailed = isPathBuildError(error)
+        } finally {
+          if (seq === livePreviewSeq) {
+            state.livePreviewLoading = false
+          }
+        }
+      }
+
+      const scheduleLivePreview = () => {
+        if (livePreviewTimer) clearTimeout(livePreviewTimer)
+        livePreviewTimer = setTimeout(() => {
+          refreshLivePreview()
+        }, 400)
+      }
+
+      watch(livePreviewKey, () => scheduleLivePreview())
       
       // 监听过滤文本变化
       watch(() => state.filterText, (val) => {
@@ -668,29 +792,280 @@
           ? state.currentConfig.canvasGroupIds
           : undefined,
         items: buildDraftConfigItems(),
-        configId: state.currentConfig?.id || undefined,
+        configId: state.currentConfig?.id && state.currentConfig.queryMode !== 'sql'
+          ? state.currentConfig.id
+          : undefined,
       })
-      const ensureConfigSaved = () => {
-        if (!state.currentConfig || !state.currentConfig.id) {
-          $baseMessage('请先保存查询配置（新建配置并保存字段项），再执行查询', 'warning');
-          return false;
-        }
-        return true;
-      };
-
       // 提取接口错误文案（utils/request 用 responseReturn:body 时不会走全局 ElMessage）
       const getRequestErrorMessage = (error, fallback) =>
         error?.msg || error?.message || fallback
 
-      // 执行查询（调后端 /queryExecute/execute）
+      /** 当前草稿快照：字段/条件/SQL，用于未保存提醒 */
+      const snapshotDraft = () => JSON.stringify({
+        items: buildDraftConfigItems(),
+        distinct: state.currentConfig.selectDistinct ? 1 : 0,
+        rawSql: state.rawSql || '',
+      })
+      let cleanSnapshot = ''
+      const markClean = () => {
+        cleanSnapshot = snapshotDraft()
+      }
+      const isDirty = () => snapshotDraft() !== cleanSnapshot
+
+      const confirmIfDirty = async () => {
+        if (!isDirty()) return true
+        try {
+          await ElMessageBox.confirm(
+            '当前查询有未保存的修改，继续将丢失这些修改。',
+            '未保存的修改',
+            {
+              type: 'warning',
+              confirmButtonText: '继续',
+              cancelButtonText: '取消',
+            },
+          )
+          return true
+        } catch {
+          return false
+        }
+      }
+
+      /** 同一会话点过「暂不」后不再反复询问是否保存视图 */
+      let skipSavePrompt = false
+      let queryRunAbort = null
+      let queryRunRequestId = null
+
+      const newSqlRequestId = () => `vq-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
+
+      const isCancelledError = (error) => {
+        const msg = getRequestErrorMessage(error, '')
+        return error?.code === 'ERR_CANCELED' || /取消|canceled|aborted/i.test(msg)
+      }
+
+      const isPathBuildError = (error) => {
+        const msg = getRequestErrorMessage(error, '')
+        return /无法生成SQL|不连通|寻路/.test(msg)
+      }
+
+      let skipLeaveConfirm = false
+      const goRelationCanvas = () => {
+        if (!state.currentDbConfig) {
+          $baseMessage('请先选择数据库', 'warning')
+          return
+        }
+        skipLeaveConfirm = true
+        router.push({
+          name: 'RelationCanvas',
+          query: {
+            id: String(state.currentDbConfig),
+            ...(state.currentInstance ? { instance: String(state.currentInstance) } : {}),
+          },
+        })
+      }
+
+      /** 多表勾了但拼不出 JOIN 时，引导去补关系画布 */
+      const offerGoRelationCanvas = async (error) => {
+        const msg = getRequestErrorMessage(error, '无法生成 SQL')
+        try {
+          await ElMessageBox.confirm(
+            `${msg}。需要在关系画布里补表关联后才能自动 JOIN。`,
+            '表之间没有关联',
+            {
+              type: 'warning',
+              confirmButtonText: '去补关系画布',
+              cancelButtonText: '知道了',
+            },
+          )
+          goRelationCanvas()
+        } catch {
+          // 用户关闭
+        }
+      }
+
+      const stopQuery = async () => {
+        if (!state.executing) return
+        const requestId = queryRunRequestId
+        const abort = queryRunAbort
+        try {
+          if (requestId) {
+            await cancelSql({ requestId })
+          }
+        } catch {
+          // 仍尝试中断前端请求
+        } finally {
+          abort?.abort()
+        }
+        $baseMessage('已请求停止查询', 'info')
+      }
+
+      const normalizeQueryLimit = () => {
+        const n = Number(state.queryLimit)
+        if (!Number.isFinite(n) || n <= 0) return 1000
+        return Math.min(Math.floor(n), 50000)
+      }
+
+      /** 写操作二次确认（与客户端 sqlWriteGuard 同一套） */
+      const confirmWriteSql = async (sql) => {
+        if (!isFreeDmlSql(sql) && !looksLikeControlledDdl(sql) && !isWriteOrDangerousSql(sql)) {
+          return true
+        }
+        try {
+          await ElMessageBox.confirm(describeSqlWriteRisk(sql), '写操作确认', {
+            type: 'warning',
+            confirmButtonText: '确认执行',
+            cancelButtonText: '取消',
+          })
+          return true
+        } catch {
+          return false
+        }
+      }
+
+      const runVisualDml = async (sql) => {
+        state.executing = true
+        try {
+          const { data } = await executeDml({
+            dbConfigId: state.currentDbConfig,
+            instanceName: state.currentInstance || undefined,
+            sql,
+          })
+          clearUniverSheet()
+          state.lastQueryResult = null
+          $baseMessage(data?.message || `DML 成功，影响 ${data?.affectedRows ?? '?'} 行`, 'success')
+        } catch (error) {
+          state.lastSqlError = getRequestErrorMessage(error, 'DML 执行失败')
+          $baseMessage(state.lastSqlError, 'error')
+        } finally {
+          state.executing = false
+        }
+      }
+
+      const runVisualDdl = async (sql) => {
+        state.executing = true
+        try {
+          const { data } = await executeDdl({
+            dbConfigId: state.currentDbConfig,
+            instanceName: state.currentInstance || undefined,
+            sql,
+          })
+          clearUniverSheet()
+          state.lastQueryResult = null
+          $baseMessage(data?.message || 'DDL 执行成功', 'success')
+        } catch (error) {
+          state.lastSqlError = getRequestErrorMessage(error, 'DDL 执行失败')
+          $baseMessage(state.lastSqlError, 'error')
+        } finally {
+          state.executing = false
+        }
+      }
+
+      /** 直接写 SQL：只读走 executeSql；UPDATE/DELETE 等确认后走 DML/DDL */
+      const executeRawSql = async () => {
+        if (!state.currentDbConfig) {
+          $baseMessage('请先选择数据库', 'warning')
+          return
+        }
+        const sql = (state.rawSql || '').trim()
+        if (!sql) {
+          $baseMessage('请先编写 SQL', 'warning')
+          return
+        }
+        if (!(await confirmWriteSql(sql))) return
+        if (isFreeDmlSql(sql)) {
+          await runVisualDml(sql)
+          return
+        }
+        if (looksLikeControlledDdl(sql)) {
+          await runVisualDdl(sql)
+          return
+        }
+        const requestId = newSqlRequestId()
+        const abort = new AbortController()
+        queryRunRequestId = requestId
+        queryRunAbort = abort
+        state.executing = true
+        try {
+          const { data } = await executeSql({
+            dbConfigId: state.currentDbConfig,
+            instanceName: state.currentInstance || undefined,
+            sql,
+            maxRows: normalizeQueryLimit(),
+            requestId,
+            source: 'manual',
+          }, { signal: abort.signal })
+          state.lastQueryResult = {
+            columns: data?.columns || [],
+            rows: data?.rows || [],
+            rowCount: data?.rowCount ?? (data?.rows?.length || 0),
+            limit: data?.maxRows ?? data?.limit,
+            sql: data?.sql || sql,
+          }
+          state.lastResultFileId = null
+          state.lastSqlError = ''
+          if (state.currentConfig?.id && state.currentConfig.queryMode === 'sql') {
+            try {
+              await editQueryConfig({
+                ...state.currentConfig,
+                lastExecutedSql: data?.sql || sql,
+              })
+            } catch {
+              // 回写上次 SQL 失败不影响结果展示
+            }
+          }
+          if (!data?.rows?.length) {
+            clearUniverSheet()
+            $baseMessage('查询成功，但没有数据', 'warning')
+            return
+          }
+          renderUniver(data.columns || [], data.rows || [])
+        } catch (error) {
+          if (isCancelledError(error)) {
+            $baseMessage('查询已停止', 'info')
+            return
+          }
+          console.error('执行 SQL 失败:', error)
+          state.lastSqlError = getRequestErrorMessage(error, '执行 SQL 失败')
+          $baseMessage(state.lastSqlError, 'error')
+        } finally {
+          if (queryRunRequestId === requestId) {
+            queryRunRequestId = null
+            queryRunAbort = null
+            state.executing = false
+          }
+        }
+      }
+
+      // 执行查询：配置模式按草稿执行，不必先保存
       const executeQuery = async () => {
-        if (!ensureConfigSaved()) return;
+        if (state.executing) {
+          $baseMessage('当前查询正在执行，请先停止或等待完成', 'warning')
+          return
+        }
+        if (state.workMode === 'sql') {
+          await executeRawSql()
+          return
+        }
+        if (!state.currentDbConfig) {
+          $baseMessage('请先选择数据库', 'warning')
+          return
+        }
+        if (!state.columnList.length) {
+          $baseMessage('请先勾选要查询的字段', 'warning')
+          return
+        }
+        const requestId = newSqlRequestId()
+        const abort = new AbortController()
+        queryRunRequestId = requestId
+        queryRunAbort = abort
         state.executing = true;
         try {
-          const { data } = await executeQueryConfig(state.currentConfig.id);
+          const { data } = await executeQueryByDraft({
+            ...buildPreviewPayload(),
+            limit: normalizeQueryLimit(),
+            requestId,
+          }, { signal: abort.signal });
           state.lastQueryResult = data;
           state.lastResultFileId = null;
-          // 空结果：只提示，不渲染表格（避免 Univer 报「渲染失败」）
           if (!data?.rows?.length) {
             clearUniverSheet();
             $baseMessage('查询成功，但没有数据', 'warning');
@@ -700,11 +1075,39 @@
           if (data.path?.intermediateTableIds?.length) {
             $baseMessage(`已自动引入 ${data.path.intermediateTableIds.length} 张中间表完成关联`, 'info');
           }
+          if (!state.currentConfig?.id && !skipSavePrompt) {
+            try {
+              await ElMessageBox.confirm(
+                '查询成功。要把当前勾选保存为视图定义，方便下次直接打开吗？',
+                '保存视图定义',
+                {
+                  type: 'success',
+                  confirmButtonText: '去保存',
+                  cancelButtonText: '暂不',
+                },
+              )
+              saveQueryConfigItems()
+            } catch {
+              skipSavePrompt = true
+            }
+          }
         } catch (error) {
+          if (isCancelledError(error)) {
+            $baseMessage('查询已停止', 'info')
+            return
+          }
+          if (isPathBuildError(error)) {
+            await offerGoRelationCanvas(error)
+            return
+          }
           console.error('执行查询失败:', error);
           $baseMessage(getRequestErrorMessage(error, '执行查询失败'), 'error');
         } finally {
-          state.executing = false;
+          if (queryRunRequestId === requestId) {
+            queryRunRequestId = null
+            queryRunAbort = null
+            state.executing = false
+          }
         }
       };
 
@@ -730,6 +1133,10 @@
           state.sqlPreview = data
           state.sqlPreviewVisible = true
         } catch (error) {
+          if (isPathBuildError(error)) {
+            await offerGoRelationCanvas(error)
+            return
+          }
           console.error('SQL预览失败:', error)
           $baseMessage(getRequestErrorMessage(error, 'SQL 预览失败'), 'error')
         }
@@ -900,22 +1307,103 @@
         }
       };
       
-      // 导出Excel（后端生成，流式下载）
+      // 导出 Excel：有会话结果则导结果；否则配置模式按草稿重跑，SQL 模式按当前 SQL 重跑
       const exportExcel = async () => {
-        if (!ensureConfigSaved()) return;
+        if (state.workMode === 'sql') {
+          if (hasSessionResult.value) {
+            state.exporting = true
+            try {
+              const blob = await exportQueryResultExcel({
+                title: 'SQL查询结果',
+                columns: state.lastQueryResult.columns,
+                rows: state.lastQueryResult.rows || [],
+              })
+              const url = window.URL.createObjectURL(new Blob([blob]))
+              const link = document.createElement('a')
+              link.href = url
+              link.download = 'SQL查询结果.xlsx'
+              link.click()
+              window.URL.revokeObjectURL(url)
+              $baseMessage('导出成功', 'success')
+            } catch (error) {
+              console.error('导出Excel失败:', error)
+              $baseMessage(getRequestErrorMessage(error, '导出失败'), 'error')
+            } finally {
+              state.exporting = false
+            }
+            return
+          }
+          const sql = (state.rawSql || '').trim()
+          if (!state.currentDbConfig || !sql) {
+            $baseMessage('请先编写并执行 SQL，再导出', 'warning')
+            return
+          }
+          state.exporting = true
+          try {
+            const blob = await exportSqlExcel({
+              dbConfigId: state.currentDbConfig,
+              instanceName: state.currentInstance || undefined,
+              sql,
+              maxRows: normalizeQueryLimit(),
+            })
+            const url = window.URL.createObjectURL(new Blob([blob]))
+            const link = document.createElement('a')
+            link.href = url
+            link.download = 'SQL查询结果.xlsx'
+            link.click()
+            window.URL.revokeObjectURL(url)
+            $baseMessage('导出成功', 'success')
+          } catch (error) {
+            console.error('导出Excel失败:', error)
+            $baseMessage(getRequestErrorMessage(error, '导出失败'), 'error')
+          } finally {
+            state.exporting = false
+          }
+          return
+        }
+        if (hasSessionResult.value) {
+          state.exporting = true
+          try {
+            const blob = await exportQueryResultExcel({
+              title: state.currentConfig?.configName || '查询导出',
+              columns: state.lastQueryResult.columns,
+              rows: state.lastQueryResult.rows || [],
+            })
+            const url = window.URL.createObjectURL(new Blob([blob]))
+            const link = document.createElement('a')
+            link.href = url
+            link.download = `${state.currentConfig?.configName || '查询导出'}.xlsx`
+            link.click()
+            window.URL.revokeObjectURL(url)
+            $baseMessage('导出成功', 'success')
+          } catch (error) {
+            console.error('导出Excel失败:', error)
+            $baseMessage(getRequestErrorMessage(error, '导出失败'), 'error')
+          } finally {
+            state.exporting = false
+          }
+          return
+        }
+        if (!state.currentDbConfig || !state.columnList.length) {
+          $baseMessage('请先勾选字段并执行查询，或直接导出当前草稿', 'warning')
+          return
+        }
         state.exporting = true;
         try {
-          const blob = await exportQueryExcel(state.currentConfig.id);
+          const blob = await exportQueryExcelByDraft({
+            ...buildPreviewPayload(),
+            limit: normalizeQueryLimit(),
+          });
           const url = window.URL.createObjectURL(new Blob([blob]));
           const link = document.createElement('a');
           link.href = url;
-          link.download = `${state.currentConfig.configName || '查询导出'}.xlsx`;
+          link.download = `${state.currentConfig?.configName || '查询导出'}.xlsx`;
           link.click();
           window.URL.revokeObjectURL(url);
           $baseMessage('导出成功', 'success');
         } catch (error) {
           console.error('导出Excel失败:', error);
-          $baseMessage('导出失败', 'error');
+          $baseMessage(getRequestErrorMessage(error, '导出失败'), 'error');
         } finally {
           state.exporting = false;
         }
@@ -934,9 +1422,9 @@
         try {
           const title = state.currentConfig?.configName
             ? `${state.currentConfig.configName}-结果`
-            : '查询结果';
+            : (state.workMode === 'sql' ? 'SQL查询结果' : '查询结果');
           const { data, msg } = await saveQueryResultFile({
-            configId: state.currentConfig?.id,
+            configId: state.currentConfig?.id || undefined,
             title,
             columns: state.lastQueryResult.columns,
             rows: state.lastQueryResult.rows || [],
@@ -1007,12 +1495,14 @@
       const shareQueryResult = async () => {
         state.sharingResult = true;
         try {
-          const title = state.currentConfig?.configName
-            ? `${state.currentConfig.configName}-分享`
-            : '查询结果分享';
+          const title = state.workMode === 'sql'
+            ? 'SQL查询结果分享'
+            : (state.currentConfig?.configName
+              ? `${state.currentConfig.configName}-分享`
+              : '查询结果分享');
           const payload = {
             resultFileId: state.lastResultFileId || undefined,
-            configId: state.currentConfig?.id,
+            configId: state.currentConfig?.id || undefined,
             title,
             shareMode: state.shareForm.shareMode || 'READ',
             shareExpireTime: state.shareForm.shareExpireTime || null,
@@ -1075,6 +1565,7 @@
             selectDistinct: 0,
             orderNum: 0,
             canvasGroupIds: [],
+            queryMode: 'visual',
           }
         } else if (mode === 'edit' && config) {
           // 详情带上 canvasGroupIds
@@ -1125,8 +1616,8 @@
 
       // 保存查询配置项
       const saveQueryConfigItems = async () => {
-        if (!state.currentConfig.id) {
-          // 新数据，打开新增配置对话框
+        if (!state.currentConfig.id || state.currentConfig.queryMode === 'sql') {
+          // 新数据或当前是 SQL 视图：打开新增配置对话框，避免覆盖 SQL 定义
           showConfigDialog('add')
           return
         }
@@ -1146,9 +1637,9 @@
           }
 
           const { msg } = await saveQueryItems(state.currentConfig.id, configData)
-          $baseMessage(msg, 'success')
-          // 清空暂存的items
-          // state.currentConfigItems = null
+          $baseMessage(msg || '视图定义已保存', 'success')
+          skipSavePrompt = false
+          markClean()
           
         } catch (error) {
           console.error('保存查询配置失败:', error)
@@ -1156,41 +1647,129 @@
         }
       }
       
-      // 选择查询配置
+      const isSqlViewConfig = (config) => (config?.queryMode || 'visual') === 'sql'
+
+      // 选择查询配置 / 打开我的视图
       const selectQueryConfig = async (config) => {
+        if (String(config?.id) === String(state.currentConfig?.id) && !isDirty()) return
+        if (!(await confirmIfDirty())) return
         state.selectConfig = config
-        // 后续执行/预览/导出/保存字段项都基于该配置
         state.currentConfig = {
           ...config,
           selectDistinct: config.selectDistinct ? 1 : 0,
+          queryMode: config.queryMode || 'visual',
         }
+        skipSavePrompt = false
         try {
-          // 调用后端API获取完整的配置信息
+          if (isSqlViewConfig(config)) {
+            let detail = config
+            try {
+              const { data } = await getQueryConfigById({ id: config.id })
+              if (data) detail = { ...config, ...data }
+            } catch {
+              // 列表行已够用
+            }
+            state.currentConfig = {
+              ...detail,
+              selectDistinct: detail.selectDistinct ? 1 : 0,
+              queryMode: 'sql',
+            }
+            state.rawSql = detail.lastExecutedSql || state.rawSql || ''
+            state.workMode = 'sql'
+            resetResultPanel()
+            markClean()
+            $baseMessage(`已打开视图「${config.configName}」`, 'success')
+            return
+          }
+
           const { data } = await getQueryConfigItems(config.id)
           const fullConfigVo = data
-          
-          // 切换到对应的分组
-          if (config.groupId !== state.currentTableGroup) {
+          if (config.groupId && config.groupId !== state.currentTableGroup) {
             state.currentTableGroup = config.groupId
             await handleGroupChange(config.groupId)
           }
-          
-          // 等待数据加载完成后再进行回显
           await nextTick()
-          
-          // 清空当前所有选择和配置
           clearAllSelections()
-          // 切换配置只加载「查询定义」，不自动带回上次会话/保存结果
           resetResultPanel()
-          
-          // 回显数据
           await restoreFromConfigVo(fullConfigVo)
-          
-          $baseMessage(`已加载配置「${config.configName}」。右侧结果已清空，请重新执行查询；如需历史结果请点「打开最近保存结果」`, 'success')
-          
+          state.workMode = 'visual'
+          markClean()
+          $baseMessage(`已打开视图「${config.configName}」`, 'success')
         } catch (error) {
           console.error('加载查询配置失败:', error)
           $baseMessage('加载配置失败', 'error')
+        }
+      }
+
+      const viewRowClassName = ({ row }) =>
+        String(row.id) === String(state.currentConfig?.id) ? 'is-current-view' : ''
+
+      const onViewRowClick = (row) => {
+        selectQueryConfig(row)
+      }
+
+      /** SQL 模式：把当前编辑器内容存成一条视图 */
+      const saveSqlAsView = async () => {
+        const sql = (state.rawSql || '').trim()
+        if (!sql) {
+          $baseMessage('请先编写 SQL', 'warning')
+          return
+        }
+        if (!state.currentDbConfig) {
+          $baseMessage('请先选择数据库', 'warning')
+          return
+        }
+        if (state.currentConfig?.id && isSqlViewConfig(state.currentConfig)) {
+          try {
+            await editQueryConfig({
+              ...state.currentConfig,
+              lastExecutedSql: sql,
+              queryMode: 'sql',
+            })
+            $baseMessage('视图定义已更新', 'success')
+            markClean()
+            await loadQueryConfigList()
+          } catch (error) {
+            $baseMessage(getRequestErrorMessage(error, '保存失败'), 'error')
+          }
+          return
+        }
+        try {
+          const { value } = await ElMessageBox.prompt('给这条 SQL 起个名称，方便下次打开。', '另存为视图', {
+            confirmButtonText: '保存',
+            cancelButtonText: '取消',
+            inputPlaceholder: '视图名称',
+            inputPattern: /\S+/,
+            inputErrorMessage: '请输入视图名称',
+          })
+          const groupId = state.currentTableGroup || state.tableGroupList[0]?.id || null
+          if (!groupId) {
+            $baseMessage('请先建一个表分组，SQL 视图会保存在分组下', 'warning')
+            return
+          }
+          const { data, msg } = await editQueryConfig({
+            configName: String(value).trim(),
+            groupId,
+            description: '',
+            isPublic: 0,
+            selectDistinct: 0,
+            orderNum: 0,
+            queryMode: 'sql',
+            lastExecutedSql: sql,
+          })
+          state.currentConfig = {
+            ...(data || {}),
+            configName: String(value).trim(),
+            groupId,
+            queryMode: 'sql',
+            lastExecutedSql: sql,
+          }
+          $baseMessage(msg || '视图已保存', 'success')
+          markClean()
+          await loadQueryConfigList()
+        } catch (error) {
+          if (error === 'cancel' || error === 'close') return
+          $baseMessage(getRequestErrorMessage(error, '保存失败'), 'error')
         }
       }
       
@@ -1355,7 +1934,7 @@
       const findFieldInTree = (fieldId) => {
         for (const table of state.dbTables) {
           if (table.columns) {
-            const field = table.columns.find(f => f.id === fieldId)
+            const field = table.columns.find((f) => String(f.id) === String(fieldId))
             if (field) return field
           }
         }
@@ -1369,7 +1948,20 @@
             // 调用后端API删除配置
             const { data } = await deleteQueryConfig(config.id)
             $baseMessage(data, 'success')
-            // 重新加载查询配置列表
+            if (String(config.id) === String(state.currentConfig?.id)) {
+              state.currentConfig = {
+                id: null,
+                configName: '',
+                groupId: state.currentTableGroup || null,
+                description: '',
+                isPublic: 0,
+                selectDistinct: 0,
+                orderNum: 0,
+                canvasGroupIds: [],
+                queryMode: 'visual',
+              }
+              markClean()
+            }
             await loadQueryConfigList()
           })
         } catch (error) {
@@ -1380,13 +1972,29 @@
         }
       }
       
-      // 加载查询配置列表
+      // 加载当前库下全部视图（各表分组合并，含 SQL 视图）
       const loadQueryConfigList = async () => {
         try {
-          if (!state.currentTableGroup) return
-          // 调用后端API获取配置列表
-          const { data } = await getQueryConfigList({ groupId: state.currentTableGroup })
-          state.queryConfigList = data
+          const groupIds = (state.tableGroupList || []).map((g) => g.id)
+          if (state.currentTableGroup && !groupIds.includes(state.currentTableGroup)) {
+            groupIds.push(state.currentTableGroup)
+          }
+          if (!groupIds.length) {
+            state.queryConfigList = []
+            return
+          }
+          const results = await Promise.all(groupIds.map((groupId) => getQueryConfigList({ groupId })))
+          const merged = []
+          const seen = new Set()
+          for (const res of results) {
+            for (const row of (res.data || [])) {
+              if (!seen.has(row.id)) {
+                seen.add(row.id)
+                merged.push(row)
+              }
+            }
+          }
+          state.queryConfigList = merged
         } catch (error) {
           console.error('加载查询配置列表失败:', error)
         }
@@ -1406,7 +2014,7 @@
         if (!state.isResizing) return;
         
         // 获取容器相对于视口的位置信息
-        const container = document.querySelector('.visual-query-container');
+        const container = document.querySelector('.visual-query-main');
         if (!container) return;
         const containerRect = container.getBoundingClientRect();
         
@@ -1484,17 +2092,62 @@
         await loadDbConfigList()
       };
       
+      const loadInstanceList = async (dbConfigId, options = {}) => {
+        const restoreLast = options.restoreLast !== false
+        if (!dbConfigId) {
+          state.instanceList = []
+          state.currentInstance = ''
+          return
+        }
+        try {
+          const { data } = await getInstances(dbConfigId)
+          const instances = data?.[0]?.instances || data || []
+          state.instanceList = Array.isArray(instances) ? instances : []
+          const last = loadLastCtx()
+          const qInst = route.query.instance || (restoreLast ? last.instance : '')
+          const names = state.instanceList.map((it) => it.instanceName || it)
+          const schemaName = state.dbConfigList.find((d) => String(d.id) === String(dbConfigId))?.schemaName
+          const prefer = qInst && names.includes(String(qInst))
+            ? String(qInst)
+            : schemaName
+          state.currentInstance = (prefer && names.includes(prefer))
+            ? prefer
+            : (names[0] || '')
+        } catch (error) {
+          console.warn('加载数据库实例失败:', error)
+          state.instanceList = []
+        }
+      }
+
+      /** 加载当前库的画布分组（保存视图定义时可选） */
+      const loadCanvasGroups = async (dbConfigId) => {
+        if (!dbConfigId) {
+          state.canvasGroupOptions = []
+          return
+        }
+        try {
+          const { data } = await listRelationCanvasGroups(dbConfigId)
+          state.canvasGroupOptions = data || []
+        } catch (e) {
+          console.warn('加载画布分组失败', e)
+          state.canvasGroupOptions = []
+        }
+      }
+
       // 加载数据库配置列表
       const loadDbConfigList = async () => {
         try {
           const { data } = await getDbConfigList()
           state.dbConfigList = data
           
-          // 如果有数据库配置，默认选择第一个
           if (data && data.length > 0) {
-            state.currentDbConfig = data[0].id
-            // 加载该数据库的表分组
-            await loadTableGroupList(state.currentDbConfig)
+            const last = loadLastCtx()
+            const qid = route.query.dbConfigId || last.dbConfigId
+            const matched = qid && data.find((d) => String(d.id) === String(qid))
+            state.currentDbConfig = matched ? matched.id : data[0].id
+            await loadTableGroupList(state.currentDbConfig, { restoreLast: true })
+            await loadInstanceList(state.currentDbConfig, { restoreLast: true })
+            await loadCanvasGroups(state.currentDbConfig)
           }
         } catch (error) {
           console.error('加载数据库配置失败:', error)
@@ -1503,20 +2156,25 @@
       }
       
       // 加载表分组列表
-      const loadTableGroupList = async (dbConfigId) => {
+      const loadTableGroupList = async (dbConfigId, options = {}) => {
+        const restoreLast = options.restoreLast !== false
         if (!dbConfigId) return
         
         try {
           const { data } = await getTableGroupList({ dbConfigId })
-          state.tableGroupList = data
+          state.tableGroupList = data || []
           
-          // 如果有表分组，默认选择第一个
-          if (data && data.length > 0) {
-            state.currentTableGroup = data[0].id
-            // 加载该分组的表和字段
+          if (state.tableGroupList.length > 0) {
+            const last = loadLastCtx()
+            const qgid = route.query.groupId || (restoreLast ? last.groupId : '')
+            const matched = qgid && state.tableGroupList.find((g) => String(g.id) === String(qgid))
+            state.currentTableGroup = matched ? matched.id : state.tableGroupList[0].id
             await loadTablesWithColumns(state.currentDbConfig, state.currentTableGroup)
-            // 加载查询配置列表
             loadQueryConfigList()
+          } else {
+            state.currentTableGroup = ''
+            state.dbTables = []
+            state.queryConfigList = []
           }
         } catch (error) {
           console.error('加载表分组失败:', error)
@@ -1533,14 +2191,32 @@
           
           // 转换数据格式为树形结构
           state.dbTables = data
-          
-          $baseMessage('加载表和字段成功', 'success')
         } catch (error) {
           console.error('加载表和字段失败:', error)
           $baseMessage('加载表和字段失败', 'error')
         }
       }
       
+      const onDbSelect = async (dbConfigId) => {
+        if (String(dbConfigId) === String(state.currentDbConfig)) return
+        if (!(await confirmIfDirty())) return
+        state.currentDbConfig = dbConfigId
+        await handleDbChange(dbConfigId)
+        saveLastCtx()
+        await nextTick()
+        markClean()
+      }
+
+      const onGroupSelect = async (groupId) => {
+        if (String(groupId) === String(state.currentTableGroup)) return
+        if (!(await confirmIfDirty())) return
+        state.currentTableGroup = groupId
+        await handleGroupChange(groupId)
+        saveLastCtx()
+        await nextTick()
+        markClean()
+      }
+
       // 处理数据库变更
       const handleDbChange = async (dbConfigId) => {
         state.currentTableGroup = ''
@@ -1550,15 +2226,16 @@
         state.canvasGroupOptions = []
         resetResultPanel()
         
-        // 加载新选择的数据库的表分组与画布分组
-        await loadTableGroupList(dbConfigId)
-        try {
-          const { data } = await listRelationCanvasGroups(dbConfigId)
-          state.canvasGroupOptions = data || []
-        } catch (e) {
-          console.warn('加载画布分组失败', e)
-        }
+        // 手动切库：取该库第一项，不沿用上一库记住的分组/实例
+        await loadTableGroupList(dbConfigId, { restoreLast: false })
+        await loadInstanceList(dbConfigId, { restoreLast: false })
+        await loadCanvasGroups(dbConfigId)
       }
+
+      watch(
+        () => [state.currentDbConfig, state.currentTableGroup, state.workMode, state.currentInstance, state.queryLimit],
+        () => saveLastCtx(),
+      )
       
       // 处理分组变更
       const handleGroupChange = async (groupId) => {
@@ -1574,7 +2251,7 @@
       }
       
       // 初始化
-      onMounted(() => {
+      onMounted(async () => {
         // 从 localStorage 恢复左右占比（默认 1:1）与配置区折叠状态
         restorePanelRatio()
         const savedConfigVisible = localStorage.getItem('queryConfigVisible')
@@ -1582,10 +2259,229 @@
           state.configVisible = savedConfigVisible === 'true'
         }
         
-        initParams()
-        initUniver();
-        
+        const last = loadLastCtx()
+        if (route.query.mode === 'sql' || (!route.query.mode && last.workMode === 'sql')) {
+          state.workMode = 'sql'
+        }
+        const savedLimit = Number(last.queryLimit)
+        if (Number.isFinite(savedLimit) && savedLimit > 0) {
+          state.queryLimit = Math.min(Math.floor(savedLimit), 50000)
+        }
+        document.body.classList.add('visual-client-active')
+        await initParams()
+        initUniver()
+        markClean()
+        saveLastCtx()
+        scheduleLivePreview()
       });
+
+      const onBeforeUnload = (e) => {
+        if (!isDirty()) return
+        e.preventDefault()
+        e.returnValue = ''
+      }
+      window.addEventListener('beforeunload', onBeforeUnload)
+
+      onBeforeRouteLeave(async (to, from, next) => {
+        if (skipLeaveConfirm) {
+          skipLeaveConfirm = false
+          next()
+          return
+        }
+        if (await confirmIfDirty()) {
+          next()
+        } else {
+          next(false)
+        }
+      })
+
+      const applySqlToEditor = (sql, tip) => {
+        const text = (sql || '').trim()
+        if (!text) {
+          $baseMessage('没有可打开的 SQL', 'warning')
+          return false
+        }
+        state.rawSql = text
+        state.workMode = 'sql'
+        state.sqlPreviewVisible = false
+        saveLastCtx()
+        if (tip) $baseMessage(tip, 'success')
+        return true
+      }
+
+      /** 预览弹窗 SQL 一键进入编辑器 */
+      const openSqlFromPreview = () => {
+        applySqlToEditor(state.sqlPreview?.previewSql, '已用预览 SQL 打开编辑器，可直接执行')
+      }
+
+      /** 左侧常驻预览进入编辑器 */
+      const openSqlFromLivePreview = () => {
+        applySqlToEditor(state.livePreviewSql, '已用预览 SQL 打开编辑器，可直接执行')
+      }
+
+      const ensureAiReady = () => {
+        if (!state.currentDbConfig) {
+          $baseMessage('请先选择数据库', 'warning')
+          return false
+        }
+        if (Number(currentDbRow.value?.aiEnabled) === 0) {
+          $baseMessage('该连接已关闭 AI 助手，请在连接编辑中开启', 'warning')
+          return false
+        }
+        if (!state.currentInstance) {
+          const first = state.instanceList[0]
+          const name = first?.instanceName || first
+          if (name) {
+            state.currentInstance = name
+          } else {
+            $baseMessage('请先选择实例（直接写 SQL 页签里）', 'warning')
+            return false
+          }
+        }
+        return true
+      }
+
+      const selectedFieldHint = () =>
+        (state.columnList || [])
+          .map((f) => `${f.tableName || f.tableAlias || ''}.${f.fieldName || f.displayName || ''}`.replace(/^\./, ''))
+          .filter(Boolean)
+          .join(', ')
+
+      /** 发给 AI 的最新界面上下文（每次发送再取一遍，避免勾选过期） */
+      const buildAiContext = (extra = {}) => {
+        const visual = state.workMode !== 'sql'
+        return {
+          workMode: visual ? 'visual' : 'sql',
+          groupId: state.currentTableGroup || undefined,
+          canvasGroupIds: state.currentConfig.canvasGroupIds || [],
+          selectedFields: (state.columnList || []).map((f) => ({
+            fieldId: f.id,
+            table: f.tableName || f.tableAlias || '',
+            column: f.fieldName || '',
+            displayName: f.displayName || '',
+          })),
+          draftItems: buildDraftConfigItems(),
+          selectedSql: extra.selectedSql || (visual ? state.livePreviewSql : ''),
+          editorSql: extra.editorSql || (visual ? state.livePreviewSql : state.rawSql),
+          lastError: extra.lastError || state.lastSqlError || '',
+        }
+      }
+
+      /** 配置模式让 AI 勾选视图；SQL 模式帮改写 */
+      const openAiAssistant = (payload) => {
+        if (!ensureAiReady()) return
+        const visual = state.workMode !== 'sql'
+        const defaultPrefill = visual
+          ? `请按需求帮我勾选查询视图：选择字段、写筛选/分组/排序。${selectedFieldHint() ? `当前已选字段：${selectedFieldHint()}。` : ''}请用 resolve_catalog_fields 解析 fieldId，最后用 propose_query_config 提交配置，不要只给 SQL。`
+          : '请优化或改写这段 SQL：'
+        aiChatRef.value?.open({
+          scene: payload?.scene || 'sql',
+          prefill: payload?.prefill || defaultPrefill,
+          context: buildAiContext(payload?.context || {}),
+        })
+      }
+
+      const onAskAiFromEditor = (payload) => {
+        openAiAssistant({
+          scene: 'sql',
+          prefill: '请优化或改写这段 SQL：',
+          context: payload,
+        })
+      }
+
+      const onAiInsertSql = (sql) => {
+        const text = (sql || '').trim()
+        if (!text) {
+          $baseMessage('没有可插入的 SQL', 'warning')
+          return
+        }
+        if (state.workMode !== 'sql') {
+          applySqlToEditor(
+            state.rawSql ? `${state.rawSql.trim()}\n${text}` : text,
+            '已用 AI SQL 打开编辑器',
+          )
+          return
+        }
+        state.rawSql = state.rawSql ? `${state.rawSql.trim()}\n${text}` : text
+        $baseMessage('已插入到 SQL 编辑器', 'success')
+      }
+
+      const onAiReplaceSql = (sql, silent = false) => {
+        const text = (sql || '').trim()
+        if (!text) {
+          if (!silent) $baseMessage('没有可替换的 SQL', 'warning')
+          return false
+        }
+        applySqlToEditor(text, silent ? '' : '已用 AI SQL 替换编辑器内容')
+        return true
+      }
+
+      const onAiRunSql = async (sql) => {
+        if (!onAiReplaceSql(sql, true)) return
+        await executeRawSql()
+      }
+
+      /** 把 AI 勾选配置回显到树和条件区（不反解析 SQL） */
+      const onAiApplyQueryConfig = async (config) => {
+        if (!config) return
+        const groupId = config.groupId || state.currentTableGroup
+        if (!groupId) {
+          $baseMessage('请先选择表分组，再应用配置', 'warning')
+          return
+        }
+        if (!(await confirmIfDirty())) return
+        if (String(groupId) !== String(state.currentTableGroup)) {
+          state.currentTableGroup = groupId
+          await handleGroupChange(groupId)
+        } else {
+          clearAllSelections()
+        }
+        resetResultPanel()
+        if (config.selectDistinct != null) {
+          state.currentConfig.selectDistinct = config.selectDistinct ? 1 : 0
+        }
+        const coerceItems = (items) =>
+          (items || []).map((it, i) => ({
+            ...it,
+            fieldId: it.fieldId == null || it.fieldId === '' ? it.fieldId : Number(it.fieldId),
+            orderNum: it.orderNum ?? i + 1,
+          }))
+        await nextTick()
+        await restoreFromConfigVo({
+          columnItems: coerceItems(config.columnItems),
+          whereItems: coerceItems(config.whereItems),
+          havingItems: coerceItems(config.havingItems),
+          groupItems: coerceItems(config.groupItems),
+          orderItems: coerceItems(config.orderItems),
+        })
+        state.workMode = 'visual'
+        const wanted = (config.columnItems || []).length
+        const applied = state.columnList.length
+        if (wanted && applied < wanted) {
+          $baseMessage(
+            `已应用 ${applied}/${wanted} 个字段，其余不在当前表分组，请先维护表分组`,
+            'warning',
+          )
+        } else {
+          $baseMessage('已应用 AI 配置到界面，可预览或保存视图定义', 'success')
+        }
+        refreshLivePreview()
+      }
+
+      /** 跳转表分组页（带当前连接与分组，两边互跳） */
+      const goTableGroup = () => {
+        if (!state.currentDbConfig) {
+          $baseMessage('请先选择数据库', 'warning')
+          return
+        }
+        router.push({
+          name: 'DbConfigCanvas',
+          query: {
+            id: String(state.currentDbConfig),
+            ...(state.currentTableGroup ? { groupId: String(state.currentTableGroup) } : {}),
+          },
+        })
+      }
       
       // 组件卸载前清理事件监听与 Univer 实例
       onBeforeUnmount(() => {
@@ -1601,6 +2497,9 @@
         }
         univerAPI = null;
         univerInstance = null;
+        window.removeEventListener('beforeunload', onBeforeUnload)
+        if (livePreviewTimer) clearTimeout(livePreviewTimer)
+        document.body.classList.remove('visual-client-active')
       });
       
       return {
@@ -1608,8 +2507,10 @@
         dbTree,
         univerContainer,
         configFormRef,
+        aiChatRef,
         configRules,
         hasSelectedFields,
+        hasTableGroups,
         hasSessionResult,
         selectedFieldOptions,
         formatSelectedFieldTable,
@@ -1638,6 +2539,7 @@
         updateGroupItem,
         updateOrderItem,
         executeQuery,
+        stopQuery,
         previewSql,
         exportExcel,
         saveQuery,
@@ -1646,6 +2548,26 @@
         shareQueryResult,
         copyShareLink,
         startResize,
+        isSqlMode,
+        currentDbType,
+        currentDbRow,
+        isSqlView,
+        goTableGroup,
+        goRelationCanvas,
+        onDbSelect,
+        onGroupSelect,
+        openSqlFromPreview,
+        openSqlFromLivePreview,
+        openAiAssistant,
+        buildAiContext,
+        onAskAiFromEditor,
+        onAiInsertSql,
+        onAiReplaceSql,
+        onAiRunSql,
+        onAiApplyQueryConfig,
+        saveSqlAsView,
+        viewRowClassName,
+        onViewRowClick,
         handleDbChange,
         handleGroupChange,
         // 查询配置相关方法
@@ -1664,29 +2586,53 @@
 <template>
   <Page auto-content-height content-class="!p-0">
   <div class="visual-query-container">
+    <div class="visual-query-main">
     <!-- 左侧配置区域 -->
     <div class="left-panel" :style="{ width: leftPanelWidth }">
       <div class="panel-header">
-        <h3>查询视图配置</h3>
+        <h3>查询视图</h3>
         <div>
-          <el-button size="small" v-permissions="{ permission: ['QueryExecute:preview'] }" @click="previewSql">SQL预览</el-button>
+          <el-button size="small" @click="openAiAssistant()">
+            AI 助手
+          </el-button>
           <el-button
+            v-if="!isSqlMode"
+            size="small"
+            v-permissions="{ permission: ['QueryExecute:preview'] }"
+            @click="previewSql"
+          >
+            对比上次
+          </el-button>
+          <el-button
+            v-if="!executing"
             type="primary"
             size="small"
-            :loading="executing"
             v-permissions="{ permission: ['QueryExecute:execute'] }"
             @click="executeQuery"
           >
             执行查询
           </el-button>
+          <el-button
+            v-else
+            type="danger"
+            size="small"
+            @click="stopQuery"
+          >
+            停止
+          </el-button>
         </div>
       </div>
+
+      <el-tabs v-model="workMode" class="work-mode-tabs">
+        <el-tab-pane label="配置查询" name="visual" />
+        <el-tab-pane label="直接写 SQL" name="sql" />
+      </el-tabs>
       
-      <!-- 添加数据库和分组选择框 -->
+      <!-- 数据库 / 分组 / 实例 -->
       <div class="db-selector">
         <el-form :inline="true" size="small">
-          <el-form-item label="选择：">
-            <el-select v-model="currentDbConfig" placeholder="选择数据库" @change="handleDbChange">
+          <el-form-item label="数据库">
+            <el-select :model-value="currentDbConfig" placeholder="选择数据库" @change="onDbSelect">
               <el-option
                 v-for="item in dbConfigList"
                 :key="item.id"
@@ -1695,8 +2641,8 @@
               />
             </el-select>
           </el-form-item>
-          <el-form-item>
-            <el-select v-model="currentTableGroup" placeholder="选择分组" @change="handleGroupChange">
+          <el-form-item v-if="!isSqlMode">
+            <el-select :model-value="currentTableGroup" placeholder="选择分组" @change="onGroupSelect">
               <el-option
                 v-for="item in tableGroupList"
                 :key="item.id"
@@ -1705,28 +2651,55 @@
               />
             </el-select>
           </el-form-item>
+          <el-form-item v-else>
+            <el-select v-model="currentInstance" placeholder="选择实例" clearable>
+              <el-option
+                v-for="item in instanceList"
+                :key="item.instanceName || item"
+                :label="item.instanceName || item"
+                :value="item.instanceName || item"
+              />
+            </el-select>
+          </el-form-item>
+          <el-form-item>
+            <el-button size="small" type="primary" link @click="goTableGroup">
+              维护表分组
+            </el-button>
+          </el-form-item>
         </el-form>
+        <p v-if="!isSqlMode && hasTableGroups" class="mode-hint">
+          配置查询依赖表分组里的表和字段；没有分组或字段不够时，请先去维护表分组。
+        </p>
+        <p v-else-if="!isSqlMode && currentDbConfig" class="mode-hint">
+          这个库还没有表分组，配置查询需要先建分组并勾选表字段。
+          <el-button type="primary" link size="small" @click="goTableGroup">去建分组</el-button>
+        </p>
+        <p v-else class="mode-hint">
+          直接写 SQL 无需保存配置，执行后右侧可导出、保存结果、分享。
+        </p>
       </div>
       
-      <!-- 查询配置历史记录 -->
+      <!-- 我的视图：点名称即打开 -->
       <div class="query-config-section">
         <div class="config-header" @click="toggleConfigVisible">
-          <span>查询配置历史</span>
+          <span>我的视图</span>
           <vab-icon :icon="configVisible ? 'arrow-up-s-line' : 'arrow-down-s-line'" />
         </div>
         <el-collapse-transition>
           <div v-show="configVisible" class="config-content">
             <div class="config-actions">
               <el-button
+                v-if="!isSqlMode"
                 type="primary"
                 size="small"
                 v-permissions="{ permission: ['QueryConfig:add'] }"
                 @click="showConfigDialog('add')"
               >
                 <vab-icon icon="add-line" />
-                新建配置
+                新建视图
               </el-button>
               <el-button
+                v-if="!isSqlMode"
                 type="success"
                 size="small"
                 v-permissions="{ permission: ['QueryConfig:update', 'QueryConfigItem:add'] }"
@@ -1734,9 +2707,21 @@
                 :disabled="!hasSelectedFields"
               >
                 <vab-icon icon="save-line" />
-                保存/更新当前配置
+                保存视图定义
+              </el-button>
+              <el-button
+                v-if="isSqlMode"
+                type="success"
+                size="small"
+                v-permissions="{ permission: ['QueryConfig:add', 'QueryConfig:update'] }"
+                @click="saveSqlAsView"
+                :disabled="!rawSql"
+              >
+                <vab-icon icon="save-line" />
+                {{ isSqlView ? '更新视图定义' : '另存为视图' }}
               </el-button>
               <el-checkbox
+                v-if="!isSqlMode"
                 v-model="currentConfig.selectDistinct"
                 :true-value="1"
                 :false-value="0"
@@ -1747,9 +2732,27 @@
             </div>
             
             <div class="config-list">
-              <el-table :data="queryConfigList" size="small">
-                <el-table-column label="配置名称" prop="configName" />
-                <!-- <el-table-column label="描述" prop="description" show-overflow-tooltip /> -->
+              <el-table
+                :data="queryConfigList"
+                size="small"
+                highlight-current-row
+                :row-class-name="viewRowClassName"
+                @row-click="onViewRowClick"
+              >
+                <el-table-column label="视图名称" min-width="140">
+                  <template #default="{ row }">
+                    <el-button link type="primary" @click.stop="selectQueryConfig(row)">
+                      {{ row.configName }}
+                    </el-button>
+                  </template>
+                </el-table-column>
+                <el-table-column label="类型" width="72">
+                  <template #default="{ row }">
+                    <el-tag :type="row.queryMode === 'sql' ? 'warning' : 'success'" size="small">
+                      {{ row.queryMode === 'sql' ? 'SQL' : '配置' }}
+                    </el-tag>
+                  </template>
+                </el-table-column>
                 <el-table-column label="公开" prop="isPublic" width="60">
                   <template #default="{ row }">
                     <el-tag :type="row.isPublic ? 'success' : 'info'" size="small">
@@ -1757,32 +2760,53 @@
                     </el-tag>
                   </template>
                 </el-table-column>
-                <el-table-column label="操作" width="140">
+                <el-table-column label="操作" width="90">
                   <template #default="{ row }">
                     <el-button-group>
-                      <el-button link size="small" @click.stop="showConfigDialog('edit', row)" title="编辑">
-                      <vab-icon icon="edit-line" />
+                      <el-button
+                        v-if="row.queryMode !== 'sql'"
+                        link
+                        size="small"
+                        title="编辑"
+                        @click.stop="showConfigDialog('edit', row)"
+                      >
+                        <vab-icon icon="edit-line" />
                       </el-button>
-                      <el-button link size="small" @click.stop="deleteQueryConfigMethod(row)" title="删除">
+                      <el-button link size="small" title="删除" @click.stop="deleteQueryConfigMethod(row)">
                         <vab-icon icon="delete-bin-line" />
-                      </el-button>
-                      <el-button link size="small" @click.stop="selectQueryConfig(row)" title="选择数据">
-                        <vab-icon icon="check-double-fill" />
                       </el-button>
                     </el-button-group>
                   </template>
                 </el-table-column>
               </el-table>
-              <el-empty v-if="queryConfigList.length === 0" description="暂无查询配置" />
+              <el-empty v-if="queryConfigList.length === 0" description="暂无视图，执行后可保存方便下次打开" />
             </div>
           </div>
         </el-collapse-transition>
       </div>
       
-      <el-tabs v-model="activeName" class="config-tabs">
+      <div v-if="isSqlMode" class="raw-sql-pane">
+        <SqlEditor
+          v-model="rawSql"
+          :db-config-id="currentDbConfig"
+          :db-type="currentDbType"
+          :instance-name="currentInstance"
+          :read-only="executing"
+          @execute="executeQuery"
+          @ask-ai="onAskAiFromEditor"
+        />
+      </div>
+      <el-tabs v-else v-model="activeName" class="config-tabs">
         <!-- 表和字段配置 -->
         <el-tab-pane label="表和字段" name="tables">
+          <el-empty
+            v-if="!hasTableGroups"
+            description="请先维护表分组，再勾选要查询的字段"
+          >
+            <el-button type="primary" size="small" @click="goTableGroup">去建分组</el-button>
+          </el-empty>
           <el-input
+            v-else
             v-model="filterText"
             placeholder="输入关键字过滤"
             clearable
@@ -1790,6 +2814,7 @@
           />
           
           <el-tree
+            v-if="hasTableGroups"
             ref="dbTree"
             :data="dbTables"
             :props="treeProps"
@@ -2022,6 +3047,36 @@
           </div>
         </el-tab-pane>
       </el-tabs>
+
+      <div v-if="!isSqlMode" class="live-sql-preview">
+        <div class="live-sql-head">
+          <span>将要执行的 SQL</span>
+          <span v-if="livePreviewLoading" class="live-sql-status">生成中…</span>
+          <el-button
+            link
+            type="primary"
+            size="small"
+            :disabled="!livePreviewSql"
+            @click="openSqlFromLivePreview"
+          >
+            打开编辑器
+          </el-button>
+        </div>
+        <div v-if="livePreviewError" class="live-sql-error">
+          {{ livePreviewError }}
+          <el-button
+            v-if="livePreviewPathFailed"
+            link
+            type="primary"
+            size="small"
+            @click="goRelationCanvas"
+          >
+            去补关系画布
+          </el-button>
+        </div>
+        <pre v-else-if="livePreviewSql" class="live-sql-body">{{ livePreviewSql }}</pre>
+        <p v-else class="live-sql-empty">勾选字段后，这里会即时显示即将执行的语句</p>
+      </div>
       
       <!-- 拖动调整大小的边界线 -->
       <div class="resizer" @mousedown="startResize"></div>
@@ -2036,6 +3091,17 @@
             （{{ lastQueryResult.rowCount }} 行<span v-if="lastQueryResult.limit">，上限 {{ lastQueryResult.limit }}</span>）
           </span>
         </h3>
+        <div class="result-toolbar">
+          <span class="limit-label">最多</span>
+          <el-input-number
+            v-model="queryLimit"
+            :min="1"
+            :max="50000"
+            :step="100"
+            size="small"
+            controls-position="right"
+          />
+          <span class="limit-label">行</span>
         <el-button-group>
           <el-button
             size="small"
@@ -2045,11 +3111,16 @@
           >
             打开最近保存结果
           </el-button>
-          <el-button size="small" :loading="exporting" :disabled="!currentConfig?.id" @click="exportExcel">
+          <el-button
+            size="small"
+            :loading="exporting"
+            :disabled="isSqlMode ? !hasSessionResult && !rawSql : !hasSessionResult && !hasSelectedFields"
+            @click="exportExcel"
+          >
             导出Excel
           </el-button>
           <el-button size="small" :loading="savingResult" :disabled="!hasSessionResult" @click="saveQuery">
-            保存结果
+            保存这次结果
           </el-button>
           <el-button
             size="small"
@@ -2061,22 +3132,30 @@
             分享
           </el-button>
         </el-button-group>
+        </div>
       </div>
       <div ref="univerContainer" class="univer-container"></div>
     </div>
+    </div>
+
+    <AiDockBar />
+    <AiChatWindow
+      ref="aiChatRef"
+      :db-config-id="currentDbConfig"
+      :instance-name="currentInstance"
+      :conn-label="currentDbRow?.dbName"
+      :ai-allow-sample-data="currentDbRow?.aiAllowSampleData"
+      :get-extra-context="buildAiContext"
+      @insert-sql="onAiInsertSql"
+      @replace-sql="onAiReplaceSql"
+      @run-sql="onAiRunSql"
+      @open-sql-in-new-tab="onAiReplaceSql"
+      @apply-query-config="onAiApplyQueryConfig"
+    />
 
     <!-- SQL 预览对话框（含与上次执行对比） -->
     <el-dialog v-model="sqlPreviewVisible" title="SQL 预览" width="900px">
       <template v-if="sqlPreview">
-        <el-alert
-          v-if="sqlPreview.dialectHint"
-          type="success"
-          :closable="false"
-          show-icon
-          style="margin-bottom: 10px"
-          :title="`按目标库方言生成：${sqlPreview.dbType || '-'} / ${sqlPreview.dialectFamily || '-'}`"
-          :description="sqlPreview.dialectHint"
-        />
         <el-alert
           v-if="sqlPreview.path && sqlPreview.path.intermediateTableIds && sqlPreview.path.intermediateTableIds.length"
           type="info"
@@ -2112,6 +3191,12 @@
             <pre class="sql-preview">{{ sqlPreview.lastExecutedSql }}</pre>
           </el-col>
         </el-row>
+      </template>
+      <template #footer>
+        <el-button @click="sqlPreviewVisible = false">关闭</el-button>
+        <el-button type="primary" :disabled="!sqlPreview?.previewSql" @click="openSqlFromPreview">
+          用这段 SQL 打开编辑器
+        </el-button>
       </template>
     </el-dialog>
 
@@ -2206,7 +3291,7 @@
     </el-dialog>
     
     <!-- 查询配置编辑对话框 -->
-    <el-dialog v-model="configDialogVisible" :title="configDialogMode === 'add' ? '新建查询配置' : '编辑查询配置'" width="50%">
+    <el-dialog v-model="configDialogVisible" :title="configDialogMode === 'add' ? '新建视图' : '编辑视图'" width="50%">
       <el-form :model="currentConfig" :rules="configRules" ref="configFormRef" label-width="100px">
         <el-form-item label="配置名称" prop="configName">
           <el-input v-model="currentConfig.configName" placeholder="请输入配置名称" maxlength="100" />
@@ -2309,9 +3394,17 @@
   .visual-query-container {
     position: relative;
     display: flex;
+    flex-direction: column;
     width: 100%;
     height: 100%;
     overflow: hidden;
+
+    .visual-query-main {
+      display: flex;
+      flex: 1;
+      min-width: 0;
+      min-height: 0;
+    }
     
     .left-panel {
       position: relative;
@@ -2335,6 +3428,87 @@
         }
       }
       
+      .work-mode-tabs {
+        flex-shrink: 0;
+        padding: 0 15px;
+        :deep(.el-tabs__header) {
+          margin-bottom: 0;
+        }
+        :deep(.el-tabs__content) {
+          display: none;
+        }
+      }
+
+      .raw-sql-pane {
+        flex: 1;
+        min-height: 220px;
+        overflow: hidden;
+        padding: 8px 10px 10px;
+      }
+
+      .live-sql-preview {
+        flex-shrink: 0;
+        height: 168px;
+        display: flex;
+        flex-direction: column;
+        border-top: 1px solid var(--el-border-color-light);
+        background: var(--el-bg-color-page);
+
+        .live-sql-head {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          padding: 4px 10px 0;
+          font-size: 12px;
+          font-weight: 600;
+          color: var(--el-text-color-regular);
+
+          .live-sql-status {
+            font-weight: normal;
+            color: var(--el-text-color-secondary);
+          }
+
+          .el-button {
+            margin-left: auto;
+          }
+        }
+
+        .live-sql-body {
+          flex: 1;
+          margin: 4px 10px 8px;
+          padding: 8px;
+          overflow: auto;
+          font-family: Consolas, Monaco, monospace;
+          font-size: 12px;
+          line-height: 1.5;
+          white-space: pre-wrap;
+          word-break: break-all;
+          background: var(--el-fill-color-light);
+          border: 1px solid var(--el-border-color-lighter);
+          border-radius: 4px;
+        }
+
+        .live-sql-empty,
+        .live-sql-error {
+          flex: 1;
+          margin: 4px 10px 8px;
+          font-size: 12px;
+          color: var(--el-text-color-secondary);
+        }
+
+        .live-sql-error {
+          color: var(--el-color-danger);
+        }
+      }
+
+      .mode-hint {
+        margin: 0;
+        font-size: 12px;
+        line-height: 1.5;
+        color: var(--el-text-color-secondary);
+      }
+
+
       .db-selector {
         padding: 10px 15px;
         background-color: var(--el-bg-color-page);
@@ -2400,6 +3574,11 @@
             
             .el-table {
               --el-table-header-bg-color: var(--el-fill-color-light);
+              cursor: pointer;
+            }
+
+            :deep(.is-current-view) {
+              --el-table-tr-bg-color: var(--el-color-primary-light-9);
             }
           }
           
@@ -2571,6 +3750,8 @@
         display: flex;
         align-items: center;
         justify-content: space-between;
+        flex-wrap: wrap;
+        gap: 8px;
         padding: 10px 15px;
         background-color: var(--el-bg-color);
         border-bottom: 1px solid var(--el-border-color-light);
@@ -2582,6 +3763,22 @@
             font-size: 12px;
             font-weight: normal;
             color: var(--el-text-color-secondary);
+          }
+        }
+
+        .result-toolbar {
+          display: flex;
+          align-items: center;
+          flex-wrap: wrap;
+          gap: 8px;
+
+          .limit-label {
+            font-size: 12px;
+            color: var(--el-text-color-secondary);
+          }
+
+          .el-input-number {
+            width: 110px;
           }
         }
       }

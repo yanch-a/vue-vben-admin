@@ -20,6 +20,8 @@ const emit = defineEmits<{
   open: [];
   refresh: [];
   group: [];
+  /** 打开查询视图（直接写 SQL 模式） */
+  queryView: [];
   relation: [];
   /** 已保存查询文件管理 */
   savedQueries: [];
@@ -54,6 +56,9 @@ const emit = defineEmits<{
     />
     <ElButton size="small" :disabled="!hasConnection" @click="emit('group')">
       表分组
+    </ElButton>
+    <ElButton size="small" :disabled="!hasConnection" @click="emit('queryView')">
+      查询视图
     </ElButton>
     <ElButton size="small" :disabled="!hasConnection" @click="emit('relation')">
       关系画布

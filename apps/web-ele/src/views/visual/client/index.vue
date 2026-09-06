@@ -345,6 +345,23 @@ function goGroup() {
   });
 }
 
+/** 从客户端打开查询视图：直接写 SQL，无需先配表分组 */
+function goQueryView() {
+  if (!activeConnection.value) return;
+  const instance =
+    activeTab.value?.instanceName ||
+    activeConnection.value.schemaName ||
+    undefined;
+  router.push({
+    name: 'QueryConfig',
+    query: {
+      dbConfigId: String(activeConnection.value.id),
+      mode: 'sql',
+      ...(instance ? { instance } : {}),
+    },
+  });
+}
+
 function goRelation() {
   if (!activeConnection.value) return;
   const instance =
@@ -2110,6 +2127,7 @@ onBeforeUnmount(() => {
         @open="onOpenConnection"
         @refresh="refreshBrowseObjects"
         @group="goGroup"
+        @query-view="goQueryView"
         @relation="goRelation"
         @saved-queries="goSavedQueryManage"
         @progress="onOpenTaskPanel"

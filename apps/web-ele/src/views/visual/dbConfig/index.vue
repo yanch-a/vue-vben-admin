@@ -174,6 +174,8 @@
         } else {
           ElMessage.error('连接失败')
         }
+        // 测试后刷新列表，同步连接状态等展示字段
+        await getList()
       }
 
       const handleDelete = (row) => {

@@ -1,8 +1,8 @@
 /**
  * AI 会话状态机，消费 POST /admin/aiAgent/chat/stream 的 SSE。
  * 事件与后端 SseAgentEventSink 对齐：run.start / message.delta / reasoning.delta /
- * tool.call / tool.result / sql.proposed / chart / error / run.cancelled / done。
- * sql.proposed → AiSqlCard → index.vue 的 insert/replace/run。
+ * tool.call / tool.result / sql.proposed / config.proposed / chart / error / run.cancelled / done。
+ * sql.proposed → AiSqlCard；config.proposed → AiQueryConfigCard → 应用到界面。
  * @author yanch
  */
 import { ref, triggerRef } from 'vue';
@@ -38,6 +38,19 @@ export interface AiMsg {
     writeOperation?: boolean;
     replaceSelection?: boolean;
   };
+  /** propose_query_config 产物，结构对齐 restoreFromConfigVo */
+  queryConfig?: {
+    explanation?: string;
+    warnings?: string[];
+    previewSql?: string;
+    selectDistinct?: number;
+    groupId?: number | string;
+    columnItems?: any[];
+    whereItems?: any[];
+    havingItems?: any[];
+    groupItems?: any[];
+    orderItems?: any[];
+  };
   chart?: { title: string; sql: string; spec: any; columns: string[]; rows: any[] };
   error?: string;
   done: boolean;
@@ -63,6 +76,51 @@ function pickDeltaText(data: any): string {
   if (typeof data.text === 'string') return data.text;
   if (typeof data.content === 'string') return data.content;
   return '';
+}
+
+/** 规范化 config.proposed 载荷，兼容扁平 items */
+function pickProposedQueryConfig(data: any): AiMsg['queryConfig'] | undefined {
+  if (!data) return undefined;
+  let obj = data;
+  if (typeof data === 'string') {
+    try {
+      obj = JSON.parse(data);
+    } catch {
+      return undefined;
+    }
+  }
+  if (!obj || typeof obj !== 'object') return undefined;
+  const split = (type: string) =>
+    Array.isArray(obj.items)
+      ? obj.items.filter((it: any) => String(it?.queryType || '').toUpperCase() === type)
+      : [];
+  const columnItems = Array.isArray(obj.columnItems) ? obj.columnItems : split('COLUMN');
+  const whereItems = Array.isArray(obj.whereItems) ? obj.whereItems : split('WHERE');
+  const havingItems = Array.isArray(obj.havingItems) ? obj.havingItems : split('HAVING');
+  const groupItems = Array.isArray(obj.groupItems) ? obj.groupItems : split('GROUP');
+  const orderItems = Array.isArray(obj.orderItems) ? obj.orderItems : split('ORDER');
+  if (
+    !columnItems.length &&
+    !whereItems.length &&
+    !havingItems.length &&
+    !groupItems.length &&
+    !orderItems.length &&
+    !obj.previewSql
+  ) {
+    return undefined;
+  }
+  return {
+    explanation: obj.explanation != null ? String(obj.explanation) : '',
+    warnings: Array.isArray(obj.warnings) ? obj.warnings : undefined,
+    previewSql: obj.previewSql != null ? String(obj.previewSql) : '',
+    selectDistinct: obj.selectDistinct ? 1 : 0,
+    groupId: obj.groupId,
+    columnItems,
+    whereItems,
+    havingItems,
+    groupItems,
+    orderItems,
+  };
 }
 
 /** 规范化 sql.proposed 载荷 */
@@ -181,6 +239,14 @@ export function useAiChat(getCtx: () => { dbConfigId: any; instanceName: string;
               }
               break;
             }
+            case 'config.proposed': {
+              const proposed = pickProposedQueryConfig(data);
+              if (proposed) {
+                msg.queryConfig = proposed;
+                touch();
+              }
+              break;
+            }
             case 'chart':
               msg.chart = typeof data === 'string' ? safeJson(data) : data;
               touch();
@@ -253,6 +319,9 @@ export function useAiChat(getCtx: () => { dbConfigId: any; instanceName: string;
           try {
             const att = typeof m.attachments === 'string' ? JSON.parse(m.attachments) : m.attachments;
             if (att.proposedSql) cur.sql = pickProposedSql(att.proposedSql);
+            if (att.proposedQueryConfig) {
+              cur.queryConfig = pickProposedQueryConfig(att.proposedQueryConfig);
+            }
             if (att.chart) cur.chart = att.chart;
           } catch {
             /* ignore */

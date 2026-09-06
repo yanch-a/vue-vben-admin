@@ -395,6 +395,26 @@ export function executeQueryConfig(configId: string, limit?: number) {
   })
 }
 
+/** 按当前勾选/条件草稿执行（不必先保存配置） */
+export function executeQueryByDraft(data: {
+  dbConfigId: number | string
+  groupId?: number | string
+  items?: any[]
+  selectDistinct?: number
+  canvasGroupIds?: Array<number | string>
+  configId?: number | string
+  limit?: number
+  requestId?: string
+}, opts?: { signal?: AbortSignal }) {
+  return request({
+    url: queryExecuteUrl + 'executeByDraft',
+    method: 'post',
+    data,
+    signal: opts?.signal,
+    timeout: 0,
+  })
+}
+
 /** 导出 Excel（blob） */
 export function exportQueryExcel(configId: string, limit?: number) {
   return request({
@@ -402,6 +422,24 @@ export function exportQueryExcel(configId: string, limit?: number) {
     method: 'post',
     responseType: 'blob',
     data: { configId, limit },
+  })
+}
+
+/** 按草稿导出 Excel（blob） */
+export function exportQueryExcelByDraft(data: {
+  dbConfigId: number | string
+  groupId?: number | string
+  items?: any[]
+  selectDistinct?: number
+  canvasGroupIds?: Array<number | string>
+  configId?: number | string
+  limit?: number
+}) {
+  return request({
+    url: queryExecuteUrl + 'exportExcelByDraft',
+    method: 'post',
+    responseType: 'blob',
+    data,
   })
 }
 

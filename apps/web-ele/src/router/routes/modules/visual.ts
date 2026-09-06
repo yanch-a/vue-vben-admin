@@ -25,6 +25,17 @@ const routes: RouteRecordRaw[] = [
     },
   },
   {
+    name: 'QueryConfig',
+    path: '/visual/visualQuery/index',
+    // 历史 Options SFC、无 lang=ts，vue-tsc 不生成模块声明
+    // @ts-expect-error SFC without typed module
+    component: () => import('#/views/visual/visualQuery/index.vue'),
+    meta: {
+      title: '查询视图',
+      hideInMenu: true,
+    },
+  },
+  {
     name: 'DbConfigCanvas',
     path: '/visual/dbConfig/canvas',
     // 历史 Options SFC、无 lang=ts，vue-tsc 不生成模块声明

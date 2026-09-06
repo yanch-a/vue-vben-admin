@@ -27,6 +27,8 @@ const props = defineProps<{
   connLabel?: string;
   /** 1=允许真实行数据发给模型；缺省/0=脱敏模式 */
   aiAllowSampleData?: number | null;
+  /** 每次发送前取最新上下文（查询视图勾选会变） */
+  getExtraContext?: () => Record<string, any>;
 }>();
 
 const emit = defineEmits<{
@@ -34,6 +36,7 @@ const emit = defineEmits<{
   replaceSql: [string];
   runSql: [string];
   openSqlInNewTab: [string];
+  applyQueryConfig: [any];
 }>();
 
 /** 当前是否脱敏（未允许样例数据） */
@@ -56,7 +59,7 @@ const selectable = ref<any[]>([]);
 const scene = ref<AgentScene>('sql');
 const convDrawer = ref(false);
 const convs = ref<any[]>([]);
-const pendingContext = ref<{ selectedSql?: string; editorSql?: string; lastError?: string }>({});
+const pendingContext = ref<Record<string, any>>({});
 const composerRef = ref<InstanceType<typeof AiComposer>>();
 
 const {
@@ -115,7 +118,8 @@ function onModelChange(v: any) {
 
 function send(text: string) {
   try {
-    sendChat(text, scene.value, { ...pendingContext.value });
+    const extra = typeof props.getExtraContext === 'function' ? props.getExtraContext() : {};
+    sendChat(text, scene.value, { ...pendingContext.value, ...extra });
   } catch (e: any) {
     ElMessage.warning(e?.message || '无法发送，请先选择连接、实例和模型');
   }
@@ -203,6 +207,7 @@ defineExpose({
         @replace-sql="emit('replaceSql', $event)"
         @run-sql="emit('runSql', $event)"
         @open-sql-in-new-tab="emit('openSqlInNewTab', $event)"
+        @apply-query-config="emit('applyQueryConfig', $event)"
       />
       <AiComposer
         ref="composerRef"
