@@ -177,7 +177,7 @@ describe('generateAccessible - redirect normalization', () => {
     );
   });
 
-  it('首子路由为绝对路径(/foo)时不生成 redirect', async () => {
+  it('首子路由为绝对路径(/foo)时直接用该 path 作为 redirect', async () => {
     const routes = [
       {
         name: 'Dashboard',
@@ -194,7 +194,58 @@ describe('generateAccessible - redirect normalization', () => {
     ] as unknown as RouteRecordRaw[];
 
     const result = await generate(routes);
-    expect(findByName(result, 'Dashboard')?.redirect).toBeUndefined();
+    expect(findByName(result, 'Dashboard')?.redirect).toBe('/analytics');
+  });
+
+  it('跳过 hideInMenu 首子路由，redirect 到第一个可见子菜单', async () => {
+    const routes = [
+      {
+        name: 'Visual',
+        path: '/visual',
+        children: [
+          {
+            name: 'VisualHidden',
+            path: 'hidden',
+            meta: { hideInMenu: true, title: 'hidden' },
+          },
+          {
+            name: 'VisualClient',
+            path: 'client',
+            meta: { title: 'client' },
+          },
+        ],
+        meta: { title: 'visual' },
+      },
+    ] as unknown as RouteRecordRaw[];
+
+    const result = await generate(routes);
+    expect(findByName(result, 'Visual')?.redirect).toBe('/visual/client');
+  });
+
+  it('已有 redirect 指向隐藏子路由时改写为第一个可见子菜单', async () => {
+    const routes = [
+      {
+        name: 'Setting',
+        path: '/setting',
+        redirect: '/setting/hidden',
+        children: [
+          {
+            name: 'SettingHidden',
+            path: 'hidden',
+            meta: { hideInMenu: true, title: 'hidden' },
+          },
+          {
+            name: 'SettingUser',
+            path: 'user',
+            meta: { title: 'user' },
+          },
+        ],
+        meta: { title: 'setting' },
+      },
+    ] as unknown as RouteRecordRaw[];
+
+    const result = await generate(routes);
+    expect(findByName(result, 'Setting')?.redirect).toBe('/setting/user');
   });
 
   it('首子路由为空 path 时不生成 redirect', async () => {

@@ -138,44 +138,100 @@ async function generateRoutes(
       };
     }
 
-    // 如果有redirect或者没有子路由，则直接返回
-    if (route.redirect || !route.children || route.children.length === 0) {
-      return route;
-    }
-    const firstChild = route.children[0];
-
-    if (!firstChild?.path || firstChild.path.startsWith('/')) {
+    // 目录默认进第一个「侧栏可见」子菜单，跳过 hideInMenu（详情/隐藏页）
+    const visibleChild = findFirstVisibleChild(route.children);
+    if (!visibleChild) {
       return route;
     }
 
-    // fork 定制：如果第一个子路由是动态路由（如 :id），说明当前路由本身是一个
-    // “列表+详情”页面（渲染自身组件），不应自动重定向到未填充的动态参数，
-    // 否则地址栏会出现字面量 ":id" 或匹配失败导致 404。
-    // 详见对上游重构 commit f00a8812 的修复。
-    if (firstChild.path.startsWith(':')) {
+    const nextRedirect = buildChildRedirect(route, parent, visibleChild);
+    if (!nextRedirect) {
       return route;
     }
 
-    // 拼接子路由的重定向绝对路径。
-    // - 当 parent.redirect 为字符串时，它已经是累计好的绝对路径，直接替换最后一段
-    //   即可正确支持任意层级的深层嵌套（如 /demos/nested/menu2/menu2-1）。
-    // - fork 定制：后端菜单可能传入对象形式的 redirect（如 { name }），无法 split，
-    //   此时回退到使用 parent.path 拼接（这类 parent 为顶级路由，path 为绝对路径）。
-    if (parent && parent.redirect && isString(parent.redirect)) {
-      const parentSplit = parent.redirect.split('/');
-      parentSplit.splice(-1, 2, route.path, firstChild.path);
-      const redirectPath = parentSplit.join('/');
-      route.redirect = redirectPath;
-    } else if (parent && parent.redirect) {
-      route.redirect = `${parent.path}/${route.path}/${firstChild.path}`;
-    } else {
-      route.redirect = `${route.path}/${firstChild.path}`;
+    if (route.redirect) {
+      // 已有 redirect：仅当它指向隐藏子路由时才改成可见子菜单
+      if (
+        isString(route.redirect) &&
+        isRedirectToHiddenChild(route, route.redirect)
+      ) {
+        route.redirect = nextRedirect;
+      }
+      return route;
     }
 
+    route.redirect = nextRedirect;
     return route;
   });
 
   return resultRoutes;
+}
+
+function isHiddenMenuRoute(route?: RouteRecordRaw): boolean {
+  return !!route?.meta?.hideInMenu;
+}
+
+function findFirstVisibleChild(
+  children?: RouteRecordRaw[],
+): RouteRecordRaw | undefined {
+  return (children || []).find((child) => {
+    const path = child?.path;
+    if (!path || path.startsWith(':')) {
+      return false;
+    }
+    return !isHiddenMenuRoute(child);
+  });
+}
+
+function resolveChildAbsPath(
+  parentPath: string,
+  child: RouteRecordRaw,
+): string {
+  const childPath = String(child.path || '');
+  if (childPath.startsWith('/')) {
+    return childPath;
+  }
+  const base = parentPath.endsWith('/') ? parentPath.slice(0, -1) : parentPath;
+  return `${base}/${childPath}`.replace(/\/{2,}/g, '/');
+}
+
+function isRedirectToHiddenChild(
+  route: RouteRecordRaw,
+  redirect: string,
+): boolean {
+  return (route.children || []).some((child) => {
+    if (!isHiddenMenuRoute(child) || !child.path) {
+      return false;
+    }
+    const abs = resolveChildAbsPath(String(route.path || ''), child);
+    return redirect === abs || redirect.endsWith(`/${child.path}`);
+  });
+}
+
+/**
+ * 拼接可见子路由的重定向绝对路径。
+ * 子路由已是绝对 path 时直接使用；相对 path 按父级累计。
+ */
+function buildChildRedirect(
+  route: RouteRecordRaw,
+  parent: RouteRecordRaw | undefined,
+  child: RouteRecordRaw,
+): null | string {
+  if (child.path?.startsWith('/')) {
+    return child.path;
+  }
+  if (!child.path || child.path.startsWith(':')) {
+    return null;
+  }
+  if (parent && parent.redirect && isString(parent.redirect)) {
+    const parentSplit = parent.redirect.split('/');
+    parentSplit.splice(-1, 2, String(route.path), child.path);
+    return parentSplit.join('/');
+  }
+  if (parent && parent.redirect) {
+    return `${parent.path}/${route.path}/${child.path}`;
+  }
+  return `${route.path}/${child.path}`;
 }
 
 /**

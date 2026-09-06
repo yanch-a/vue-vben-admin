@@ -185,8 +185,9 @@
       }
 
       /**
-       * 点击菜单名称：只加载右侧按钮列表，绝不改勾选状态
-       */
+   * 点击菜单行（非复选框）：只加载右侧按钮列表，绝不改勾选状态
+   * Element Plus 默认 check-on-click-leaf=true，点叶子节点空白处会误勾选，已关闭
+   */
       const onNodeLabelClick = async (nodeData) => {
         if (!nodeData || state.saving) return
         state.currentMenuId = nodeData.menuId
@@ -318,17 +319,14 @@
             show-checkbox
             highlight-current
             :check-on-click-node="false"
+            :check-on-click-leaf="false"
             :expand-on-click-node="false"
             check-strictly
             @check="onTreeCheck"
+            @node-click="onNodeLabelClick"
           >
-            <template #default="{ node, data }">
-              <span
-                class="tree-node-label"
-                @click.stop.prevent="onNodeLabelClick(data)"
-              >
-                {{ node.label }}
-              </span>
+            <template #default="{ node }">
+              <span class="tree-node-label">{{ node.label }}</span>
             </template>
           </el-tree>
         </div>
@@ -396,8 +394,9 @@
     padding-right: 8px;
   }
   .tree-node-label {
-    display: inline-block;
+    display: block;
     flex: 1;
+    width: 100%;
     padding-right: 8px;
     cursor: pointer;
     user-select: none;

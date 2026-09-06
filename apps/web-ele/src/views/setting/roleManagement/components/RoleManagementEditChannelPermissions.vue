@@ -100,9 +100,6 @@
         }
       }
 
-      onMounted(() => {
-        
-      })
       return {
         ...toRefs(state),
         showChannelEditPermissions,

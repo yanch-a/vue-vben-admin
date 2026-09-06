@@ -11,7 +11,6 @@
   import { doDelete, getList } from '@/api/roleManagement'
   import { dictConvertObj } from '@/utils/convert'
   import {
-    CirclePlus,
     Delete,
     Edit as EditIcon,
     Plus,
@@ -27,9 +26,6 @@
       EditPermissions: defineAsyncComponent(
         () => import('./components/RoleManagementEditPermissions.vue')
       ),
-      EditChannelPermissions: defineAsyncComponent(
-        () => import('./components/RoleManagementEditChannelPermissions.vue')
-      ),
     },
     setup() {
       const $baseConfirm = inject('$baseConfirm')
@@ -38,7 +34,6 @@
       const state = reactive({
         editRef: null,
         editPermissionsRef: null,
-        editChannelPermissionsRef: null,
         list: [],
         listLoading: true,
         layout: 'total, sizes, prev, pager, next, jumper',
@@ -70,14 +65,6 @@
         }
       }
 
-      const handleChannelPermissions = (row) => {
-        if (row && row.roleId) {
-          state.editChannelPermissionsRef.showChannelEditPermissions({
-            id: row.roleId,
-            roleName: row.roleName,
-          })
-        }
-      }
       const handleDelete = (row) => {
         if (row.roleId) {
           $baseConfirm('你确定要删除当前项吗', null, async () => {
@@ -134,9 +121,7 @@
         Plus,
         Search,
         EditIcon,
-        CirclePlus,
         handleEditPermissions,
-        handleChannelPermissions,
       }
     },
   })
@@ -220,7 +205,7 @@
         align="center"
         label="操作"
         show-overflow-tooltip
-        width="300"
+        width="200"
       >
         <template #default="{ row }">
           <el-button
@@ -247,17 +232,6 @@
             @click="handleEditPermissions(row)"
             title="分配菜单权限"
           />
-          <el-button
-            v-permissions="{
-              permission: ['RoleManagement:updateChannelRolePerm'],
-            }"
-            :icon="CirclePlus"
-            text
-            type="primary"
-            @click="handleChannelPermissions(row)"
-          >
-            栏目权限
-          </el-button>
         </template>
       </el-table-column>
       <template #empty>
@@ -279,9 +253,5 @@
     />
     <RoleManagementEditDialog ref="editRef" @fetch-data="fetchData" />
     <EditPermissions ref="editPermissionsRef" @fetch-data="fetchData" />
-    <EditChannelPermissions
-      ref="editChannelPermissionsRef"
-      @fetch-data="fetchData"
-    />
   </div>
 </template>
