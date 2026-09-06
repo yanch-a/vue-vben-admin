@@ -1,5 +1,6 @@
 /**
- * AI 浮窗显示 / 最小化 / 未读
+ * AI 浮窗显隐，与 AiChatWindow / AiDockBar 共享同一份单例 state。
+ * 最小化后点 Dock 还原；Dock 右键关闭。
  * @author yanch
  */
 import { reactive, watch } from 'vue';
@@ -19,7 +20,6 @@ const state = reactive({
   visible: !!saved.visible,
   minimized: !!saved.minimized,
   maximized: false,
-  unread: 0,
 });
 
 watch(
@@ -32,7 +32,6 @@ export function useAiWindowState() {
   function open() {
     state.visible = true;
     state.minimized = false;
-    state.unread = 0;
   }
   function minimize() {
     state.minimized = true;
@@ -40,12 +39,10 @@ export function useAiWindowState() {
   function restore() {
     state.visible = true;
     state.minimized = false;
-    state.unread = 0;
   }
   function close() {
     state.visible = false;
     state.minimized = false;
-    state.unread = 0;
   }
   function toggleMax() {
     state.maximized = !state.maximized;

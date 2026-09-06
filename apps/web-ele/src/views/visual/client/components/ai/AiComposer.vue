@@ -1,6 +1,6 @@
 <script lang="ts" setup>
 /**
- * 输入框 + 场景切换 + 快捷指令
+ * 输入框 + 场景。scene 随 send 进入 AgentChatRequest，后端 PromptBuilder 按场景加收尾规则。
  * @author yanch
  */
 import { computed, ref } from 'vue';

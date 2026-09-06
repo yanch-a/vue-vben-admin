@@ -1,6 +1,9 @@
 <script lang="ts" setup>
 /**
- * AI 助手浮窗：拖动 / 缩放 / 最小化
+ * AI 助手浮窗。
+ * expose.open 由 index.vue 的 openAiAssistant 调用。
+ * dbConfigId / instanceName 来自父组件当前连接与 Tab，结构文档「问 AI」会先改 Tab 实例再 open。
+ * 发送走 useAiChat → POST /admin/aiAgent/chat/stream。
  * @author yanch
  */
 import { computed, onMounted, nextTick, ref } from 'vue';

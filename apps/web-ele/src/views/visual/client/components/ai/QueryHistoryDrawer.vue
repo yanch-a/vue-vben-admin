@@ -1,6 +1,8 @@
 <script lang="ts" setup>
 /**
- * 查询历史抽屉
+ * 查询历史抽屉：GET /admin/sqlHistory/page。
+ * 「分析查询历史」提交 POST /aiSchemaDoc/analyzeHistory 后只提示去结构文档看进度，
+ * 本抽屉不轮询 task（与 SchemaDocDrawer.startPoll 分开）。
  * @author yanch
  */
 import { computed, reactive, ref, watch } from 'vue';

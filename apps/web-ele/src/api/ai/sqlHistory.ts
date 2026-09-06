@@ -18,7 +18,3 @@ export function deleteSqlHistory(id: number | string) {
 export function clearSqlHistory(params: { dbConfigId: number | string; instanceName?: string }) {
   return request({ url: url + 'clear', method: 'post', params });
 }
-
-export function sqlHistoryTables(params: { dbConfigId: number | string; instanceName?: string }) {
-  return request({ url: url + 'tables', method: 'get', params });
-}

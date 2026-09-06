@@ -1927,6 +1927,12 @@ function onGlobalKeydown(e: KeyboardEvent) {
   }
 }
 
+/**
+ * AI 入口联动：
+ * 工具条 @ai → openAiAssistant；编辑器 Ctrl+K → onAskAiFromEditor；
+ * 结果集报错 → onAskAiFix；结构文档问 AI → onSchemaDocAskAi（先切实例）；
+ * 浮窗 SQL 卡片 → onAiInsertSql / onAiReplaceSql / onAiRunSql（成功后 feedbackSchemaDocSilent）。
+ */
 function ensureAiReady(): boolean {
   if (!activeConnection.value) {
     ElMessage.warning('请先打开连接');
@@ -2070,11 +2076,22 @@ function onHistoryOpenSql(sql: string) {
   openSqlInNewTab(sql, '历史 SQL', activeTab.value?.instanceName);
 }
 
-function onSchemaDocAskAi(payload: { message: string }) {
+function onSchemaDocAskAi(payload: { message: string; instanceName?: string }) {
+  const inst = payload.instanceName || activeTab.value?.instanceName;
+  if (inst && activeTab.value) {
+    activeTab.value.instanceName = inst;
+  }
   openAiAssistant({
     scene: 'schema_doc',
     prefill: payload.message,
   });
+}
+
+function onSchemaDocOpenSql(payload: { sql: string; tableName?: string; instanceName?: string }) {
+  if (payload.instanceName && activeTab.value) {
+    activeTab.value.instanceName = payload.instanceName;
+  }
+  openSqlInNewTab(payload.sql, payload.tableName || '表', payload.instanceName);
 }
 
 /** 连接列表变化时再试一次（管理页先开连接再跳转时可能晚一拍） */
@@ -2352,7 +2369,12 @@ onBeforeUnmount(() => {
       v-model="schemaDocVisible"
       :db-config-id="activeConnection?.id"
       :instance-name="activeTab?.instanceName"
+      :conn-label="activeConnection?.dbName"
+      :instance-options="instanceOptions"
+      :instance-label="instanceLabel"
       @ask-ai="onSchemaDocAskAi"
+      @select-instance="onSelectInstance"
+      @open-sql="onSchemaDocOpenSql"
     />
 
     <QueryHistoryDrawer

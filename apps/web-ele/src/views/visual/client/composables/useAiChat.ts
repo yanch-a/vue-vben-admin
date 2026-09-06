@@ -1,5 +1,8 @@
 /**
- * AI 会话状态机：消费 SSE 事件
+ * AI 会话状态机，消费 POST /admin/aiAgent/chat/stream 的 SSE。
+ * 事件与后端 SseAgentEventSink 对齐：run.start / message.delta / reasoning.delta /
+ * tool.call / tool.result / sql.proposed / chart / error / run.cancelled / done。
+ * sql.proposed → AiSqlCard → index.vue 的 insert/replace/run。
  * @author yanch
  */
 import { ref, triggerRef } from 'vue';
@@ -106,6 +109,7 @@ export function useAiChat(getCtx: () => { dbConfigId: any; instanceName: string;
     if (!ctx.dbConfigId || !ctx.instanceName || !ctx.modelId) {
       throw new Error('请先选择连接、实例和模型');
     }
+    // 先落用户气泡，再占一条空助手气泡；后续 SSE 都改这条（用 curIdx 原地更新）
     messages.value.push({ id: uid(), role: 'user', text, steps: [], done: true });
     const cur: AiMsg = {
       id: uid(),
@@ -132,12 +136,14 @@ export function useAiChat(getCtx: () => { dbConfigId: any; instanceName: string;
           if (!msg) return;
           switch (event) {
             case 'run.start':
+              // 后续点「停止」要靠这个 runId 调 cancel
               runId = data?.runId || '';
               if (data?.conversationId != null) {
                 conversationId.value = data.conversationId;
               }
               break;
             case 'message.delta':
+              // 增量追加，不要整段覆盖，否则流式会闪
               msg.text += pickDeltaText(data);
               touch();
               break;
@@ -154,6 +160,7 @@ export function useAiChat(getCtx: () => { dbConfigId: any; instanceName: string;
               touch();
               break;
             case 'tool.result': {
+              // 按 callId 回填同一条 step，不要再 push 一条
               const s = msg.steps.find((x) => x.callId === data?.callId);
               if (s) {
                 Object.assign(s, {
@@ -202,6 +209,7 @@ export function useAiChat(getCtx: () => { dbConfigId: any; instanceName: string;
       },
     );
     function finish() {
+      // done / onClose / onError 都会进这里：标记气泡完成并放开输入框
       const msg = curMsg();
       if (msg) msg.done = true;
       running.value = false;
@@ -227,6 +235,7 @@ export function useAiChat(getCtx: () => { dbConfigId: any; instanceName: string;
     conversationId.value = id;
     const out: AiMsg[] = [];
     let cur: AiMsg | null = null;
+    // 库里 user/assistant/tool 是平铺行；前端要把紧随 assistant 的 tool 行叠进 steps
     for (const m of list) {
       if (m.role === 'user') {
         out.push({ id: String(m.id), role: 'user', text: m.content || '', steps: [], done: true });

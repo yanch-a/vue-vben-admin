@@ -1,6 +1,6 @@
 <script lang="ts" setup>
 /**
- * 消息流
+ * 消息流。SQL/图表卡片 emit → AiChatWindow → index.vue 插入/替换/运行。
  * @author yanch
  */
 import { computed, nextTick, ref, watch } from 'vue';

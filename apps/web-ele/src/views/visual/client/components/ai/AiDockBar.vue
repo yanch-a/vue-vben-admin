@@ -1,6 +1,7 @@
 <script lang="ts" setup>
 /**
- * 底部 Dock：最小化后的 AI 助手入口
+ * 底部 Dock：AiChatWindow 最小化后的入口。
+ * 与浮窗共用 useAiWindowState；点击 restore，右键 close。
  * @author yanch
  */
 import { useAiWindowState } from '../../composables/useAiWindowState';
@@ -19,7 +20,6 @@ function onCtx(e: MouseEvent) {
   <div v-if="state.visible && state.minimized" class="ai-dock">
     <button class="pill" @click="restore" @contextmenu="onCtx">
       AI 助手
-      <span v-if="state.unread" class="badge">{{ state.unread }}</span>
     </button>
   </div>
 </template>
@@ -41,9 +41,5 @@ function onCtx(e: MouseEvent) {
   height: 22px;
   cursor: pointer;
   font-size: var(--vc-ai-font-size-sm, 12px);
-}
-.badge {
-  margin-left: 4px;
-  color: var(--el-color-danger);
 }
 </style>

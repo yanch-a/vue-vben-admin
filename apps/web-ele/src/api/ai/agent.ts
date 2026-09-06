@@ -1,5 +1,9 @@
 /**
  * 数据库 AI 智能体 API
+ * - stream/cancel → AgentController
+ * - 会话列表/消息 → AiConversationController
+ * - feedbackSchemaDoc → SchemaDocController.feedback（跑成功 AI SQL 后补 JOIN）
+ * - saveChart → AiChartController
  * @author yanch
  */
 import { adminUrl } from '#/config';
