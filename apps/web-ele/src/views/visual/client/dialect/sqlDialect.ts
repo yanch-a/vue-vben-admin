@@ -194,12 +194,12 @@ const SQLSERVER_LIKE: SqlDialectProfile = {
   dumpUseOptionLabel: '包含 "USE [database]" 语句',
   instanceKind: 'database',
   quoteIdent: (name) => `[${escBracket(name)}]`,
-  qualifyTable: (schema, table) =>
-    schema
-      ? `[${escBracket(schema)}].[dbo].[${escBracket(table)}]`
-      : `[dbo].[${escBracket(table)}]`,
+  qualifyTable: (schema, table) => {
+    const sch = schema && schema.trim() ? schema : 'dbo';
+    return `[${escBracket(sch)}].[${escBracket(table)}]`;
+  },
   selectAllLimited: (schema, table, limit) =>
-    `SELECT TOP (${limit}) * FROM [${escBracket(schema)}].[dbo].[${escBracket(table)}]`,
+    `SELECT TOP (${limit}) * FROM [${escBracket(schema || 'dbo')}].[${escBracket(table)}]`,
   appendLimit: (sql, limit) => {
     // 简单场景：若以 SELECT 开头插入 TOP
     const trimmed = sql.replace(/;?\s*$/, '').trim();
@@ -217,11 +217,11 @@ const SQLSERVER_LIKE: SqlDialectProfile = {
   createDatabaseSql: (name) => `CREATE DATABASE [${escBracket(name)}];`,
   dropDatabaseSql: (name) => `DROP DATABASE [${escBracket(name)}];`,
   createTableStubSql: (schema, table) =>
-    `CREATE TABLE [${escBracket(schema)}].[dbo].[${escBracket(table)}] (\n  id BIGINT IDENTITY(1,1) NOT NULL PRIMARY KEY\n);`,
+    `CREATE TABLE [${escBracket(schema || 'dbo')}].[${escBracket(table)}] (\n  id BIGINT IDENTITY(1,1) NOT NULL PRIMARY KEY\n);`,
   dropTableSql: (schema, table) =>
-    `DROP TABLE IF EXISTS [${escBracket(schema)}].[dbo].[${escBracket(table)}];`,
+    `DROP TABLE IF EXISTS [${escBracket(schema || 'dbo')}].[${escBracket(table)}];`,
   alterTableStubSql: (schema, table) =>
-    `-- 改变表结构（请按需修改）\nALTER TABLE [${escBracket(schema)}].[dbo].[${escBracket(table)}]\n  -- ADD col_name NVARCHAR(64) NULL;\n;`,
+    `-- 改变表结构（请按需修改）\nALTER TABLE [${escBracket(schema || 'dbo')}].[${escBracket(table)}]\n  -- ADD col_name NVARCHAR(64) NULL;\n;`,
 };
 
 /**

@@ -26,9 +26,11 @@ async function initApplication() {
   });
 
   // 本地缓存的偏好会覆盖 overrides，这里强制关掉页面缓存/过渡，避免连点菜单右侧空白
+  // 同时强制关掉版本检测：否则会每分钟 HEAD BASE_URL（生产是 /lmdb/view/）
   updatePreferences({
     tabbar: { keepAlive: false },
     transition: { enable: false },
+    app: { enableCheckUpdates: false },
   });
 
   // 先落到本地品牌默认，再尝试拉后台覆盖（失败不影响启动）

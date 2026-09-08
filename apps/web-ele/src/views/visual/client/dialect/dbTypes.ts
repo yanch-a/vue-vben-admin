@@ -33,7 +33,7 @@ export interface DbObjectCapabilities {
   procedures: boolean;
   functions: boolean;
   triggers: boolean;
-  /** 事件调度器，目前只有 MySQL 族有 */
+  /** 事件：MySQL 为 EVENT；其它库为调度任务（pg_cron / Scheduler / Agent Job） */
   events: boolean;
   /** 是否允许在对象树右键创建/删除实例 */
   manageInstance: boolean;
@@ -72,9 +72,10 @@ const FULL_OBJECTS: DbObjectCapabilities = {
   manageInstance: true,
 };
 
+/** 服务端库：对象树全开。事件在非 MySQL 上对应调度任务（pg_cron / Scheduler / Agent Job） */
 const NO_EVENT_OBJECTS: DbObjectCapabilities = {
   ...FULL_OBJECTS,
-  events: false,
+  events: true,
 };
 
 /** Oracle / 达梦：一级节点是用户模式，建删由 DBA 操作，不在客户端开放 */
@@ -138,7 +139,7 @@ function oracleLike(code: string, label: string): DbTypeDescriptor {
     connectionForm: 'SERVER',
     instanceKind: 'SCHEMA',
     defaultPort: 1521,
-    urlTemplate: 'jdbc:oracle:thin:@{host}:{port}:{database}',
+    urlTemplate: 'jdbc:oracle:thin:@//{host}:{port}/{database}',
     credentialRequired: true,
     capabilities: SCHEMA_OBJECTS,
   };

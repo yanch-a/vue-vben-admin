@@ -1,7 +1,8 @@
 /**
  * 客户端后台任务：跨主机复制 + 结构文档（初始化/生成/分析）。
  * 进行中写入 localStorage，刷新后角标还能显示；服务端 Redis 是权威源。
- * 只在面板打开时查一次；有进行中才 10 秒轮询；关掉面板立刻停刷。
+ * 有进行中就轮询：面板打开 5 秒一次，收起后台 20 秒一次。
+ * 刚提交的任务会立刻拉一次详情，避免等第一个 interval。
  * 已完成只展示近 7 天。
  * @author yanch
  */
@@ -39,14 +40,20 @@ export interface ClientTask {
 }
 
 const CACHE_KEY = 'vc:client-running-tasks';
-const POLL_MS = 10_000;
+/** 面板可见时的轮询间隔 */
+const POLL_VISIBLE_MS = 5_000;
+/** 面板收起后后台继续刷，间隔放宽 */
+const POLL_HIDDEN_MS = 20_000;
 const DONE_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 
 const tasks = ref<ClientTask[]>([]);
 const panelVisible = ref(false);
 const activeTab = ref<'running' | 'done'>('running');
 const polling = ref(false);
+const refreshing = ref(false);
 let timer: ReturnType<typeof setInterval> | null = null;
+/** 当前 timer 用的间隔，切换可见/后台时要重建 */
+let timerMs = 0;
 let panelWatchBound = false;
 
 /** 后端可能给字符串，复制任务枚举序列化偶发成对象 */
@@ -188,6 +195,15 @@ export function useClientTasks() {
   }
 
   async function refreshAll() {
+    refreshing.value = true;
+    try {
+      await doRefreshAll();
+    } finally {
+      refreshing.value = false;
+    }
+  }
+
+  async function doRefreshAll() {
     const wasRunningKeys = new Set(
       tasks.value.filter((t) => isActive(t.status)).map((t) => `${t.source}:${t.id}`),
     );
@@ -203,24 +219,20 @@ export function useClientTasks() {
         if (raw?.taskId) next.push(fromSchema(raw));
       }
     }
-    // 服务端列表是权威源。某一侧接口失败才保留该侧本地进行中，避免一次失败把进度抹掉。
-    const keepSource = new Set<ClientTaskSource>();
-    if (copyRes.status === 'fulfilled') keepSource.add('copy');
-    if (schemaRes.status === 'fulfilled') keepSource.add('schema');
+    // 刚提交的任务列表可能还没带上，进行中即使不在列表里也先钉住，再 refreshOne。
     const seen = new Set(next.map((t) => `${t.source}:${t.id}`));
     const leftover = tasks.value.filter((t) => {
       const key = `${t.source}:${t.id}`;
       // 服务端已带回同一条（含终态）时，绝不能再留本地 PENDING
       if (seen.has(key)) return false;
       if (!isActive(t.status)) return false;
-      if (keepSource.has(t.source)) return false;
       return true;
     });
     tasks.value = [...next, ...leftover];
     pruneCompleted();
     persistRunning();
 
-    // 列表接口失败时，对钉住的本地进行中逐条问详情，拿到 SUCCESS 才能从进行中摘掉
+    // 列表里还没有、或该侧接口失败：逐条问详情，避免刚提交的任务被抹掉
     if (leftover.length) {
       await Promise.all(leftover.map((t) => refreshOne(t)));
       pruneCompleted();
@@ -256,15 +268,26 @@ export function useClientTasks() {
     }
   }
 
+  function pollInterval() {
+    return panelVisible.value ? POLL_VISIBLE_MS : POLL_HIDDEN_MS;
+  }
+
+  /** 按当前面板可见性重建 interval；已在跑且间隔没变则不动 */
   function startPolling() {
-    if (polling.value) return;
+    const ms = pollInterval();
+    if (polling.value && timer && timerMs === ms) return;
+    if (timer) {
+      clearInterval(timer);
+      timer = null;
+    }
     polling.value = true;
+    timerMs = ms;
     timer = setInterval(async () => {
       await refreshAll();
       if (!hasRunning.value) {
         stopPolling();
       }
-    }, POLL_MS);
+    }, ms);
   }
 
   function stopPolling() {
@@ -273,15 +296,21 @@ export function useClientTasks() {
       timer = null;
     }
     polling.value = false;
+    timerMs = 0;
   }
 
-  async function onPanelOpened() {
-    await refreshAll();
+  /** 有进行中就按可见/后台间隔轮询；没有就停 */
+  function syncPolling() {
     if (hasRunning.value) {
       startPolling();
     } else {
       stopPolling();
     }
+  }
+
+  async function onPanelOpened() {
+    await refreshAll();
+    syncPolling();
   }
 
   function openPanel(tab: 'running' | 'done' = 'running') {
@@ -296,7 +325,6 @@ export function useClientTasks() {
 
   function hidePanel() {
     panelVisible.value = false;
-    stopPolling();
   }
 
   function togglePanel() {
@@ -307,12 +335,14 @@ export function useClientTasks() {
     openPanel(hasRunning.value ? 'running' : 'done');
   }
 
-  /** 复制任务启动后立刻入列表并打开面板 */
+  /** 复制任务启动后立刻入列表、拉一次详情并打开面板 */
   function trackCopy(raw: DbCopyTaskVO) {
     if (!raw?.taskId) return;
-    upsert(fromCopy(raw));
+    const task = fromCopy(raw);
+    upsert(task);
     persistRunning();
     openPanel('running');
+    void refreshOne(task).then(() => syncPolling());
   }
 
   /** 结构文档任务只拿到 taskId 时先占位，再拉一次详情 */
@@ -345,6 +375,7 @@ export function useClientTasks() {
       createTime: Date.now(),
       errors: [],
     });
+    syncPolling();
   }
 
   async function cancel(task: ClientTask) {
@@ -367,10 +398,14 @@ export function useClientTasks() {
     }
   }
 
-  /** 页面进入只恢复角标缓存，不打开面板、不轮询 */
+  /** 页面进入恢复角标；有进行中先拉一次，再按后台间隔继续刷 */
   async function bootstrap() {
     restoreCache();
     pruneCompleted();
+    if (hasRunning.value) {
+      await refreshAll();
+    }
+    syncPolling();
   }
 
   function dispose() {
@@ -383,7 +418,8 @@ export function useClientTasks() {
       if (open) {
         void onPanelOpened();
       } else {
-        stopPolling();
+        // 收起后面板不关轮询，只把间隔从 5s 换成 20s
+        syncPolling();
       }
     });
   }
@@ -396,6 +432,7 @@ export function useClientTasks() {
     hasRunning,
     panelVisible,
     activeTab,
+    refreshing,
     percent,
     bootstrap,
     dispose,

@@ -5,6 +5,7 @@
  * @author yanch
  */
 import { computed } from 'vue';
+import { Refresh } from '@element-plus/icons-vue';
 import { ElMessageBox } from 'element-plus';
 
 import type { ClientTask } from '../composables/useClientTasks';
@@ -16,12 +17,14 @@ const props = defineProps<{
   tab: 'running' | 'done';
   running: ClientTask[];
   done: ClientTask[];
+  refreshing?: boolean;
 }>();
 
 const emit = defineEmits<{
   'update:modelValue': [boolean];
   'update:tab': ['running' | 'done'];
   cancel: [task: ClientTask];
+  refresh: [];
 }>();
 
 const visible = computed({
@@ -103,6 +106,15 @@ async function onCancel(t: ClientTask) {
       <ElBadge :value="running.length" :hidden="!running.length" class="badge">
         <span class="hint">进行中 {{ running.length }}</span>
       </ElBadge>
+      <ElButton
+        class="refresh"
+        size="small"
+        circle
+        :icon="Refresh"
+        title="立即刷新进度"
+        :loading="refreshing"
+        @click="emit('refresh')"
+      />
       <button class="close" type="button" title="收起" @click="visible = false">×</button>
     </div>
     <ElTabs v-model="activeTab" class="tabs" stretch>
@@ -176,8 +188,10 @@ async function onCancel(t: ClientTask) {
   font-size: 12px;
   color: var(--el-text-color-secondary);
 }
-.close {
+.refresh {
   margin-left: auto;
+}
+.close {
   border: 0;
   background: transparent;
   font-size: 18px;

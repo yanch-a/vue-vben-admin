@@ -75,6 +75,18 @@ const {
   modelId: modelId.value,
 }));
 
+/** 最近一条助手消息已收尾，用来在标题栏标「已完成」 */
+const lastAssistantDone = computed(() => {
+  const list = messages.value || [];
+  for (let i = list.length - 1; i >= 0; i -= 1) {
+    const m = list[i];
+    if (m?.role === 'assistant') {
+      return !!m.done && !running.value;
+    }
+  }
+  return false;
+});
+
 const winStyle = computed(() => {
   if (state.maximized) {
     return { left: '0px', top: '0px', width: '100vw', height: '100vh' };
@@ -151,6 +163,24 @@ defineExpose({
     >
       <div class="ai-win-header" @mousedown="onDragStart">
         <span class="title">AI 助手 · {{ connLabel || '未连接' }}</span>
+        <ElTag
+          v-if="running"
+          size="small"
+          type="warning"
+          effect="dark"
+          class="run-tag"
+        >
+          <span class="run-dot" />
+          运行中
+        </ElTag>
+        <ElTag
+          v-else-if="lastAssistantDone"
+          size="small"
+          type="success"
+          effect="dark"
+        >
+          已完成
+        </ElTag>
         <ElSelect
           v-model="modelId"
           size="small"
@@ -305,6 +335,27 @@ defineExpose({
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.run-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.run-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #fff;
+  animation: ai-run-pulse 1s ease-in-out infinite;
+}
+@keyframes ai-run-pulse {
+  0%,
+  100% {
+    opacity: 0.35;
+  }
+  50% {
+    opacity: 1;
+  }
 }
 .actions button {
   border: 0;

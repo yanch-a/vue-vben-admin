@@ -4,28 +4,67 @@
  *
  * @author yanch
  */
-import { resolveSqlDialect } from '../dialect/sqlDialect';
+import { resolveDialectFamily, resolveSqlDialect } from '../dialect/sqlDialect';
 
 export interface TableRef {
+  /** 两段名时的 schema；三段名时是中间段（SQL Server 的 schema） */
   schema?: string;
   table: string;
 }
 
-/** 从 SELECT SQL 解析主表（简单 FROM 子句，不支持复杂子查询） */
+const IDENT =
+  '(?:`([^`]+)`|"([^"]+)"|\\[([^\\]]+)\\]|([\\p{L}_][\\p{L}\\p{N}_$#]*))';
+
+function pickIdent(m: RegExpMatchArray, offset: number): string | undefined {
+  return m[offset] || m[offset + 1] || m[offset + 2] || m[offset + 3] || undefined;
+}
+
+/** 从 SELECT SQL 解析主表（简单 FROM，支持 schema.table / db.schema.table） */
 export function parseTableFromSql(sql: string): TableRef | null {
   if (!sql) return null;
   const cleaned = sql
     .replace(/'([^'\\]|\\.)*'/g, "''")
     .replace(/"([^"\\]|\\.)*"/g, '""');
   const m = cleaned.match(
-    /\bFROM\s+(?:`([^`]+)`|"([^"]+)"|\[([^\]]+)\]|([a-zA-Z0-9_]+))\s*(?:\.\s*(?:`([^`]+)`|"([^"]+)"|\[([^\]]+)\]|([a-zA-Z0-9_]+)))?/i,
+    new RegExp(
+      `\\bFROM\\s+${IDENT}(?:\\s*\\.\\s*${IDENT})?(?:\\s*\\.\\s*${IDENT})?`,
+      'iu',
+    ),
   );
   if (!m) return null;
-  const a = m[1] || m[2] || m[3] || m[4];
-  const b = m[5] || m[6] || m[7] || m[8];
-  if (b) return { schema: a, table: b };
+  const a = pickIdent(m, 1);
+  const b = pickIdent(m, 5);
+  const c = pickIdent(m, 9);
+  if (a && b && c) {
+    // db.schema.table → 用 schema.table，库名由当前连接实例决定
+    return { schema: b, table: c };
+  }
+  if (a && b) return { schema: a, table: b };
   if (a) return { table: a };
   return null;
+}
+
+/**
+ * 拉表元数据时用的表名：PG/SS/H2 非默认 schema 写成 schema.table；
+ * MySQL 的 FROM db.t 里 db 是实例不是 schema。
+ */
+export function metadataTableName(
+  ref: TableRef,
+  dbType?: string | null,
+): string {
+  const family = resolveDialectFamily(dbType);
+  if (!ref.schema) {
+    return ref.table;
+  }
+  if (family === 'MYSQL_LIKE' || family === 'ORACLE_LIKE' || family === 'SQLITE_LIKE') {
+    return ref.table;
+  }
+  const def =
+    family === 'SQLSERVER_LIKE' ? 'dbo' : family === 'H2_LIKE' ? 'PUBLIC' : 'public';
+  if (ref.schema.toLowerCase() === def.toLowerCase()) {
+    return ref.table;
+  }
+  return `${ref.schema}.${ref.table}`;
 }
 
 export function quoteIdent(name: string, dbType = 'MY_SQL'): string {

@@ -30,6 +30,25 @@ const emit = defineEmits<{
 }>();
 
 const box = ref<HTMLElement | null>(null);
+/** 贴底才自动滚；用户上滚看思考过程时不要被增量输出拽回去 */
+const stickToBottom = ref(true);
+const NEAR_BOTTOM_PX = 48;
+
+function isNearBottom(el: HTMLElement) {
+  return el.scrollHeight - el.scrollTop - el.clientHeight <= NEAR_BOTTOM_PX;
+}
+
+function onListScroll() {
+  const el = box.value;
+  if (!el) return;
+  stickToBottom.value = isNearBottom(el);
+}
+
+function scrollToBottomIfNeeded() {
+  const el = box.value;
+  if (!el || !stickToBottom.value) return;
+  el.scrollTop = el.scrollHeight;
+}
 
 /** 把每条助手消息拆成「正文片段 + SQL 卡片」，避免重复渲染 proposedSql */
 const viewMessages = computed(() =>
@@ -61,7 +80,18 @@ watch(
         m.steps.length +
         (m.reasoning || ''),
     ),
-  () => nextTick(() => box.value && (box.value.scrollTop = box.value.scrollHeight)),
+  () => nextTick(scrollToBottomIfNeeded),
+);
+
+/** 新开一轮生成时重新贴底，方便看最新回复 */
+watch(
+  () => props.running,
+  (now, prev) => {
+    if (now && !prev) {
+      stickToBottom.value = true;
+      nextTick(scrollToBottomIfNeeded);
+    }
+  },
 );
 
 function onSqlAction(
@@ -78,7 +108,7 @@ function onSqlAction(
 </script>
 
 <template>
-  <div ref="box" class="msg-list">
+  <div ref="box" class="msg-list" @scroll.passive="onListScroll">
     <div v-if="!messages.length" class="empty">输入需求，让 AI 帮你写 SQL 或出图表</div>
     <div v-for="item in viewMessages" :key="item.msg.id" class="msg" :class="item.msg.role">
       <template v-if="item.msg.role === 'user'">
@@ -131,9 +161,16 @@ function onSqlAction(
           @open-sql="onSqlAction('openTab', $event)"
         />
         <div v-if="item.msg.error" class="err">{{ item.msg.error }}</div>
+        <div v-if="item.msg.role === 'assistant'" class="msg-state">
+          <span v-if="!item.msg.done && running" class="st running">生成中</span>
+          <span v-else-if="item.msg.done && !item.msg.error" class="st done">已完成</span>
+        </div>
       </template>
     </div>
-    <div v-if="running" class="typing">正在思考…</div>
+    <div v-if="running" class="typing">
+      <span class="dot" />
+      正在生成，可上滚查看思考过程
+    </div>
   </div>
 </template>
 
@@ -199,8 +236,51 @@ function onSqlAction(
   white-space: pre-wrap;
   font-size: var(--vc-ai-font-size-sm, 12px);
 }
+.msg-state {
+  margin-top: 6px;
+}
+.st {
+  display: inline-block;
+  padding: 1px 8px;
+  border-radius: 10px;
+  font-size: 11px;
+  line-height: 18px;
+}
+.st.running {
+  color: var(--el-color-warning-dark-2);
+  background: var(--el-color-warning-light-8);
+}
+.st.done {
+  color: var(--el-color-success);
+  background: var(--el-color-success-light-9);
+}
 .typing {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+  padding: 6px 10px;
+  border-radius: 6px;
   font-size: var(--vc-ai-font-size-sm, 12px);
-  color: var(--el-text-color-secondary);
+  color: var(--el-color-warning-dark-2);
+  background: var(--el-color-warning-light-9);
+}
+.typing .dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--el-color-warning);
+  animation: ai-pulse 1s ease-in-out infinite;
+}
+@keyframes ai-pulse {
+  0%,
+  100% {
+    opacity: 0.35;
+    transform: scale(0.85);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1);
+  }
 }
 </style>

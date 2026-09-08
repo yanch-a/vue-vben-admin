@@ -30,8 +30,10 @@ const props = defineProps<{
   /** 解析出的目标表；为空时改删仅提示，拷贝仍尽量生成 */
   tableRef?: TableRef | null;
   dbType?: string;
-  /** WHERE 优先使用的主键列名 */
+  /** 表主键列（已从元数据解析；空数组表示确认无主键） */
   primaryKeys?: string[];
+  /** 主键元数据是否已拉取完 */
+  primaryKeysReady?: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -77,12 +79,49 @@ const columns = computed(() => props.result?.columns || []);
 /** 行数据不做深层响应式；表格仅展示 */
 const tableRows = computed(() => props.result?.rows || []);
 const dbType = computed(() => props.dbType || 'MY_SQL');
-const whereCols = computed(() => {
-  const pks = (props.primaryKeys || []).filter((k) => columns.value.includes(k));
-  return pks.length ? pks : columns.value;
-});
+/** 结果集里实际带上的主键列 */
+const pkInResult = computed(() =>
+  (props.primaryKeys || []).filter((k) => columns.value.includes(k)),
+);
+const tableHasPk = computed(() => (props.primaryKeys || []).length > 0);
+/** 有主键只用主键；无主键才退回结果列（执行前会再确认） */
+const whereCols = computed(() =>
+  tableHasPk.value ? pkInResult.value : columns.value,
+);
 
 const canMutate = computed(() => !!props.tableRef?.table && !!selectedRow.value);
+
+/**
+ * 修改/删除前检查主键：有主键必须出现在结果里；无主键先警告可能误伤其它行。
+ */
+async function confirmRowMutation(action: '修改' | '删除'): Promise<boolean> {
+  if (props.primaryKeysReady === false) {
+    ElMessage.warning('正在读取表主键，请稍后再试');
+    return false;
+  }
+  if (tableHasPk.value && pkInResult.value.length === 0) {
+    ElMessage.warning(
+      `当前结果未包含主键（${(props.primaryKeys || []).join(', ')}），无法按主键定位。请在 SELECT 中带上主键列后再${action}`,
+    );
+    return false;
+  }
+  if (!tableHasPk.value) {
+    try {
+      await ElMessageBox.confirm(
+        `当前表没有主键。${action}将按结果列的旧值匹配，只查出一列时可能改到其它行。是否继续？`,
+        '无主键风险提示',
+        {
+          type: 'warning',
+          confirmButtonText: `仍要${action}`,
+          cancelButtonText: '取消',
+        },
+      );
+    } catch {
+      return false;
+    }
+  }
+  return true;
+}
 
 /** Messages 区文案：附带服务端耗时与响应到前台耗时 */
 const messagesText = computed(() => {
@@ -253,17 +292,25 @@ function onCopyUpdate() {
       whereCols.value,
       dbType.value,
     );
-    copyText(sql, '已复制 UPDATE 语句');
+    copyText(
+      sql,
+      tableHasPk.value
+        ? '已复制 UPDATE 语句（按主键）'
+        : '已复制 UPDATE 语句（无主键，WHERE 为结果列旧值）',
+    );
   } catch (e: any) {
     ElMessage.warning(e?.message || '生成失败');
   }
 }
 
-function onEdit() {
+async function onEdit() {
   closeCtxMenu();
   if (!selectedRow.value) return;
   if (!canMutate.value) {
     ElMessage.warning('无法识别结果对应的表，请使用单表查询后再修改');
+    return;
+  }
+  if (!(await confirmRowMutation('修改'))) {
     return;
   }
   editOriginal.value = { ...selectedRow.value };
@@ -293,9 +340,14 @@ async function onDelete() {
     ElMessage.warning('无法识别结果对应的表，请使用单表查询后再删除');
     return;
   }
+  if (!(await confirmRowMutation('删除'))) {
+    return;
+  }
   try {
     await ElMessageBox.confirm(
-      '确认删除选中行？删除后不可恢复。',
+      tableHasPk.value
+        ? '确认按主键删除选中行？删除后不可恢复。'
+        : '确认删除选中行？当前无主键，可能删除多行，且不可恢复。',
       '删除确认',
       { type: 'warning', confirmButtonText: '删除', cancelButtonText: '取消' },
     );
@@ -498,11 +550,17 @@ watch(
 
     <ElDialog
       v-model="editVisible"
-      title="修改行"
+      :title="tableHasPk ? '修改行（按主键更新）' : '修改行（无主键）'"
       width="640px"
       destroy-on-close
       append-to-body
     >
+      <p v-if="tableHasPk" class="pk-hint">
+        WHERE 使用主键：{{ pkInResult.join(', ') }}
+      </p>
+      <p v-else class="pk-hint warn">
+        当前表没有主键，保存时按结果列旧值匹配，可能影响其它行。
+      </p>
       <ElForm label-width="140px" class="edit-form">
         <ElFormItem v-for="col in columns" :key="col" :label="col">
           <ElInput
@@ -554,6 +612,14 @@ watch(
 .table-hint {
   font-size: var(--vc-ui-font-size-sm, 12px);
   color: var(--el-text-color-secondary);
+}
+.pk-hint {
+  margin: 0 0 12px;
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+}
+.pk-hint.warn {
+  color: var(--el-color-warning);
 }
 .ai-fix {
   padding: 0 12px 8px;

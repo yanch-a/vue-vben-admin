@@ -96,6 +96,7 @@ defineExpose({ setText });
       @keydown="onKey"
     />
     <div class="actions">
+      <span v-if="running" class="run-hint">运行中，可随时停止</span>
       <ElButton v-if="running" size="small" type="danger" @click="emit('stop')">停止</ElButton>
       <ElButton v-else size="small" type="primary" :disabled="!text.trim()" @click="doSend">发送</ElButton>
     </div>
@@ -126,7 +127,15 @@ defineExpose({ setText });
 }
 .actions {
   display: flex;
+  align-items: center;
   justify-content: flex-end;
+  gap: 8px;
   margin-top: 6px;
+}
+.run-hint {
+  margin-right: auto;
+  font-size: 12px;
+  color: var(--el-color-warning);
+  font-weight: 600;
 }
 </style>

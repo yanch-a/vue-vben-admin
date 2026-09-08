@@ -80,7 +80,11 @@ import {
   isFreeDmlSql,
   isWriteOrDangerousSql,
 } from './utils/sqlWriteGuard';
-import { parseTableFromSql, type TableRef } from './utils/resultRowSql';
+import {
+  metadataTableName,
+  parseTableFromSql,
+  type TableRef,
+} from './utils/resultRowSql';
 import {
   clearColumnCache,
   getCachedColumns,
@@ -107,8 +111,10 @@ const {
   runningCount,
   panelVisible,
   activeTab: taskPanelTab,
+  refreshing: tasksRefreshing,
   bootstrap: bootstrapTasks,
   dispose: disposeTasks,
+  refreshAll: refreshClientTasks,
   trackCopy,
   cancel: cancelClientTask,
   togglePanel: toggleTaskPanel,
@@ -283,16 +289,44 @@ const resultTableRef = computed<TableRef | null>(() => {
   return sql ? parseTableFromSql(sql) : null;
 });
 
-/** 目标表主键列（优先读补全缓存，不额外打接口） */
-const resultPrimaryKeys = computed(() => {
-  const ref = resultTableRef.value;
+/** 结果表主键：查询完成后按当前实例拉元数据，不用 SQL 里的 schema 冒充库名 */
+const resultPrimaryKeys = ref<string[]>([]);
+const resultPrimaryKeysReady = ref(false);
+
+async function refreshResultPrimaryKeys() {
+  resultPrimaryKeysReady.value = false;
+  resultPrimaryKeys.value = [];
+  const tableRef = resultTableRef.value;
   const conn = activeConnection.value;
-  const inst =
-    ref?.schema || activeTab.value?.instanceName || conn?.schemaName || '';
-  if (!ref?.table || !conn || !inst) return [] as string[];
-  const cached = getCachedColumns(conn.id, inst, ref.table);
-  return cached?.primaryKeys || [];
-});
+  const inst = activeTab.value?.instanceName || conn?.schemaName || '';
+  if (!tableRef?.table || !conn || !inst) {
+    resultPrimaryKeysReady.value = true;
+    return;
+  }
+  try {
+    const metaName = metadataTableName(tableRef, conn.dbType);
+    const { primaryKeys } = await loadEditorColumns(inst, metaName);
+    resultPrimaryKeys.value = primaryKeys || [];
+  } catch {
+    resultPrimaryKeys.value = [];
+  } finally {
+    resultPrimaryKeysReady.value = true;
+  }
+}
+
+watch(
+  () => [
+    resultTableRef.value?.schema,
+    resultTableRef.value?.table,
+    activeTab.value?.result?.sourceSql,
+    activeTab.value?.instanceName,
+    activeConnection.value?.id,
+  ],
+  () => {
+    void refreshResultPrimaryKeys();
+  },
+  { immediate: true },
+);
 
 /** 编辑器区域高度：总高 - 工具条/Tab - 结果区（若显示） */
 const editorFlexStyle = computed(() => {
@@ -1697,10 +1731,9 @@ async function onRunDml(dmlSql: string) {
   try {
     const res: any = await executeDml({
       dbConfigId: activeConnection.value.id,
+      // 切库用当前对象树实例，不能把 FROM schema.table 的 schema 当成库名
       instanceName:
-        resultTableRef.value?.schema ||
-        activeTab.value.instanceName ||
-        activeConnection.value.schemaName,
+        activeTab.value.instanceName || activeConnection.value.schemaName,
       sql: dmlSql,
     });
     const data = res?.data || res;
@@ -2342,6 +2375,7 @@ onBeforeUnmount(() => {
               :table-ref="resultTableRef"
               :db-type="activeConnection?.dbType"
               :primary-keys="resultPrimaryKeys"
+              :primary-keys-ready="resultPrimaryKeysReady"
               @update:visible="(v) => (activeTab!.resultVisible = v)"
               @update:active-tab="(v) => (activeTab!.resultTab = v)"
               @run-dml="onRunDml"
@@ -2430,7 +2464,9 @@ onBeforeUnmount(() => {
       v-model:tab="taskPanelTab"
       :running="runningTasks"
       :done="doneTasks"
+      :refreshing="tasksRefreshing"
       @cancel="onCancelClientTask"
+      @refresh="refreshClientTasks"
     />
 
     <ElDialog
