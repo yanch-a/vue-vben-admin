@@ -1,6 +1,6 @@
 <script lang="ts" setup>
 /**
- * 系统功能面板：配置包导入/导出
+ * 系统功能：配置包导入/导出（由顶栏下拉菜单直接进入对应表单）
  * @author yanch
  */
 import { computed, reactive, ref, watch } from 'vue';
@@ -22,6 +22,14 @@ defineOptions({ name: 'SystemFunctionsDialog' });
 
 const visible = defineModel<boolean>({ default: false });
 
+const props = withDefaults(
+  defineProps<{
+    /** 由顶栏「系统功能」菜单指定：导出 / 导入 */
+    mode?: 'export' | 'import';
+  }>(),
+  { mode: 'export' },
+);
+
 const emit = defineEmits<{
   imported: [];
 }>();
@@ -33,7 +41,7 @@ const ALL_SECTIONS: VqBundleSection[] = [
   'queryConfigs',
 ];
 
-const mode = ref<'export' | 'import' | 'menu'>('menu');
+const activeMode = ref<'export' | 'import'>('export');
 const loading = ref(false);
 const dbConfigs = ref<any[]>([]);
 
@@ -57,15 +65,19 @@ const sectionOptions = computed(() =>
   ALL_SECTIONS.map((k) => ({ value: k, label: BUNDLE_SECTION_LABELS[k] })),
 );
 
+const dialogTitle = computed(() =>
+  activeMode.value === 'export' ? '导出配置' : '导入配置',
+);
+
 watch(visible, (v) => {
   if (v) {
-    resetToMenu();
+    resetForm(props.mode === 'import' ? 'import' : 'export');
     loadDbConfigs();
   }
 });
 
-function resetToMenu() {
-  mode.value = 'menu';
+function resetForm(mode: 'export' | 'import') {
+  activeMode.value = mode;
   exportForm.password = '';
   exportForm.confirmPassword = '';
   exportForm.sections = [...ALL_SECTIONS];
@@ -84,19 +96,6 @@ async function loadDbConfigs() {
   } catch {
     dbConfigs.value = [];
   }
-}
-
-function openExport() {
-  mode.value = 'export';
-}
-
-function openImport() {
-  mode.value = 'import';
-}
-
-function backToMenu() {
-  mode.value = 'menu';
-  previewResult.value = null;
 }
 
 function onFileChange(file: File | undefined) {
@@ -217,29 +216,13 @@ function statLine(key: string, stat: any) {
 <template>
   <ElDialog
     v-model="visible"
-    title="系统功能"
+    :title="dialogTitle"
     width="560px"
     destroy-on-close
     :close-on-click-modal="false"
   >
-    <!-- 主菜单 -->
-    <div v-if="mode === 'menu'" class="sys-menu">
-      <div class="sys-item" @click="openExport">
-        <div class="sys-item-title">导出配置</div>
-        <div class="sys-item-desc">
-          将数据库连接、已保存查询、可视化查询配置导出为加密 .vqb 文件
-        </div>
-      </div>
-      <div class="sys-item" @click="openImport">
-        <div class="sys-item-title">导入配置</div>
-        <div class="sys-item-desc">
-          解析加密配置包并写入当前账号（支持冲突策略）
-        </div>
-      </div>
-    </div>
-
     <!-- 导出 -->
-    <div v-else-if="mode === 'export'" class="sys-form">
+    <div v-if="activeMode === 'export'" class="sys-form">
       <ElAlert
         type="info"
         :closable="false"
@@ -363,17 +346,14 @@ function statLine(key: string, stat: any) {
     </div>
 
     <template #footer>
-      <template v-if="mode === 'menu'">
-        <ElButton @click="visible = false">关闭</ElButton>
-      </template>
-      <template v-else-if="mode === 'export'">
-        <ElButton @click="backToMenu">返回</ElButton>
+      <template v-if="activeMode === 'export'">
+        <ElButton @click="visible = false">取消</ElButton>
         <ElButton type="primary" :loading="loading" @click="doExport">
           导出
         </ElButton>
       </template>
       <template v-else>
-        <ElButton @click="backToMenu">返回</ElButton>
+        <ElButton @click="visible = false">取消</ElButton>
         <ElButton :loading="loading" @click="doPreviewImport">预览</ElButton>
         <ElButton type="primary" :loading="loading" @click="doImport">
           确认导入
@@ -384,30 +364,6 @@ function statLine(key: string, stat: any) {
 </template>
 
 <style scoped>
-.sys-menu {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-.sys-item {
-  padding: 14px 16px;
-  border: 1px solid var(--el-border-color);
-  border-radius: 8px;
-  cursor: pointer;
-  transition: border-color 0.2s, background 0.2s;
-}
-.sys-item:hover {
-  border-color: var(--el-color-primary);
-  background: var(--el-color-primary-light-9);
-}
-.sys-item-title {
-  font-weight: 600;
-  margin-bottom: 4px;
-}
-.sys-item-desc {
-  font-size: var(--vc-ui-font-size, 13px);
-  color: var(--el-text-color-secondary);
-}
 .mb-3 {
   margin-bottom: 12px;
 }

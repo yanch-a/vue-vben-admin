@@ -18,6 +18,7 @@ import {
   buildInsertSql,
   buildUpdateSql,
 } from '../../utils/resultRowSql';
+import { isClientPolicyError } from '../../utils/sqlWriteGuard';
 
 defineOptions({ name: 'ResultPanel' });
 
@@ -141,6 +142,8 @@ const messagesText = computed(() => {
   }
   return lines.join('\n');
 });
+
+const policyError = computed(() => isClientPolicyError(props.result?.error || ''));
 
 function closeCtxMenu() {
   ctxMenu.visible = false;
@@ -507,7 +510,7 @@ watch(
               })
             "
           >
-            让 AI 修复
+            {{ policyError ? '问 AI 怎么处理' : '让 AI 修复' }}
           </ElButton>
         </div>
       </template>

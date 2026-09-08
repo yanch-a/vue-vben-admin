@@ -50,7 +50,7 @@ const emit = defineEmits<{
   'update:modelValue': [boolean];
   askAi: [{ message: string; instanceName: string }];
   selectInstance: [string];
-  openSql: [{ sql: string; tableName: string; instanceName: string }];
+  openSql: [{ tableName: string; instanceName: string }];
 }>();
 
 const visible = computed({
@@ -79,6 +79,10 @@ const ctxMenu = reactive({
   y: 0,
   table: null as any,
 });
+/** 最近一次只读漂移探测，表名可点生成 */
+const drift = ref<{ newTables?: string[]; changedTables?: string[]; droppedTables?: string[] } | null>(
+  null,
+);
 /** 本抽屉提交过的 taskId，完成后刷新左侧树 */
 const submittedTaskIds = new Set<string>();
 const { trackSchema, tasks: clientTasks } = useClientTasks();
@@ -97,7 +101,6 @@ const currentScopeText = computed(() => {
 });
 
 const treeData = computed(() => {
-  // 树只有一层：实例 → 已初始化的 TABLE。搜索只滤 children，不改后端树
   const inst = selectedInstance.value || tree.value?.instanceName || '未选实例';
   const tables = (tree.value?.tables || []).filter((t: any) => {
     if (!tableKeyword.value) return true;
@@ -112,22 +115,25 @@ const treeData = computed(() => {
       label: inst,
       isInstance: true,
       children: tables.map((t: any) => ({
-        id: t.docId,
+        id: t.docId || `t:${t.tableName}`,
         label: `${statusIcon(t)} ${t.tableName}`,
         docId: t.docId,
         tableName: t.tableName,
         status: t.status,
         userLocked: t.userLocked,
+        filled: t.filled,
+        source: t.source,
       })),
     },
   ];
 });
 
 function statusIcon(t: any) {
-  // 锁 > 漂移 > 已删 > 正常，只取最高优先级一个图标
   if (t.userLocked === 1) return '🔒';
-  if (t.status === 'STALE') return '🟡';
   if (t.status === 'DROPPED') return '🔴';
+  if (t.status === 'STALE') return '🟡';
+  if (t.status === 'NONE' || !t.docId) return '⚪';
+  if (t.filled === false) return '○';
   return '🟢';
 }
 
@@ -160,8 +166,19 @@ async function loadTree() {
 }
 
 async function onNode(node: any) {
-  if (node?.isInstance || !node?.docId) return;
+  if (node?.isInstance) return;
+  if (!node?.tableName && !node?.docId) return;
   viewingMemory.value = false;
+  if (!node?.docId) {
+    current.value = {
+      tableName: node.tableName,
+      contentMd: `表 \`${node.tableName}\` 尚未初始化骨架。可直接点「生成所选表」让 AI 写文档，或先「初始化表骨架」。`,
+      _uninitialized: true,
+    };
+    editing.value = false;
+    history.value = [];
+    return;
+  }
   const res: any = await getSchemaDoc(node.docId);
   current.value = unwrap(res);
   editing.value = false;
@@ -171,10 +188,10 @@ async function onNode(node: any) {
 
 function onInstanceChange(name: string) {
   selectedInstance.value = name;
-  // 换实例必须清掉上一实例的正文/记忆，否则右侧会短暂显示错库内容
   current.value = null;
   viewingMemory.value = false;
   memoryPair.value = null;
+  drift.value = null;
   if (name) emit('selectInstance', name);
   void loadTree();
 }
@@ -314,15 +331,10 @@ async function startGen(mode: 'FULL' | 'INCREMENTAL' | 'TABLES', tables?: string
 
 async function doAnalyze() {
   if (!requireScope()) return;
-  if (!modelId.value) {
-    ElMessage.warning('请先选择模型');
-    return;
-  }
   try {
     const res: any = await analyzeHistory({
       dbConfigId: props.dbConfigId!,
       instanceName: selectedInstance.value,
-      modelId: modelId.value,
     });
     const taskId = extractSchemaDocTaskId(res);
     if (!taskId) {
@@ -357,7 +369,18 @@ watch(
         needReload = true;
       }
     }
-    if (needReload && visible.value) void loadTree();
+    if (needReload && visible.value) {
+      const name = current.value?.tableName;
+      const docId = current.value?.id;
+      void loadTree().then(() => {
+        if (docId) {
+          void onNode({ docId, tableName: name });
+          return;
+        }
+        const t = (tree.value?.tables || []).find((x: any) => x.tableName === name);
+        if (t) void onNode(t);
+      });
+    }
   },
   { deep: true },
 );
@@ -386,15 +409,26 @@ async function doDrift() {
       dbConfigId: props.dbConfigId!,
       instanceName: selectedInstance.value,
     });
-    const d = unwrap(res) || {};
-    await ElMessageBox.alert(
-      `实例 ${selectedInstance.value}：新表 ${d.newTables?.length || 0}，变更 ${d.changedTables?.length || 0}，删除 ${d.droppedTables?.length || 0}`,
-      '结构变化',
-    );
+    drift.value = unwrap(res) || {};
     await loadTree();
+    const d = drift.value;
+    const n = d?.newTables?.length || 0;
+    const c = d?.changedTables?.length || 0;
+    const x = d?.droppedTables?.length || 0;
+    if (n + c + x === 0) {
+      ElMessage.success('未发现结构变化');
+    } else {
+      ElMessage.info(`新表 ${n}，变更 ${c}，已删 ${x}。可点下方表名生成文档。`);
+    }
   } catch (e: any) {
     ElMessage.error(e?.message || '检测失败');
   }
+}
+function onMoreCommand(cmd: string) {
+  if (cmd === 'analyze') void doAnalyze();
+  if (cmd === 'memory') void openMemory();
+  if (cmd === 'digest') void refreshMemory();
+  if (cmd === 'export') void doExport();
 }
 async function doExport() {
   if (!requireScope()) return;
@@ -480,7 +514,6 @@ function ctxAction(action: string) {
   }
   if (action === 'sql') {
     emit('openSql', {
-      sql: `SELECT * FROM ${t.tableName} LIMIT 100`,
       tableName: t.tableName,
       instanceName: selectedInstance.value,
     });
@@ -546,16 +579,53 @@ const keyFields = computed(() => {
       >
         生成所选表
       </ElButton>
-      <ElButton size="small" @click="doAnalyze">分析查询历史</ElButton>
       <ElButton size="small" @click="doDrift">检测结构变化</ElButton>
-      <ElButton size="small" @click="openMemory">智能体记忆</ElButton>
-      <ElButton size="small" @click="refreshMemory">刷新记忆</ElButton>
-      <ElButton size="small" @click="doExport">导出 .md</ElButton>
       <ElButton size="small" type="success" @click="askAi()">问 AI</ElButton>
+      <ElDropdown trigger="click" @command="onMoreCommand">
+        <ElButton size="small">更多</ElButton>
+        <template #dropdown>
+          <ElDropdownMenu>
+            <ElDropdownItem command="analyze">分析查询历史（规则抽 JOIN，不调模型）</ElDropdownItem>
+            <ElDropdownItem command="memory">智能体记忆</ElDropdownItem>
+            <ElDropdownItem command="digest">刷新记忆</ElDropdownItem>
+            <ElDropdownItem command="export">导出 Markdown</ElDropdownItem>
+          </ElDropdownMenu>
+        </template>
+      </ElDropdown>
     </div>
     <div class="body">
       <div class="left">
-        <ElInput v-model="tableKeyword" size="small" clearable placeholder="搜索已初始化的表" />
+        <ElInput v-model="tableKeyword" size="small" clearable placeholder="搜索表名" />
+        <div v-if="drift && ((drift.newTables?.length || 0) + (drift.changedTables?.length || 0) + (drift.droppedTables?.length || 0) > 0)" class="drift-box">
+          <div v-if="drift.newTables?.length" class="drift-row">
+            新表
+            <button
+              v-for="n in drift.newTables"
+              :key="'n-' + n"
+              type="button"
+              class="drift-name"
+              @click="startGen('TABLES', [n])"
+            >
+              {{ n }}
+            </button>
+          </div>
+          <div v-if="drift.changedTables?.length" class="drift-row">
+            结构变化
+            <button
+              v-for="n in drift.changedTables"
+              :key="'c-' + n"
+              type="button"
+              class="drift-name"
+              @click="startGen('TABLES', [n])"
+            >
+              {{ n }}
+            </button>
+          </div>
+          <div v-if="drift.droppedTables?.length" class="drift-row">
+            已删除
+            <span v-for="n in drift.droppedTables" :key="'d-' + n" class="drift-dropped">{{ n }}</span>
+          </div>
+        </div>
         <ElTree
           class="table-tree"
           :data="treeData"
@@ -566,7 +636,7 @@ const keyFields = computed(() => {
           @node-contextmenu="onTreeContext"
         />
         <div v-if="!(tree?.tables || []).length" class="left-empty">
-          该实例还没有表文档，请先「初始化表骨架」
+          该实例下没有表，或尚未打开连接
         </div>
       </div>
       <div class="right">
@@ -581,15 +651,23 @@ const keyFields = computed(() => {
         </template>
         <template v-else-if="current">
           <div class="ops">
-            <ElButton size="small" @click="editing = !editing; editMd = current.contentMd || ''">
+            <ElButton
+              v-if="!current._uninitialized"
+              size="small"
+              @click="editing = !editing; editMd = current.contentMd || ''"
+            >
               {{ editing ? '预览' : '编辑' }}
             </ElButton>
             <ElButton v-if="editing" size="small" type="primary" @click="doSave">保存</ElButton>
             <ElButton v-if="current.userLocked === 1" size="small" @click="doUnlock">解锁</ElButton>
+            <ElButton size="small" type="primary" :loading="genLoading" @click="startGen('TABLES')">
+              生成此表
+            </ElButton>
             <ElButton size="small" @click="askAi(current.tableName)">问 AI</ElButton>
           </div>
           <ElInput v-if="editing" v-model="editMd" type="textarea" :rows="18" />
           <div v-else class="md" v-html="previewHtml" />
+          <template v-if="!current._uninitialized">
           <h4>关键字段</h4>
           <ElTable :data="keyFields" size="small">
             <ElTableColumn prop="field" label="字段" />
@@ -607,12 +685,15 @@ const keyFields = computed(() => {
             v{{ h.version }} {{ h.changeNote }} {{ h.createTime }}
             <ElButton link size="small" @click="doRollback(h.version)">回滚</ElButton>
           </div>
+          </template>
         </template>
         <ElEmpty v-else description="在左侧选择一张表，或查看智能体记忆" />
       </div>
     </div>
     <div v-if="tree" class="cov">
-      {{ currentScopeText }} · 覆盖率 {{ tree.coverage }}% （{{ tree.documentedTables }}/{{ tree.totalTables }}）
+      {{ currentScopeText }} · AI 已填写 {{ tree.aiFilledTables ?? 0 }}/{{ tree.totalTables || 0 }}
+      （{{ tree.coverage }}%）· 骨架 {{ tree.initializedTables ?? tree.documentedTables ?? 0 }}
+      · 结构变化 {{ tree.staleTables ?? 0 }}
     </div>
     <Teleport to="body">
       <div
@@ -682,6 +763,35 @@ const keyFields = computed(() => {
   margin-top: 16px;
   font-size: var(--vc-ui-font-size-sm, 12px);
   color: var(--el-text-color-secondary);
+}
+.drift-box {
+  margin-top: 8px;
+  padding: 8px;
+  border: 1px solid var(--el-border-color-lighter);
+  border-radius: 6px;
+  font-size: var(--vc-ui-font-size-sm, 12px);
+  color: var(--el-text-color-regular);
+}
+.drift-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  margin-top: 4px;
+}
+.drift-name {
+  padding: 0 6px;
+  border: 1px solid var(--el-color-primary-light-5);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--el-color-primary);
+  cursor: pointer;
+}
+.drift-name:hover {
+  background: var(--el-color-primary-light-9);
+}
+.drift-dropped {
+  opacity: 0.7;
 }
 .md {
   font-size: var(--vc-ui-font-size, 13px);

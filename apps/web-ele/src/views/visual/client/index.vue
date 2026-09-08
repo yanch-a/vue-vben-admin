@@ -76,6 +76,7 @@ import { resolveSqlDialect } from './dialect/sqlDialect';
 import { formatSqlByDialect } from './utils/formatSql';
 import { isDestructiveDdl, looksLikeControlledDdl } from './utils/controlledDdl';
 import {
+  askAiPrefillForError,
   describeSqlWriteRisk,
   isFreeDmlSql,
   isWriteOrDangerousSql,
@@ -145,6 +146,8 @@ const leftWidth = ref(260);
 /** 结果区高度（可拖拽调整）；查询成功后默认按编辑器:结果 = 2:1 设置 */
 const resultHeight = ref(220);
 const systemFunctionsVisible = ref(false);
+/** 系统功能弹窗：由顶栏下拉菜单指定导出/导入 */
+const systemFunctionsMode = ref<'export' | 'import'>('export');
 const preferencesVisible = ref(false);
 const licenseVisible = ref(false);
 const licenseForce = ref(false);
@@ -427,7 +430,8 @@ function onAddQueryTab() {
   if (!t) ElMessage.warning(`最多 ${MAX_TABS} 个查询`);
 }
 
-function onOpenSystemFunctions() {
+function onOpenSystemFunctions(mode: 'export' | 'import') {
+  systemFunctionsMode.value = mode;
   systemFunctionsVisible.value = true;
 }
 
@@ -1192,9 +1196,14 @@ async function runControlledDdl(
 ) {
   if (!activeConnection.value || !activeTab.value) return;
   if (!opts?.skipConfirm && (opts?.forceConfirm || isDestructiveDdl(sql))) {
-    const tip = isDestructiveDdl(sql)
-      ? '即将执行删除类 DDL（DROP），确认继续？'
-      : describeSqlWriteRisk(sql);
+    const head = String(sql || '').replace(/\/\*[\s\S]*?\*\//g, ' ').trim();
+    const tip = /^\s*TRUNCATE\b/i.test(head)
+      ? '即将执行 TRUNCATE 清空表，确认继续？'
+      : /^\s*REVOKE\b/i.test(head)
+        ? '即将执行 REVOKE 收回权限，确认继续？'
+        : isDestructiveDdl(sql)
+          ? '即将执行删除类 DDL（DROP），确认继续？'
+          : describeSqlWriteRisk(sql);
     try {
       await ElMessageBox.confirm(tip, '写操作确认', {
         type: 'warning',
@@ -1250,7 +1259,7 @@ async function runControlledDdl(
 }
 
 /**
- * 自由 DML（INSERT/UPDATE/DELETE）：确认后走 executeDml
+ * 自由 DML（INSERT/UPDATE/DELETE/REPLACE/MERGE）：确认后走 executeDml
  * （只读 executeSql 会直接拒绝写语句）
  */
 async function runFreeDml(sql: string, _source?: string, opts?: { skipConfirm?: boolean }) {
@@ -1315,17 +1324,24 @@ function refreshObjectTreeAfterDdl(sql: string, instanceName: string) {
     .replace(/\/\*[\s\S]*?\*\//g, ' ')
     .replace(/^[ \t]*--[^\n]*$/gm, ' ')
     .trim();
+  // 建表 / 改表 / 删表 / 清空 / 重命名 / 表维护：刷新表列表
+  if (
+    /^(CREATE\s+(OR\s+REPLACE\s+)?((GLOBAL\s+)?(TEMPORARY|TEMP)\s+|UNLOGGED\s+)?TABLE\b|DROP\s+(TEMPORARY\s+)?TABLE\b|ALTER\s+TABLE\b|TRUNCATE\b|RENAME\b|OPTIMIZE\b|ANALYZE\b|REPAIR\s+TABLE\b|CHECK\s+TABLE\b|COMMENT\s+ON\s+TABLE\b)/i.test(
+      head,
+    )
+  ) {
+    objectTreeRef.value.reloadTables?.(instanceName);
+    return;
+  }
   const m = head.match(
-    /^(?:CREATE\s+(?:OR\s+REPLACE\s+|OR\s+ALTER\s+)?|DROP\s+(?:IF\s+EXISTS\s+)?|ALTER\s+)(VIEW|PROCEDURE|FUNCTION|TRIGGER|EVENT|TABLE|DATABASE|SCHEMA)\b/i,
+    /^(?:CREATE\s+(?:OR\s+REPLACE\s+|OR\s+ALTER\s+)?|DROP\s+(?:IF\s+EXISTS\s+)?|ALTER\s+|REFRESH\s+)(MATERIALIZED\s+VIEW|VIEW|PROCEDURE|FUNCTION|TRIGGER|EVENT|DATABASE|SCHEMA|SEQUENCE|TYPE)\b/i,
   );
   const kind = (m?.[1] || '').toUpperCase();
-  if (kind === 'TABLE') {
-    objectTreeRef.value.reloadTables?.(instanceName);
-  } else if (kind === 'DATABASE' || kind === 'SCHEMA') {
+  if (kind === 'DATABASE' || kind === 'SCHEMA') {
     void refreshBrowseObjects(undefined, { silent: true });
   } else if (kind) {
     const folder =
-      kind === 'VIEW'
+      kind === 'VIEW' || kind === 'MATERIALIZED VIEW'
         ? 'views'
         : kind === 'PROCEDURE'
           ? 'procedures'
@@ -2016,7 +2032,7 @@ function onAskAiFromEditor(payload: { selectedSql: string; editorSql: string }) 
 function onAskAiFix(payload: { sql: string; error: string }) {
   openAiAssistant({
     scene: 'sql',
-    prefill: '请根据报错修复 SQL。',
+    prefill: askAiPrefillForError(payload.error),
     context: {
       selectedSql: payload.sql,
       editorSql: payload.sql,
@@ -2124,11 +2140,20 @@ function onSchemaDocAskAi(payload: { message: string; instanceName?: string }) {
   });
 }
 
-function onSchemaDocOpenSql(payload: { sql: string; tableName?: string; instanceName?: string }) {
+function onSchemaDocOpenSql(payload: { tableName?: string; instanceName?: string; sql?: string }) {
   if (payload.instanceName && activeTab.value) {
     activeTab.value.instanceName = payload.instanceName;
   }
-  openSqlInNewTab(payload.sql, payload.tableName || '表', payload.instanceName);
+  if (payload.tableName) {
+    void openTableInNewEditor({
+      instanceName: payload.instanceName || activeTab.value?.instanceName || '',
+      tableName: payload.tableName,
+    });
+    return;
+  }
+  if (payload.sql) {
+    openSqlInNewTab(payload.sql, '表', payload.instanceName);
+  }
 }
 
 /** 连接列表变化时再试一次（管理页先开连接再跳转时可能晚一拍） */
@@ -2261,7 +2286,8 @@ onBeforeUnmount(() => {
             @close-others="closeOtherTabs"
           />
           <div class="query-main">
-          <div class="query-actions">
+          <!-- 禁浏览器右键，避免执行/格式化等按钮弹出系统菜单 -->
+          <div class="query-actions" @contextmenu.prevent>
             <ElSelect
               v-if="activeTab"
               v-model="activeTab.instanceName"
@@ -2538,6 +2564,7 @@ onBeforeUnmount(() => {
     />
     <SystemFunctionsDialog
       v-model="systemFunctionsVisible"
+      :mode="systemFunctionsMode"
       @imported="onBundleImported"
     />
     <ClientPreferencesDialog

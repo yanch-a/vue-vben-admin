@@ -1,6 +1,6 @@
 <script>
   /**
-   * 数据库连接配置：公开性、密码留空不改、会员授权分配
+   * 数据库连接配置：方片化管理；公开性、密码留空不改、会员授权分配
    * @author yanch
    */
   import { defineComponent, inject, onMounted, reactive, ref } from 'vue'
@@ -20,6 +20,8 @@
   } from '@/api/visual/vq'
   import { Plus, Search } from '@element-plus/icons-vue'
   import { ElMessage, ElMessageBox } from 'element-plus'
+
+  import { resolveDbType } from '../client/dialect/dbTypes'
 
   export default defineComponent({
     name: 'DbConfig',
@@ -60,7 +62,7 @@
 
       const queryForm = reactive({
         pageNum: 1,
-        pageSize: 10,
+        pageSize: 12,
         dbName: '',
       })
 
@@ -418,6 +420,15 @@
         getList()
       }
 
+      /** 卡片展示：主机:端口 */
+      const hostText = (row) => {
+        if (!row?.dbHost) return '—'
+        return row.dbPort ? `${row.dbHost}:${row.dbPort}` : String(row.dbHost)
+      }
+
+      /** 卡片展示：数据库类型中文名 */
+      const typeLabel = (row) => resolveDbType(row?.dbType).label
+
       const initParams = async () => {
         const { data } = await getVqDict()
         dataBaseType.value = data.dataBaseType
@@ -466,6 +477,8 @@
         onWriteFlagChange,
         saveAuth,
         sshAuthMode,
+        hostText,
+        typeLabel,
         Plus,
         Search,
       }
@@ -474,149 +487,192 @@
 </script>
 
 <template>
-  <div class="db-config-container">
-    <vab-query-form>
-      <vab-query-form-left-panel :span="12">
+  <div class="db-config-container" v-loading="loading">
+    <div class="db-config-toolbar">
+      <div class="db-config-toolbar__left">
+        <h2 class="db-config-title">数据库连接</h2>
+        <p class="db-config-desc">以卡片管理各数据源，支持测试、授权与画布。</p>
+      </div>
+      <div class="db-config-toolbar__right">
+        <el-input
+          v-model.trim="queryForm.dbName"
+          clearable
+          class="db-config-search"
+          placeholder="搜索数据库名称"
+          @keyup.enter="queryData"
+        />
+        <el-button
+          type="primary"
+          v-permissions="{ permission: ['DbConfig:list'] }"
+          @click="queryData"
+        >
+          <el-icon class="el-icon--left"><Search /></el-icon>
+          查询
+        </el-button>
         <el-button
           v-permissions="{ permission: ['DbConfig:add'] }"
-          :icon="Plus"
           type="primary"
-          @click="handleAdd($event)"
+          @click="handleAdd"
         >
-          新增配置
+          <el-icon class="el-icon--left"><Plus /></el-icon>
+          新增连接
         </el-button>
-      </vab-query-form-left-panel>
-      <vab-query-form-right-panel :span="12">
-        <el-form inline :model="queryForm" @submit.prevent>
-          <el-form-item>
-            <el-input
-              v-model.trim="queryForm.dbName"
-              clearable
-              placeholder="请输入数据库名称"
-            />
-          </el-form-item>
-          <el-form-item>
-            <el-button :icon="Search" type="primary" v-permissions="{ permission: ['DbConfig:list'] }" @click="queryData">
-              查询
-            </el-button>
-          </el-form-item>
-        </el-form>
-      </vab-query-form-right-panel>
-    </vab-query-form>
+      </div>
+    </div>
 
-    <el-table v-loading="loading" :data="tableData" border style="width: 100%">
-      <el-table-column prop="dbName" label="数据库中文名称" min-width="120" />
-      <el-table-column prop="schemaName" label="数据库" min-width="120" />
-      <el-table-column prop="dbType" label="数据库类型" width="120">
-        <template #default="{ row }">
-          <el-tag>{{ row.dbType }}</el-tag>
-        </template>
-      </el-table-column>
-      <el-table-column label="公开" width="80">
-        <template #default="{ row }">
-          <el-tag :type="row.isPublic === 1 ? 'success' : 'info'" size="small">
-            {{ row.isPublic === 1 ? '公开' : '私有' }}
-          </el-tag>
-        </template>
-      </el-table-column>
-      <el-table-column prop="dbHost" label="主机地址" min-width="120" />
-      <el-table-column prop="dbPort" label="端口" width="100" />
-      <el-table-column prop="username" label="用户名" min-width="120" />
-      <el-table-column
-        label="在线状态"
-        prop="connectionStatus"
-        show-overflow-tooltip
+    <div v-if="!loading && tableData.length === 0" class="db-config-empty">
+      <p>暂无数据库连接</p>
+      <p class="db-config-empty__hint">点击下方按钮或右上角「新增连接」创建第一条连接。</p>
+      <el-button
+        v-permissions="{ permission: ['DbConfig:add'] }"
+        type="primary"
+        @click="handleAdd"
       >
-        <template #default="{ row }">
-          <span v-if="row.connectionStatus === 1">
-            <span class="vab-dot vab-dot-success"><span></span></span>
-            在线
-          </span>
-          <span v-else>
-            <span class="vab-dot vab-dot-error"><span></span></span>
-            连接失败
-          </span>
-        </template>
-      </el-table-column>
-      <el-table-column prop="lastCheckTime" label="最后检查时间" width="180" />
-      <el-table-column
-        prop="description"
-        label="描述"
-        min-width="200"
-        show-overflow-tooltip
-      />
-      <el-table-column label="操作" width="380" fixed="right">
-        <template #default="{ row }">
-          <el-button-group>
-            <el-button
-              v-permissions="{ permission: ['DbConfig:update'] }"
-              type="primary"
-              link
-              @click="handleEdit(row)"
-              title="编辑"
-            >
-              <vab-icon icon="edit-line" style="font-size: 20px" />
-            </el-button>
-            <el-button
-              v-permissions="{ permission: ['DbConfigUser:update'] }"
-              type="primary"
-              link
-              @click="openAuthDialog(row)"
-              title="权限分配"
-            >
-              权限
-            </el-button>
-            <el-button
-              v-permissions="{ permission: ['TableGroup:list'] }"
-              type="primary"
-              link
-              @click="handleCanvas(row)"
-              title="表分组"
-            >
-              <vab-icon icon="layout-line" style="font-size: 20px" />
-              表分组
-            </el-button>
-            <el-button
-              v-permissions="{ permission: ['TableRelationship:info'] }"
-              type="primary"
-              link
-              @click="handleRelationCanvas(row)"
-              title="关系画布"
-            >
-              <vab-icon icon="node-tree" style="font-size: 20px" />
-              关系画布
-            </el-button>
-            <el-button
-              v-permissions="{ permission: ['DbConfig:delete'] }"
-              type="danger"
-              link
-              @click="handleDelete(row)"
-              title="删除"
-            >
-              <vab-icon icon="delete-bin-line" style="font-size: 20px" />
-            </el-button>
-            <el-button
-              v-permissions="{ permission: ['DataBaseOperate:test'] }"
-              type="primary"
-              link
-              @click="testConnectionMethod(row)"
-              title="测试连接"
-            >
-              <vab-icon icon="donut-chart-line" style="font-size: 20px" />
-            </el-button>
-          </el-button-group>
-        </template>
-      </el-table-column>
-    </el-table>
+        <el-icon class="el-icon--left"><Plus /></el-icon>
+        新增连接
+      </el-button>
+    </div>
 
-    <el-pagination
-      :current-page="queryForm.pageNum"
-      layout="total, sizes, prev, pager, next, jumper"
-      :page-size="queryForm.pageSize"
-      :total="totalNum"
-      @current-change="handleCurrentChange"
-      @size-change="handleSizeChange"
-    />
+    <div v-else class="db-card-grid">
+      <!-- 新增方片：常驻入口 -->
+      <button
+        v-permissions="{ permission: ['DbConfig:add'] }"
+        type="button"
+        class="db-card db-card--add"
+        @click="handleAdd"
+      >
+        <span class="db-card-add__icon" aria-hidden="true">+</span>
+        <span class="db-card-add__text">新增连接</span>
+      </button>
+
+      <article
+        v-for="row in tableData"
+        :key="row.id"
+        class="db-card"
+        :class="{ 'is-offline': row.connectionStatus !== 1 }"
+      >
+        <header class="db-card__header">
+          <div class="db-card__title-row">
+            <h3 class="db-card__name" :title="row.dbName">
+              {{ row.dbName || '未命名' }}
+            </h3>
+            <span class="db-card__type">{{ typeLabel(row) }}</span>
+          </div>
+          <div class="db-card__badges">
+            <span
+              class="db-card__status"
+              :class="row.connectionStatus === 1 ? 'is-online' : 'is-offline'"
+            >
+              <i class="db-card__dot" />
+              {{ row.connectionStatus === 1 ? '在线' : '离线' }}
+            </span>
+            <el-tag
+              :type="row.isPublic === 1 ? 'success' : 'info'"
+              size="small"
+              effect="plain"
+            >
+              {{ row.isPublic === 1 ? '公开' : '私有' }}
+            </el-tag>
+            <el-tag v-if="row.sshEnabled === 1" size="small" type="warning" effect="plain">
+              SSH
+            </el-tag>
+          </div>
+        </header>
+
+        <div class="db-card__body">
+          <div class="db-card__meta" :title="hostText(row)">
+            <span class="db-card__label">主机</span>
+            <span class="db-card__value">{{ hostText(row) }}</span>
+          </div>
+          <div v-if="row.schemaName" class="db-card__meta" :title="row.schemaName">
+            <span class="db-card__label">库名</span>
+            <span class="db-card__value">{{ row.schemaName }}</span>
+          </div>
+          <div v-if="row.username" class="db-card__meta" :title="row.username">
+            <span class="db-card__label">用户</span>
+            <span class="db-card__value">{{ row.username }}</span>
+          </div>
+          <p
+            v-if="row.description"
+            class="db-card__desc"
+            :title="row.description"
+          >
+            {{ row.description }}
+          </p>
+          <p v-if="row.lastCheckTime" class="db-card__time">
+            最近检查 {{ row.lastCheckTime }}
+          </p>
+        </div>
+
+        <footer class="db-card__actions">
+          <el-button
+            v-permissions="{ permission: ['DataBaseOperate:test'] }"
+            link
+            type="primary"
+            @click="testConnectionMethod(row)"
+          >
+            测试
+          </el-button>
+          <el-button
+            v-permissions="{ permission: ['DbConfig:update'] }"
+            link
+            type="primary"
+            @click="handleEdit(row)"
+          >
+            编辑
+          </el-button>
+          <el-button
+            v-permissions="{ permission: ['DbConfigUser:update'] }"
+            link
+            type="primary"
+            @click="openAuthDialog(row)"
+          >
+            权限
+          </el-button>
+          <el-dropdown trigger="click">
+            <el-button link type="primary">
+              更多
+            </el-button>
+            <template #dropdown>
+              <el-dropdown-menu>
+                <el-dropdown-item
+                  v-permissions="{ permission: ['TableGroup:list'] }"
+                  @click="handleCanvas(row)"
+                >
+                  表分组
+                </el-dropdown-item>
+                <el-dropdown-item
+                  v-permissions="{ permission: ['TableRelationship:info'] }"
+                  @click="handleRelationCanvas(row)"
+                >
+                  关系画布
+                </el-dropdown-item>
+                <el-dropdown-item
+                  v-permissions="{ permission: ['DbConfig:delete'] }"
+                  divided
+                  @click="handleDelete(row)"
+                >
+                  <span class="db-card__danger">删除</span>
+                </el-dropdown-item>
+              </el-dropdown-menu>
+            </template>
+          </el-dropdown>
+        </footer>
+      </article>
+    </div>
+
+    <div v-if="totalNum > 0" class="db-config-pagination">
+      <el-pagination
+        background
+        :current-page="queryForm.pageNum"
+        layout="total, sizes, prev, pager, next"
+        :page-size="queryForm.pageSize"
+        :page-sizes="[12, 24, 48]"
+        :total="totalNum"
+        @current-change="handleCurrentChange"
+        @size-change="handleSizeChange"
+      />
+    </div>
 
     <el-dialog
       v-model="dialogVisible"
@@ -873,12 +929,289 @@
 
 <style lang="scss" scoped>
   .db-config-container {
-    padding: 20px;
+    display: flex;
+    flex-direction: column;
+    padding: 20px 24px 28px;
+    min-height: 100%;
+    box-sizing: border-box;
+  }
 
-    :deep(.el-pagination) {
-      justify-content: flex-end;
-      margin-top: 20px;
-    }
+  .db-config-toolbar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-end;
+    justify-content: space-between;
+    gap: 16px;
+    margin-bottom: 20px;
+  }
+
+  .db-config-title {
+    margin: 0;
+    font-size: 20px;
+    font-weight: 600;
+    line-height: 1.3;
+    color: var(--el-text-color-primary);
+  }
+
+  .db-config-desc {
+    margin: 4px 0 0;
+    font-size: 13px;
+    color: var(--el-text-color-secondary);
+  }
+
+  .db-config-toolbar__right {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .db-config-search {
+    width: min(240px, 100%);
+  }
+
+  .db-config-empty {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 64px 16px;
+    text-align: center;
+    color: var(--el-text-color-secondary);
+  }
+
+  .db-config-empty__hint {
+    margin: 8px 0 20px;
+    font-size: 13px;
+    color: var(--el-text-color-placeholder);
+  }
+
+  .db-card-grid {
+    flex: 1;
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    gap: 16px;
+    align-content: start;
+  }
+
+  .db-card {
+    display: flex;
+    flex-direction: column;
+    min-height: 220px;
+    padding: 16px;
+    border: 1px solid var(--el-border-color-light);
+    border-radius: 12px;
+    background:
+      linear-gradient(
+        165deg,
+        var(--el-fill-color-blank) 0%,
+        var(--el-bg-color) 48%,
+        var(--el-fill-color-lighter) 100%
+      );
+    box-shadow: 0 1px 2px rgb(0 0 0 / 4%);
+    transition:
+      border-color 0.18s ease,
+      box-shadow 0.18s ease,
+      transform 0.18s ease;
+  }
+
+  .db-card:hover {
+    border-color: var(--el-color-primary-light-5);
+    box-shadow: 0 8px 24px rgb(0 0 0 / 8%);
+    transform: translateY(-2px);
+  }
+
+  .db-card.is-offline {
+    opacity: 0.92;
+  }
+
+  .db-card--add {
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    cursor: pointer;
+    color: var(--el-color-primary);
+    border-style: dashed;
+    border-color: var(--el-color-primary-light-5);
+    background: var(--el-color-primary-light-9);
+    font: inherit;
+  }
+
+  .db-card--add:hover {
+    background: var(--el-color-primary-light-8);
+    border-color: var(--el-color-primary);
+  }
+
+  .db-card--add:focus-visible {
+    outline: 2px solid var(--el-color-primary);
+    outline-offset: 2px;
+  }
+
+  .db-card-add__icon {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 52px;
+    height: 52px;
+    border-radius: 14px;
+    font-size: 32px;
+    font-weight: 300;
+    line-height: 1;
+    color: var(--el-color-primary);
+    background: var(--el-bg-color);
+    border: 1px solid var(--el-color-primary-light-7);
+    user-select: none;
+  }
+
+  .db-card-add__text {
+    font-size: 15px;
+    font-weight: 600;
+  }
+
+  .db-card__header {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .db-card__title-row {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 8px;
+  }
+
+  .db-card__name {
+    margin: 0;
+    min-width: 0;
+    font-size: 16px;
+    font-weight: 600;
+    line-height: 1.35;
+    color: var(--el-text-color-primary);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .db-card__type {
+    flex-shrink: 0;
+    padding: 2px 8px;
+    font-size: 12px;
+    line-height: 1.4;
+    border-radius: 999px;
+    color: var(--el-color-primary);
+    background: var(--el-color-primary-light-9);
+  }
+
+  .db-card__badges {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .db-card__status {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 1px 8px;
+    font-size: 12px;
+    border-radius: 999px;
+    background: var(--el-fill-color);
+    color: var(--el-text-color-regular);
+  }
+
+  .db-card__status.is-online {
+    color: var(--el-color-success);
+    background: var(--el-color-success-light-9);
+  }
+
+  .db-card__status.is-offline {
+    color: var(--el-color-danger);
+    background: var(--el-color-danger-light-9);
+  }
+
+  .db-card__dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: currentColor;
+  }
+
+  .db-card__body {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin-top: 14px;
+    min-width: 0;
+  }
+
+  .db-card__meta {
+    display: flex;
+    gap: 8px;
+    font-size: 13px;
+    line-height: 1.4;
+    min-width: 0;
+  }
+
+  .db-card__label {
+    flex-shrink: 0;
+    width: 32px;
+    color: var(--el-text-color-placeholder);
+  }
+
+  .db-card__value {
+    min-width: 0;
+    color: var(--el-text-color-regular);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .db-card__desc {
+    margin: 4px 0 0;
+    font-size: 12px;
+    line-height: 1.5;
+    color: var(--el-text-color-secondary);
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
+
+  .db-card__time {
+    margin: 4px 0 0;
+    font-size: 12px;
+    color: var(--el-text-color-placeholder);
+  }
+
+  .db-card__actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 2px;
+    margin-top: 14px;
+    padding-top: 12px;
+    border-top: 1px solid var(--el-border-color-extra-light);
+  }
+
+  .db-card__danger {
+    color: var(--el-color-danger);
+  }
+
+  .db-config-pagination {
+    display: flex;
+    justify-content: center;
+    margin-top: auto;
+    padding-top: 28px;
+  }
+
+  .db-config-pagination :deep(.el-pagination) {
+    flex-wrap: wrap;
+    justify-content: center;
+    row-gap: 8px;
   }
 
   .auth-layout {
@@ -897,10 +1230,6 @@
     min-width: 0;
   }
 
-  .auth-section-title {
-    margin-bottom: 8px;
-    font-weight: 600;
-  }
   .auth-section-title {
     margin-bottom: 8px;
     font-weight: 600;

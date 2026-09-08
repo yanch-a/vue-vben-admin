@@ -3,7 +3,7 @@
  * 客户端顶栏工具条
  * @author yanch
  */
-import { Refresh } from '@element-plus/icons-vue';
+import { ArrowDown, Refresh } from '@element-plus/icons-vue';
 
 defineOptions({ name: 'ClientToolbar' });
 
@@ -27,8 +27,8 @@ const emit = defineEmits<{
   savedQueries: [];
   /** 打开右上角任务进度 */
   progress: [];
-  /** 系统功能（导入/导出配置等） */
-  system: [];
+  /** 系统功能：导出 / 导入配置 */
+  system: [mode: 'export' | 'import'];
   /** 偏好设置（Tabs 位置等） */
   preferences: [];
   /** 产品授权 */
@@ -40,10 +40,17 @@ const emit = defineEmits<{
   /** 打开查询历史 */
   history: [];
 }>();
+
+function onSystemCommand(cmd: string | number) {
+  if (cmd === 'export' || cmd === 'import') {
+    emit('system', cmd);
+  }
+}
 </script>
 
 <template>
-  <div class="client-toolbar">
+  <!-- 整栏禁浏览器右键，避免工具按钮弹出系统菜单 -->
+  <div class="client-toolbar" @contextmenu.prevent>
     <ElButton type="primary" size="small" @click="emit('create')">新建连接</ElButton>
     <ElButton size="small" @click="emit('open')">打开连接</ElButton>
     <ElDivider direction="vertical" />
@@ -76,9 +83,18 @@ const emit = defineEmits<{
       查询历史
     </ElButton>
     <ElDivider direction="vertical" />
-    <ElButton size="small" @click="emit('system')">
-      系统功能
-    </ElButton>
+    <ElDropdown trigger="click" @command="onSystemCommand">
+      <ElButton size="small">
+        系统功能
+        <ElIcon class="el-icon--right"><ArrowDown /></ElIcon>
+      </ElButton>
+      <template #dropdown>
+        <ElDropdownMenu>
+          <ElDropdownItem command="export">导出配置</ElDropdownItem>
+          <ElDropdownItem command="import">导入配置</ElDropdownItem>
+        </ElDropdownMenu>
+      </template>
+    </ElDropdown>
     <ElButton size="small" @click="emit('preferences')">
       偏好设置
     </ElButton>
