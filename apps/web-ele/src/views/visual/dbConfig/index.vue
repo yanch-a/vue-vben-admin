@@ -11,6 +11,7 @@
   import {
     deleteDbConfig,
     editDbConfig,
+    getDbConfigById,
     getDbConfigPage,
     getVqDict,
     listDbConfigUsers,
@@ -21,12 +22,17 @@
   import { Plus, Search } from '@element-plus/icons-vue'
   import { ElMessage, ElMessageBox } from 'element-plus'
 
+  import { visualClientConfig } from '../client/config'
+  import { setPendingSavedQueryOpen } from '../client/composables/usePendingSavedQuery'
+  import { useConnectionStore } from '../client/composables/useConnectionStore'
   import { resolveDbType } from '../client/dialect/dbTypes'
 
   export default defineComponent({
     name: 'DbConfig',
     setup() {
       const router = useRouter()
+      const { openConnections, openConnection, setActiveConnection } =
+        useConnectionStore()
       const loading = ref(false)
       const dialogVisible = ref(false)
       const dialogType = ref('add')
@@ -70,9 +76,7 @@
         dbName: [
           { required: true, message: '请输入数据库名称', trigger: 'blur' },
         ],
-        schemaName: [
-          { required: true, message: '请输入默认数据库', trigger: 'blur' },
-        ],
+        // 默认数据库可选：留空时后端按库类型用维护库/无库名 URL
         dbType: [
           { required: true, message: '请选择数据库类型', trigger: 'change' },
         ],
@@ -207,6 +211,68 @@
             ...(row.schemaName ? { instance: row.schemaName } : {}),
           },
         })
+      }
+
+      /**
+       * 打开 SQL 客户端：复用已打开连接，否则拉配置新开，再进入编辑器
+       */
+      const handleOpenClient = async (row) => {
+        if (!row?.id) return
+        const existed = openConnections.value.find(
+          (c) => String(c.id) === String(row.id),
+        )
+        if (existed) {
+          setActiveConnection(existed.sessionId)
+        } else {
+          try {
+            const res = await getDbConfigById({ id: row.id })
+            const cfg = res?.data || res
+            if (!cfg?.id) {
+              ElMessage.error('连接配置不存在或无权访问')
+              return
+            }
+            if (cfg.connectionStatus === 0) {
+              ElMessage.warning('该连接已禁用，无法打开')
+              return
+            }
+            const result = openConnection({
+              id: cfg.id,
+              dbName: cfg.dbName,
+              schemaName: cfg.schemaName,
+              dbType: cfg.dbType,
+              dbHost: cfg.dbHost,
+              dbPort: cfg.dbPort,
+              username: cfg.username,
+              description: cfg.description,
+              connectionStatus: cfg.connectionStatus,
+              aiEnabled: cfg.aiEnabled == null ? 1 : Number(cfg.aiEnabled),
+              aiAllowSampleData:
+                cfg.aiAllowSampleData == null
+                  ? 0
+                  : Number(cfg.aiAllowSampleData),
+            })
+            if (!result.ok) {
+              if (result.reason === 'max') {
+                ElMessage.warning(
+                  `最多同时打开 ${visualClientConfig.maxOpenConnections} 个数据库连接，请先关闭其它连接`,
+                )
+              }
+              return
+            }
+          } catch (error) {
+            console.error('打开连接失败:', error)
+            ElMessage.error(error?.msg || error?.message || '打开连接失败')
+            return
+          }
+        }
+
+        setPendingSavedQueryOpen({
+          queryName: row.dbName || '查询',
+          sqlText: '',
+          instanceName: row.schemaName || '',
+          dbConfigId: row.id,
+        })
+        router.push({ name: 'VisualClient' })
       }
 
       const handleSubmit = async () => {
@@ -456,6 +522,7 @@
         handleDelete,
         handleCanvas,
         handleRelationCanvas,
+        handleOpenClient,
         handleSubmit,
         handleSizeChange,
         handleCurrentChange,
@@ -606,6 +673,13 @@
 
         <footer class="db-card__actions">
           <el-button
+            link
+            type="primary"
+            @click="handleOpenClient(row)"
+          >
+            打开
+          </el-button>
+          <el-button
             v-permissions="{ permission: ['DataBaseOperate:test'] }"
             link
             type="primary"
@@ -685,7 +759,10 @@
           <el-input v-model="form.dbName" placeholder="请输入数据库中文名称" />
         </el-form-item>
         <el-form-item label="默认数据库" prop="schemaName">
-          <el-input v-model="form.schemaName" placeholder="请输入默认数据库" />
+          <el-input
+            v-model="form.schemaName"
+            placeholder="可选，如 MySQL 库名 / PG database；留空则连服务器后自选"
+          />
         </el-form-item>
         <el-form-item label="数据库类型" prop="dbType">
           <el-select v-model="form.dbType" placeholder="请选择数据库类型">

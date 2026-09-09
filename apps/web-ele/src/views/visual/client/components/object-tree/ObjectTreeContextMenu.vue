@@ -8,6 +8,7 @@
 defineOptions({ name: 'ObjectTreeContextMenu' });
 
 export type TreeCtxAction =
+  | 'refreshInstance'
   | 'createDatabase'
   | 'dropDatabase'
   | 'importData'
@@ -104,6 +105,10 @@ function onAction(action: TreeCtxAction) {
       @contextmenu.prevent
     >
       <template v-if="isDb()">
+        <div class="item" @click="onAction('refreshInstance')">
+          刷新{{ instanceLabel }}
+        </div>
+        <div class="divider" />
         <template v-if="canManageInstance">
           <div class="item" @click="onAction('createDatabase')">
             创建{{ instanceLabel }}

@@ -59,8 +59,7 @@ export function metadataTableName(
   if (family === 'MYSQL_LIKE' || family === 'ORACLE_LIKE' || family === 'SQLITE_LIKE') {
     return ref.table;
   }
-  const def =
-    family === 'SQLSERVER_LIKE' ? 'dbo' : family === 'H2_LIKE' ? 'PUBLIC' : 'public';
+  const def = family === 'SQLSERVER_LIKE' ? 'dbo' : 'public';
   if (ref.schema.toLowerCase() === def.toLowerCase()) {
     return ref.table;
   }

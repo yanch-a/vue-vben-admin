@@ -404,17 +404,73 @@ function filterNode(value: string, data: any) {
   return (data.label || '').toLowerCase().includes(value.toLowerCase());
 }
 
+/** ElTree getNode 区分大小写；H2 的 public/PUBLIC 可能与节点 id 不一致 */
+function findTreeNode(tree: any, id: string) {
+  if (!tree || !id) return null;
+  const exact = tree.getNode(id);
+  if (exact) return exact;
+  const nodesMap = tree.store?.nodesMap || {};
+  const want = String(id).toLowerCase();
+  for (const key of Object.keys(nodesMap)) {
+    if (key.toLowerCase() === want) {
+      return nodesMap[key];
+    }
+  }
+  return null;
+}
+
 /**
  * 刷新指定实例下的某个文件夹。
- * ElTree lazy：清掉子节点缓存后重新展开。
+ * ElTree lazy：必须先清 loaded 再收起，否则已展开节点上的 expand() 不会重新请求。
  */
 function reloadFolder(objectKind: string, instanceName: string) {
   const tree = treeRef.value;
   if (!tree || !instanceName) return;
-  const node = tree.getNode(`${objectKind}-${instanceName}`);
-  if (!node) return;
+  const node = findTreeNode(tree, `${objectKind}-${instanceName}`);
+  if (!node) {
+    const ins = findTreeNode(tree, `ins-${instanceName}`);
+    if (ins) {
+      ins.loaded = false;
+      if (ins.expanded) ins.collapse?.();
+      ins.expand();
+    }
+    return;
+  }
   node.loaded = false;
+  if (node.expanded) {
+    node.collapse?.();
+  }
   node.expand();
+}
+
+/**
+ * 右键刷新当前数据库/模式：重新拉实例列表，并重载该实例下已展开的对象文件夹。
+ */
+async function reloadInstance(instanceName: string) {
+  const keep = String(instanceName || '').trim();
+  await loadInstances();
+  await nextTick();
+  if (!keep) return;
+  const tree = treeRef.value;
+  const insNode = findTreeNode(tree, `ins-${keep}`);
+  if (!insNode) return;
+  insNode.loaded = false;
+  if (insNode.expanded) {
+    insNode.collapse?.();
+  }
+  await waitExpand(insNode);
+  const kinds = [
+    'tables',
+    'views',
+    'procedures',
+    'functions',
+    'triggers',
+    'events',
+    'queries',
+  ];
+  for (const kind of kinds) {
+    reloadFolder(kind, keep);
+  }
 }
 
 /** 刷新某库下 Queries 文件夹（保存/删除后由父级调用） */
@@ -549,6 +605,7 @@ onBeforeUnmount(() => {
 
 defineExpose({
   reload: loadInstances,
+  reloadInstance,
   reloadQueries,
   reloadTables,
   reloadFolder,

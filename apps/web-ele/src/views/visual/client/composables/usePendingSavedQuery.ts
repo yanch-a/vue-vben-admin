@@ -6,7 +6,8 @@
  */
 
 export interface PendingSavedQueryOpen {
-  id: number | string;
+  /** 已保存查询 ID；配置页仅打开连接时可省略 */
+  id?: number | string;
   queryName: string;
   sqlText: string;
   instanceName: string;

@@ -72,7 +72,7 @@ import {
   useQueryTabs,
 } from './composables/useQueryTabs';
 import { visualClientConfig } from './config';
-import { resolveSqlDialect } from './dialect/sqlDialect';
+import { resolveSqlDialect, resolveTableIdent } from './dialect/sqlDialect';
 import { formatSqlByDialect } from './utils/formatSql';
 import { isDestructiveDdl, looksLikeControlledDdl } from './utils/controlledDdl';
 import {
@@ -604,7 +604,7 @@ async function tryConsumePendingSavedQuery() {
       pending.sqlText || '',
       pending.queryName,
       pending.instanceName,
-      pending.id,
+      pending.id != null && pending.id !== '' ? pending.id : undefined,
     );
     if (!tab) {
       ElMessage.warning(`同一连接最多 ${MAX_TABS} 个查询编辑器`);
@@ -625,12 +625,8 @@ async function openTableInNewEditor(payload: {
     return;
   }
   const d = activeDialect.value;
-  // 一级节点是 schema 的库（Oracle/达梦/H2）用真实 schema 限定，否则用库名
-  const qualifyKey =
-    d.instanceKind === 'schema'
-      ? payload.schemaName || payload.instanceName
-      : payload.instanceName;
-  const sql = d.selectAllLimited(qualifyKey, payload.tableName, 200);
+  const ident = resolveTableIdent(activeConnection.value.dbType, payload);
+  const sql = d.selectAllLimited(ident.schema, ident.table, 200);
   const tab = openSqlInNewTab(sql, payload.tableName, payload.instanceName);
   if (!tab) {
     ElMessage.warning(`同一连接最多 ${MAX_TABS} 个查询编辑器`);
@@ -718,6 +714,18 @@ async function onTreeContextAction(payload: {
   const tableName = node.name || node.tableName || '';
 
   switch (action) {
+    case 'refreshInstance':
+      if (!instanceName) {
+        ElMessage.warning(`请先选择${instanceLabel.value}`);
+        return;
+      }
+      try {
+        await objectTreeRef.value?.reloadInstance?.(instanceName);
+        ElMessage.success(`已刷新 ${instanceName}`);
+      } catch (e: any) {
+        ElMessage.error(e?.msg || e?.message || '刷新失败');
+      }
+      return;
     case 'importData':
       ElMessage.info('功能预留，后续版本开放');
       return;
@@ -835,7 +843,12 @@ async function onTreeContextAction(payload: {
           '删除表',
           { type: 'warning', confirmButtonText: '删除', cancelButtonText: '取消' },
         );
-        const dropSql = activeDialect.value.dropTableSql(instanceName, tableName);
+        const ident = resolveTableIdent(activeConnection.value.dbType, {
+          instanceName,
+          schemaName: node.schemaName,
+          tableName,
+        });
+        const dropSql = activeDialect.value.dropTableSql(ident.schema, ident.table);
         const res: any = await executeDdl({
           dbConfigId: activeConnection.value.id,
           instanceName,
@@ -851,10 +864,9 @@ async function onTreeContextAction(payload: {
       }
       return;
     case 'alterTable':
-      openSqlInNewTab(
-        activeDialect.value.alterTableStubSql(instanceName, tableName),
-        `Alter ${tableName}`,
-        instanceName,
+      await openProgramObjectScript(
+        { ...node, nodeType: 'table', objectKind: 'table', name: tableName },
+        'alter',
       );
       return;
     case 'copyDdl': {
@@ -1013,7 +1025,12 @@ async function openProgramObjectScript(
     }
     // DELIMITER 脚本不宜被 sql-formatter 拆坏；其余尝试格式化
     const hasDelimiter = /^\s*DELIMITER\b/im.test(sql);
-    if (!hasDelimiter) {
+    const skipFormat =
+      /\$\$/.test(sql) ||
+      /^\s*(CREATE|ALTER|DROP)\b[\s\S]*\b(PROCEDURE|FUNCTION|TRIGGER|EVENT|ALIAS)\b/i.test(
+        sql,
+      );
+    if (!hasDelimiter && !skipFormat) {
       try {
         sql = formatSqlByDialect(sql, activeConnection.value.dbType) || sql;
       } catch {
@@ -1030,7 +1047,7 @@ async function openProgramObjectScript(
   }
 }
 
-function confirmPromptDialog() {
+async function confirmPromptDialog() {
   const mode = promptDialog.mode;
   const name = promptDialog.input.trim();
   const inst = promptDialog.instanceName;
@@ -1041,11 +1058,29 @@ function confirmPromptDialog() {
       ElMessage.warning('请输入表名');
       return;
     }
-    openSqlInNewTab(
-      d.createTableStubSql(inst, name),
-      `Create ${name}`,
-      inst,
-    );
+    const ident = resolveTableIdent(activeConnection.value?.dbType, {
+      instanceName: inst,
+      tableName: name,
+    });
+    let sql = d.createTableStubSql(ident.schema, ident.table);
+    if (activeConnection.value?.id) {
+      try {
+        const res: any = await getObjectScript({
+          dbConfigId: activeConnection.value.id,
+          instanceName: inst,
+          objectKind: 'table',
+          action: 'create',
+          objectName: name,
+        });
+        const data = res?.data || res || {};
+        if (data.sql) {
+          sql = String(data.sql).trim();
+        }
+      } catch {
+        // 后端模板不可用时退回前端方言 stub
+      }
+    }
+    openSqlInNewTab(sql, `Create ${name}`, inst);
   } else if (mode === 'runSqlScript') {
     const sql = promptDialog.input.trim();
     if (!sql) {
@@ -1324,39 +1359,32 @@ function refreshObjectTreeAfterDdl(sql: string, instanceName: string) {
     .replace(/\/\*[\s\S]*?\*\//g, ' ')
     .replace(/^[ \t]*--[^\n]*$/gm, ' ')
     .trim();
-  // 建表 / 改表 / 删表 / 清空 / 重命名 / 表维护：刷新表列表
+  const text = head.toUpperCase();
   if (
-    /^(CREATE\s+(OR\s+REPLACE\s+)?((GLOBAL\s+)?(TEMPORARY|TEMP)\s+|UNLOGGED\s+)?TABLE\b|DROP\s+(TEMPORARY\s+)?TABLE\b|ALTER\s+TABLE\b|TRUNCATE\b|RENAME\b|OPTIMIZE\b|ANALYZE\b|REPAIR\s+TABLE\b|CHECK\s+TABLE\b|COMMENT\s+ON\s+TABLE\b)/i.test(
-      head,
+    /\bTABLE\b/.test(text) &&
+    /\b(CREATE|DROP|ALTER|TRUNCATE|RENAME|OPTIMIZE|ANALYZE|REPAIR|COMMENT)\b/.test(
+      text,
     )
   ) {
     objectTreeRef.value.reloadTables?.(instanceName);
-    return;
   }
-  const m = head.match(
-    /^(?:CREATE\s+(?:OR\s+REPLACE\s+|OR\s+ALTER\s+)?|DROP\s+(?:IF\s+EXISTS\s+)?|ALTER\s+|REFRESH\s+)(MATERIALIZED\s+VIEW|VIEW|PROCEDURE|FUNCTION|TRIGGER|EVENT|DATABASE|SCHEMA|SEQUENCE|TYPE)\b/i,
-  );
-  const kind = (m?.[1] || '').toUpperCase();
-  if (kind === 'DATABASE' || kind === 'SCHEMA') {
+  if (/\b(MATERIALIZED\s+VIEW|\bVIEW\b)/.test(text)) {
+    objectTreeRef.value.reloadFolder?.('views', instanceName);
+  }
+  if (/\bPROCEDURE\b/.test(text)) {
+    objectTreeRef.value.reloadFolder?.('procedures', instanceName);
+  }
+  if (/\b(FUNCTION|ALIAS)\b/.test(text)) {
+    objectTreeRef.value.reloadFolder?.('functions', instanceName);
+  }
+  if (/\bTRIGGER\b/.test(text)) {
+    objectTreeRef.value.reloadFolder?.('triggers', instanceName);
+  }
+  if (/\bEVENT\b/.test(text)) {
+    objectTreeRef.value.reloadFolder?.('events', instanceName);
+  }
+  if (/\b(DATABASE|SCHEMA)\b/.test(text) && /\b(CREATE|DROP|ALTER)\b/.test(text)) {
     void refreshBrowseObjects(undefined, { silent: true });
-  } else if (kind) {
-    const folder =
-      kind === 'VIEW' || kind === 'MATERIALIZED VIEW'
-        ? 'views'
-        : kind === 'PROCEDURE'
-          ? 'procedures'
-          : kind === 'FUNCTION'
-            ? 'functions'
-            : kind === 'TRIGGER'
-              ? 'triggers'
-              : kind === 'EVENT'
-                ? 'events'
-                : '';
-    if (folder) {
-      objectTreeRef.value.reloadFolder?.(folder, instanceName);
-    } else {
-      objectTreeRef.value.reload?.();
-    }
   }
 }
 
@@ -1539,11 +1567,14 @@ function buildSelectAllSql(
   schemaName?: string,
 ) {
   const d = resolveSqlDialect(dbType);
-  const qualifyKey =
-    d.instanceKind === 'schema' ? schemaName || instanceName : instanceName;
-  return d.selectAllLimited(
-    qualifyKey,
+  const ident = resolveTableIdent(dbType, {
+    instanceName,
+    schemaName,
     tableName,
+  });
+  return d.selectAllLimited(
+    ident.schema,
+    ident.table,
     visualClientConfig.exportMaxRows,
   );
 }

@@ -15,7 +15,11 @@
 
 import type { SqlDialectFamily } from './dbTypes';
 
-import { resolveDbType, resolveDialectFamily } from './dbTypes';
+import {
+  normalizeDbTypeCode,
+  resolveDbType,
+  resolveDialectFamily,
+} from './dbTypes';
 
 export type { SqlDialectFamily } from './dbTypes';
 export {
@@ -94,6 +98,103 @@ function appendLimitKeyword(sql: string, limit: number): string {
   return `${sql.replace(/;?\s*$/, '')}\nLIMIT ${limit}`;
 }
 
+function firstNonBlank(...vals: Array<string | undefined>): string {
+  for (const v of vals) {
+    if (v && v.trim()) return v.trim();
+  }
+  return '';
+}
+
+/** PG 族：SQL schema，默认 public。切勿把数据库名写进来。 */
+function pgSchemaName(schema?: string) {
+  return firstNonBlank(schema, 'public');
+}
+
+/** SQL Server：表所在 schema，默认 dbo。切勿把库名写进来。 */
+function ssSchemaName(schema?: string) {
+  return firstNonBlank(schema, 'dbo');
+}
+
+/** Oracle/达梦：有 schema 才写成 "schema"."table"，避免空引号或把服务名硬拼进去。 */
+function oracleQualify(schema: string | undefined, table: string) {
+  const sch = (schema || '').trim();
+  const tbl = `"${escDouble(table)}"`;
+  return sch ? `"${escDouble(sch)}".${tbl}` : tbl;
+}
+
+/** 把 schema.table 展示名拆开；没有点则整段当表名。 */
+function splitSchemaTable(name: string): { schema: string; table: string } {
+  const raw = String(name || '').trim();
+  const dot = raw.indexOf('.');
+  if (dot > 0 && dot < raw.length - 1) {
+    return { schema: raw.slice(0, dot), table: raw.slice(dot + 1) };
+  }
+  return { schema: '', table: raw };
+}
+
+export interface TableIdentInput {
+  instanceName?: string;
+  schemaName?: string;
+  tableName: string;
+}
+
+export interface TableIdent {
+  /** SQL 里引用的 schema（MySQL 则是库名） */
+  schema: string;
+  table: string;
+}
+
+/**
+ * 对象树节点 → SQL 限定名用的 schema + 裸表名。
+ * instance 含义：MySQL/PG/SS=库，H2/达梦=schema，Oracle=服务名（不能当 schema）。
+ */
+export function resolveTableIdent(
+  dbType: string | undefined | null,
+  input: TableIdentInput,
+): TableIdent {
+  const family = resolveDialectFamily(dbType);
+  const split = splitSchemaTable(input.tableName);
+  const schemaName = (input.schemaName || '').trim();
+  const instanceName = (input.instanceName || '').trim();
+  const table = split.table || String(input.tableName || '').trim();
+
+  switch (family) {
+    case 'MYSQL_LIKE':
+      return { schema: firstNonBlank(instanceName, schemaName), table };
+    case 'POSTGRES_LIKE':
+      return {
+        schema: firstNonBlank(schemaName, split.schema, 'public'),
+        table,
+      };
+    case 'SQLSERVER_LIKE':
+      return { schema: firstNonBlank(schemaName, split.schema, 'dbo'), table };
+    case 'SQLITE_LIKE':
+      return { schema: '', table };
+    case 'H2_LIKE':
+      // 实例就是 schema；优先树上的实例名（DATABASE_TO_LOWER 下是 public）
+      return {
+        schema: firstNonBlank(instanceName, schemaName, split.schema, 'PUBLIC'),
+        table,
+      };
+    case 'ORACLE_LIKE': {
+      const code = normalizeDbTypeCode(dbType);
+      // 达梦一级节点就是用户；Oracle 一级节点是服务名，必须用表上的 schemaName
+      if (code === 'DM') {
+        return {
+          schema: firstNonBlank(schemaName, split.schema, instanceName),
+          table,
+        };
+      }
+      return { schema: firstNonBlank(schemaName, split.schema), table };
+    }
+    default:
+      return {
+        schema: firstNonBlank(schemaName, instanceName, split.schema),
+        table,
+      };
+  }
+}
+
 const MYSQL_LIKE: SqlDialectProfile = {
   family: 'MYSQL_LIKE',
   label: 'MySQL-like',
@@ -132,26 +233,24 @@ const POSTGRES_LIKE: SqlDialectProfile = {
   instanceKind: 'database',
   quoteIdent: (name) => `"${escDouble(name)}"`,
   /**
-   * PG 族：instance 是 database（连接层切换）；SQL 表落在 public。
-   * qualifyTable 的 schema 参数若未传，默认 public，切勿把库名当 schema。
+   * PG 族：instance 是 database（连接层切换）；表在 schema 下，默认 public。
+   * qualifyTable 的第一参是 schema，切勿把库名传进来。
    */
-  qualifyTable: (schema, table) => {
-    const sch = schema && schema.trim() ? schema : 'public';
-    return `"${escDouble(sch)}"."${escDouble(table)}"`;
-  },
-  selectAllLimited: (_database, table, limit) =>
-    `SELECT * FROM "public"."${escDouble(table)}" LIMIT ${limit}`,
+  qualifyTable: (schema, table) =>
+    `"${escDouble(pgSchemaName(schema))}"."${escDouble(table)}"`,
+  selectAllLimited: (schema, table, limit) =>
+    `SELECT * FROM "${escDouble(pgSchemaName(schema))}"."${escDouble(table)}" LIMIT ${limit}`,
   appendLimit: appendLimitKeyword,
   literal: (v) => stdLiteral(v, 'truefalse'),
   createDatabaseSql: (name) => `CREATE DATABASE "${escDouble(name)}";`,
   dropDatabaseSql: (name) =>
     `-- 需连接到其它库执行\nDROP DATABASE "${escDouble(name)}";`,
-  createTableStubSql: (_database, table) =>
-    `CREATE TABLE "public"."${escDouble(table)}" (\n  id BIGSERIAL PRIMARY KEY\n);`,
-  dropTableSql: (_database, table) =>
-    `DROP TABLE IF EXISTS "public"."${escDouble(table)}" CASCADE;`,
-  alterTableStubSql: (_database, table) =>
-    `-- 改变表结构（请按需修改）\nALTER TABLE "public"."${escDouble(table)}"\n  -- ADD COLUMN col_name VARCHAR(64) NULL;\n;`,
+  createTableStubSql: (schema, table) =>
+    `CREATE TABLE "${escDouble(pgSchemaName(schema))}"."${escDouble(table)}" (\n  id BIGSERIAL PRIMARY KEY\n);`,
+  dropTableSql: (schema, table) =>
+    `DROP TABLE IF EXISTS "${escDouble(pgSchemaName(schema))}"."${escDouble(table)}" CASCADE;`,
+  alterTableStubSql: (schema, table) =>
+    `-- 改变表结构（请按需修改）\nALTER TABLE "${escDouble(pgSchemaName(schema))}"."${escDouble(table)}"\n  -- ADD COLUMN col_name VARCHAR(64) NULL;\n;`,
 };
 
 const ORACLE_LIKE: SqlDialectProfile = {
@@ -164,12 +263,9 @@ const ORACLE_LIKE: SqlDialectProfile = {
   dumpUseOptionLabel: '包含 "ALTER SESSION SET CURRENT_SCHEMA"',
   instanceKind: 'schema',
   quoteIdent: (name) => `"${escDouble(name)}"`,
-  qualifyTable: (schema, table) =>
-    schema
-      ? `"${escDouble(schema)}"."${escDouble(table)}"`
-      : `"${escDouble(table)}"`,
+  qualifyTable: (schema, table) => oracleQualify(schema, table),
   selectAllLimited: (schema, table, limit) =>
-    `SELECT * FROM "${escDouble(schema)}"."${escDouble(table)}" WHERE ROWNUM <= ${limit}`,
+    `SELECT * FROM ${oracleQualify(schema, table)} WHERE ROWNUM <= ${limit}`,
   appendLimit: (sql, limit) =>
     `SELECT * FROM (\n${sql.replace(/;?\s*$/, '')}\n) q WHERE ROWNUM <= ${limit}`,
   literal: (v) => stdLiteral(v, '01'),
@@ -178,11 +274,11 @@ const ORACLE_LIKE: SqlDialectProfile = {
   dropDatabaseSql: (name) =>
     `-- 危险操作：确认目标为用户/Schema\n-- DROP USER "${escDouble(name)}" CASCADE;`,
   createTableStubSql: (schema, table) =>
-    `CREATE TABLE "${escDouble(schema)}"."${escDouble(table)}" (\n  id NUMBER GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY\n);`,
+    `CREATE TABLE ${oracleQualify(schema, table)} (\n  id NUMBER GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,\n  name VARCHAR2(64)\n);`,
   dropTableSql: (schema, table) =>
-    `DROP TABLE "${escDouble(schema)}"."${escDouble(table)}" CASCADE CONSTRAINTS;`,
+    `DROP TABLE ${oracleQualify(schema, table)} CASCADE CONSTRAINTS;`,
   alterTableStubSql: (schema, table) =>
-    `-- 改变表结构（请按需修改）\nALTER TABLE "${escDouble(schema)}"."${escDouble(table)}"\n  -- ADD (col_name VARCHAR2(64) NULL);\n;`,
+    `-- 改变表结构（请按需修改）\nALTER TABLE ${oracleQualify(schema, table)}\n  -- ADD (col_name VARCHAR2(64) NULL);\n;`,
 };
 
 const SQLSERVER_LIKE: SqlDialectProfile = {
@@ -194,12 +290,10 @@ const SQLSERVER_LIKE: SqlDialectProfile = {
   dumpUseOptionLabel: '包含 "USE [database]" 语句',
   instanceKind: 'database',
   quoteIdent: (name) => `[${escBracket(name)}]`,
-  qualifyTable: (schema, table) => {
-    const sch = schema && schema.trim() ? schema : 'dbo';
-    return `[${escBracket(sch)}].[${escBracket(table)}]`;
-  },
+  qualifyTable: (schema, table) =>
+    `[${escBracket(ssSchemaName(schema))}].[${escBracket(table)}]`,
   selectAllLimited: (schema, table, limit) =>
-    `SELECT TOP (${limit}) * FROM [${escBracket(schema || 'dbo')}].[${escBracket(table)}]`,
+    `SELECT TOP (${limit}) * FROM [${escBracket(ssSchemaName(schema))}].[${escBracket(table)}]`,
   appendLimit: (sql, limit) => {
     // 简单场景：若以 SELECT 开头插入 TOP
     const trimmed = sql.replace(/;?\s*$/, '').trim();
@@ -217,11 +311,11 @@ const SQLSERVER_LIKE: SqlDialectProfile = {
   createDatabaseSql: (name) => `CREATE DATABASE [${escBracket(name)}];`,
   dropDatabaseSql: (name) => `DROP DATABASE [${escBracket(name)}];`,
   createTableStubSql: (schema, table) =>
-    `CREATE TABLE [${escBracket(schema || 'dbo')}].[${escBracket(table)}] (\n  id BIGINT IDENTITY(1,1) NOT NULL PRIMARY KEY\n);`,
+    `CREATE TABLE [${escBracket(ssSchemaName(schema))}].[${escBracket(table)}] (\n  id BIGINT IDENTITY(1,1) NOT NULL PRIMARY KEY,\n  name NVARCHAR(64) NULL\n);`,
   dropTableSql: (schema, table) =>
-    `DROP TABLE IF EXISTS [${escBracket(schema || 'dbo')}].[${escBracket(table)}];`,
+    `DROP TABLE IF EXISTS [${escBracket(ssSchemaName(schema))}].[${escBracket(table)}];`,
   alterTableStubSql: (schema, table) =>
-    `-- 改变表结构（请按需修改）\nALTER TABLE [${escBracket(schema || 'dbo')}].[${escBracket(table)}]\n  -- ADD col_name NVARCHAR(64) NULL;\n;`,
+    `-- 改变表结构（请按需修改）\nALTER TABLE [${escBracket(ssSchemaName(schema))}].[${escBracket(table)}]\n  -- ADD col_name NVARCHAR(64) NULL;\n;`,
 };
 
 /**
@@ -253,6 +347,16 @@ const SQLITE_LIKE: SqlDialectProfile = {
 };
 
 /**
+ * H2 schema 必须保持对象树/JDBC 返回的原样大小写。
+ * Regular 默认是 PUBLIC；DATABASE_TO_LOWER / PG 模式是 public。
+ * 加双引号后大小写敏感，不能再 toUpperCase。
+ */
+function h2SchemaName(schema?: string) {
+  const s = (schema || '').trim();
+  return s || 'PUBLIC';
+}
+
+/**
  * H2：实例节点是 schema（库由 jdbcUrl 决定，连接内无法切换）。
  */
 const H2_LIKE: SqlDialectProfile = {
@@ -264,22 +368,20 @@ const H2_LIKE: SqlDialectProfile = {
   dumpUseOptionLabel: '包含 "SET SCHEMA" 语句',
   instanceKind: 'schema',
   quoteIdent: (name) => `"${escDouble(name)}"`,
-  qualifyTable: (schema, table) => {
-    const sch = schema && schema.trim() ? schema.toUpperCase() : 'PUBLIC';
-    return `"${escDouble(sch)}"."${escDouble(table)}"`;
-  },
+  qualifyTable: (schema, table) =>
+    `"${escDouble(h2SchemaName(schema))}"."${escDouble(table)}"`,
   selectAllLimited: (schema, table, limit) =>
-    `SELECT * FROM "${escDouble((schema || 'PUBLIC').toUpperCase())}"."${escDouble(table)}" LIMIT ${limit}`,
+    `SELECT * FROM "${escDouble(h2SchemaName(schema))}"."${escDouble(table)}" LIMIT ${limit}`,
   appendLimit: appendLimitKeyword,
   literal: (v) => stdLiteral(v, 'truefalse'),
   createDatabaseSql: (name) => `CREATE SCHEMA "${escDouble(name)}";`,
   dropDatabaseSql: (name) => `DROP SCHEMA "${escDouble(name)}" CASCADE;`,
   createTableStubSql: (schema, table) =>
-    `CREATE TABLE "${escDouble((schema || 'PUBLIC').toUpperCase())}"."${escDouble(table)}" (\n  id BIGINT GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY\n);`,
+    `CREATE TABLE "${escDouble(h2SchemaName(schema))}"."${escDouble(table)}" (\n  ID BIGINT NOT NULL AUTO_INCREMENT,\n  NAME VARCHAR(64),\n  PRIMARY KEY (ID)\n);`,
   dropTableSql: (schema, table) =>
-    `DROP TABLE IF EXISTS "${escDouble((schema || 'PUBLIC').toUpperCase())}"."${escDouble(table)}" CASCADE;`,
+    `DROP TABLE IF EXISTS "${escDouble(h2SchemaName(schema))}"."${escDouble(table)}" CASCADE;`,
   alterTableStubSql: (schema, table) =>
-    `-- 改变表结构（请按需修改）\nALTER TABLE "${escDouble((schema || 'PUBLIC').toUpperCase())}"."${escDouble(table)}"\n  -- ADD COLUMN col_name VARCHAR(64) NULL;\n;`,
+    `-- 改变表结构（请按需修改）\nALTER TABLE "${escDouble(h2SchemaName(schema))}"."${escDouble(table)}"\n  -- ADD COLUMN col_name VARCHAR(64) NULL;\n;`,
 };
 
 const FAMILY_PROFILE: Record<SqlDialectFamily, SqlDialectProfile> = {

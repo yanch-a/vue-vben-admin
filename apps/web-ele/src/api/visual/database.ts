@@ -312,7 +312,7 @@ export function getEvents(dbConfigId: any, instanceName: any) {
 /**
  * 生成视图/过程/函数/触发器/事件的编辑脚本（后端按方言实现）
  * action: execute | create | alter | drop
- * objectKind: view | procedure | function | trigger | event（也可传复数）
+ * objectKind: table | view | procedure | function | trigger | event（也可传复数）
  */
 export function getObjectScript(data: {
   dbConfigId: number | string
