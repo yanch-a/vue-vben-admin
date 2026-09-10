@@ -801,6 +801,26 @@ function onInsertName(name: string) {
   sqlEditorRef.value?.insertText(name);
 }
 
+/** 左键点左侧栏时关掉对象树菜单；右键留给自定义菜单 */
+function onLeftPaneMouseDown(e: MouseEvent) {
+  if (e.button === 2) return;
+  objectTreeRef.value?.closeContextMenu?.();
+}
+
+/** 点在实例树下方空白（含左侧栏空隙）：自定义菜单，不要浏览器菜单 */
+function onLeftPaneContextMenu(e: MouseEvent) {
+  const t = e.target as HTMLElement | null;
+  if (
+    t?.closest(
+      'input, textarea, .el-input, .el-tree-node, .obj-ctx-menu, .search',
+    )
+  ) {
+    return;
+  }
+  e.preventDefault();
+  objectTreeRef.value?.openBlankContextMenu?.(e);
+}
+
 /** 对象树右键菜单动作 */
 async function onTreeContextAction(payload: {
   action: TreeCtxAction;
@@ -822,6 +842,9 @@ async function onTreeContextAction(payload: {
       } catch (e: any) {
         ElMessage.error(e?.msg || e?.message || '刷新失败');
       }
+      return;
+    case 'refreshTree':
+      await refreshBrowseObjects(undefined, { silent: false });
       return;
     case 'importData':
       ElMessage.info('功能预留，后续版本开放');
@@ -857,9 +880,12 @@ async function onTreeContextAction(payload: {
         instanceName ||
         activeTab.value?.instanceName ||
         activeConnection.value.schemaName ||
+        instanceOptions.value[0] ||
         '';
       if (!createDbDialog.connectInstance) {
-        ElMessage.warning(`请先在对象树选中一个${instanceLabel.value}`);
+        ElMessage.warning(
+          `当前连接还没有可用的${instanceLabel.value}，请先刷新对象树`,
+        );
         return;
       }
       createDbDialog.visible = true;
@@ -2438,7 +2464,8 @@ onBeforeUnmount(() => {
         <aside
           class="left"
           :style="{ flex: `0 0 ${leftWidth}px`, width: leftWidth + 'px' }"
-          @mousedown="objectTreeRef?.closeContextMenu?.()"
+          @mousedown="onLeftPaneMouseDown"
+          @contextmenu="onLeftPaneContextMenu"
         >
           <div class="search">
             <ElInput

@@ -352,36 +352,36 @@ function onNodeClick(data: any, node: any) {
   }
 }
 
-/** 右键：库 / Tables / 表 / 已保存查询 / 可编程对象 */
+/** 右键：库 / Tables / 表 / 已保存查询 / 可编程对象；一律拦住浏览器菜单 */
 function onNodeContextMenu(event: MouseEvent, data: any) {
-  const programKinds = new Set([
-    'views',
-    'procedures',
-    'functions',
-    'triggers',
-    'events',
-  ]);
-  const allow =
-    data.nodeType === 'instance' ||
-    data.nodeType === 'table' ||
-    data.nodeType === 'savedQuery' ||
-    (data.nodeType === 'folder' &&
-      (data.objectKind === 'tables' || programKinds.has(data.objectKind))) ||
-    programKinds.has(data.nodeType);
-  if (!allow) return;
   event.preventDefault();
   event.stopPropagation();
+  openCtxMenu(event, data, data?.nodeType || 'folder');
+}
+
+/** 点在树下方空白：创建数据库 / 刷新（点在节点上则交给 onNodeContextMenu） */
+function onBlankContextMenu(event: MouseEvent) {
+  const el = event.target as HTMLElement | null;
+  if (el?.closest('.el-tree-node')) {
+    return;
+  }
+  event.preventDefault();
+  event.stopPropagation();
+  openCtxMenu(event, { nodeType: 'blank' }, 'blank');
+}
+
+function openCtxMenu(event: MouseEvent, data: any, targetType: string) {
   const pad = 8;
   const menuW = 220;
-  const menuH = 220;
+  const menuH = 240;
   let x = event.clientX;
   let y = event.clientY;
   if (x + menuW > window.innerWidth - pad) x = window.innerWidth - menuW - pad;
   if (y + menuH > window.innerHeight - pad) y = window.innerHeight - menuH - pad;
   ctxMenu.x = x;
   ctxMenu.y = y;
-  ctxMenu.targetType = data.nodeType;
-  ctxMenu.objectKind = data.objectKind || data.nodeType || '';
+  ctxMenu.targetType = targetType;
+  ctxMenu.objectKind = data?.objectKind || data?.nodeType || '';
   ctxMenu.node = data;
   ctxMenu.visible = true;
 }
@@ -394,14 +394,17 @@ function closeCtxMenu() {
 /** 点击菜单外区域关闭（capture 阶段，避免 ElTree 吞掉 click） */
 function onDocMouseDown(e: MouseEvent) {
   if (!ctxMenu.visible) return;
+  if (e.button === 2) return;
   const target = e.target as HTMLElement | null;
   if (target?.closest('.obj-ctx-menu')) return;
   closeCtxMenu();
 }
 
 function onCtxAction(action: TreeCtxAction) {
-  if (!ctxMenu.node) return;
-  emit('contextAction', { action, node: { ...ctxMenu.node } });
+  emit('contextAction', {
+    action,
+    node: ctxMenu.node ? { ...ctxMenu.node } : { nodeType: 'blank' },
+  });
 }
 
 function filterNode(value: string, data: any) {
@@ -624,11 +627,16 @@ defineExpose({
   reloadFolder,
   locateTarget,
   closeContextMenu: closeCtxMenu,
+  openBlankContextMenu: onBlankContextMenu,
 });
 </script>
 
 <template>
-  <div v-loading="loading" class="object-tree">
+  <div
+    v-loading="loading"
+    class="object-tree"
+    @contextmenu="onBlankContextMenu"
+  >
     <ElTree
       ref="treeRef"
       :data="treeData"
@@ -670,7 +678,8 @@ defineExpose({
 
 <style scoped>
 .object-tree {
-  height: 100%;
+  flex: 1;
+  min-height: 0;
   padding: 4px;
   overflow: auto;
 }

@@ -9,6 +9,7 @@ defineOptions({ name: 'ObjectTreeContextMenu' });
 
 export type TreeCtxAction =
   | 'refreshInstance'
+  | 'refreshTree'
   | 'createDatabase'
   | 'dropDatabase'
   | 'importData'
@@ -54,7 +55,7 @@ const props = withDefaults(
     visible: boolean;
     x: number;
     y: number;
-    /** instance | folder | table | savedQuery | views|... */
+    /** instance | folder | table | savedQuery | views|... | blank */
     targetType: string;
     /** folder 时的 objectKind，如 tables / queries / views */
     objectKind?: string;
@@ -71,6 +72,7 @@ const emit = defineEmits<{
   action: [action: TreeCtxAction];
 }>();
 
+const isBlank = () => props.targetType === 'blank';
 const isDb = () => props.targetType === 'instance';
 const isTablesFolder = () =>
   props.targetType === 'folder' && props.objectKind === 'tables';
@@ -106,14 +108,18 @@ function onAction(action: TreeCtxAction) {
       @click.stop
       @contextmenu.prevent
     >
-      <template v-if="isDb()">
+      <template v-if="isBlank()">
+        <div class="item" @click="onAction('createDatabase')">创建数据库</div>
+        <div class="item" @click="onAction('refreshTree')">刷新</div>
+      </template>
+      <template v-else-if="isDb()">
         <div class="item" @click="onAction('refreshInstance')">
           刷新{{ instanceLabel }}
         </div>
         <div class="divider" />
         <template v-if="canManageInstance">
           <div class="item" @click="onAction('createDatabase')">
-            创建{{ instanceLabel }}
+            创建{{ instanceLabel === '模式' ? '数据库' : instanceLabel }}
           </div>
           <div class="item danger" @click="onAction('dropDatabase')">
             删除{{ instanceLabel }}

@@ -224,7 +224,8 @@ export const DB_TYPE_REGISTRY: Record<string, DbTypeDescriptor> = {
     defaultPort: 9092,
     urlTemplate: 'jdbc:h2:tcp://{host}:{port}/{database}',
     credentialRequired: false,
-    capabilities: { ...EMBEDDED_OBJECTS, functions: true },
+    // 一级节点是 Schema，允许 CREATE / DROP SCHEMA（SQLite 仍走新建连接）
+    capabilities: { ...EMBEDDED_OBJECTS, functions: true, manageInstance: true },
     fileExample: 'D:/data/h2/app',
   },
 };
