@@ -25,6 +25,7 @@ const FAMILY_LANGUAGE: Record<SqlDialectFamily, FormatterLanguage> = {
   SQLITE_LIKE: 'sqlite',
   // sql-formatter 无 H2 专属规则，标准 SQL 最接近
   H2_LIKE: 'sql',
+  MONGODB_LIKE: 'sql',
 };
 
 /**
@@ -36,6 +37,7 @@ export function formatSqlByDialect(sql: string, dbType?: string): string {
   if (!raw) return '';
 
   const dialect = resolveSqlDialect(dbType);
+  if (dialect.family === 'MONGODB_LIKE') return raw;
   const language = FAMILY_LANGUAGE[dialect.family] || 'sql';
 
   // 原语句末尾若有分号，格式化后保留，避免多语句编辑时丢分隔符

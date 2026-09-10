@@ -141,6 +141,7 @@ export function defaultCreateDatabaseForm(
     case 'H2_LIKE':
       return { name: '', authorization: '' };
     case 'SQLITE_LIKE':
+    case 'MONGODB_LIKE':
     default:
       return { name: '' };
   }
@@ -169,6 +170,8 @@ export function createDatabaseMeta(family: SqlDialectFamily): {
         unsupportedHint:
           'SQLite 一个文件即一个库，请通过「新建连接」指定新的数据库文件路径。',
       };
+    case 'MONGODB_LIKE':
+      return { title: '创建 MongoDB 数据库', nameLabel: '数据库名' };
     default:
       return { title: '创建数据库', nameLabel: '名称' };
   }
@@ -211,6 +214,12 @@ export function buildCreateDatabaseStatements(
         title: meta.title,
         nameLabel: meta.nameLabel,
         sql: buildH2(form, name),
+      };
+    case 'MONGODB_LIKE':
+      return {
+        title: meta.title,
+        nameLabel: meta.nameLabel,
+        sql: `db.getSiblingDB(${JSON.stringify(name)}).createCollection("_lemon_init");`,
       };
     case 'SQLITE_LIKE':
     default:

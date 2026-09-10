@@ -24,9 +24,10 @@ const SUPPORTED_DB_TYPES = [
   'POLARDB_PG',
   'SQLITE',
   'H2',
+  'MONGODB',
 ] as const;
 
-describe('17 个数据库产品注册', () => {
+describe('18 个数据库产品注册', () => {
   it('每个产品都有完整的前端描述，并与连接 URL 语义一致', () => {
     expect(Object.keys(DB_TYPE_REGISTRY).sort()).toEqual(
       [...SUPPORTED_DB_TYPES].sort(),

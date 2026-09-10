@@ -183,6 +183,8 @@ export function resolveTableIdent(
         schema: firstNonBlank(instanceName, schemaName, split.schema, 'PUBLIC'),
         table,
       };
+    case 'MONGODB_LIKE':
+      return { schema: '', table };
     case 'ORACLE_LIKE': {
       const code = normalizeDbTypeCode(dbType);
       // 达梦一级节点就是用户；Oracle 一级节点是服务名，必须用表上的 schemaName
@@ -411,6 +413,34 @@ const H2_LIKE: SqlDialectProfile = {
     `-- 改变表结构（请按需修改）\nALTER TABLE "${escDouble(h2SchemaName(schema))}"."${escDouble(table)}"\n  -- ADD COLUMN col_name VARCHAR(64) NULL;\n;`,
 };
 
+const MONGODB_LIKE: SqlDialectProfile = {
+  family: 'MONGODB_LIKE',
+  label: 'MongoDB',
+  completionTriggers: ['.', ' ', '{', '"'],
+  lineComment: '//',
+  dumpFkOptionLabel: 'MongoDB 无外键检查开关',
+  dumpUseOptionLabel: 'MongoDB 使用当前数据库实例',
+  instanceKind: 'database',
+  quoteIdent: (name) => JSON.stringify(name),
+  qualifyTable: (_schema, table) => `db.getCollection(${JSON.stringify(table)})`,
+  selectAllLimited: (_schema, table, limit) =>
+    `db.getCollection(${JSON.stringify(table)}).find({}).limit(${limit});`,
+  appendLimit: (sql) => sql,
+  literal: (value) => JSON.stringify(value),
+  createDatabaseSql: (name) =>
+    `// MongoDB 按需创建数据库：先创建集合\ndb.createCollection(${JSON.stringify(name)});`,
+  dropDatabaseSql: () => 'db.dropDatabase();',
+  createTableStubSql: (_schema, table) =>
+    `db.createCollection(${JSON.stringify(table)});`,
+  dropTableSql: (_schema, table) =>
+    `db.getCollection(${JSON.stringify(table)}).drop();`,
+  truncateTableSql: (_schema, table) =>
+    `db.getCollection(${JSON.stringify(table)}).deleteMany({});`,
+  truncateViaDml: true,
+  alterTableStubSql: (_schema, table) =>
+    `// MongoDB 使用文档结构，无固定列式 ALTER\ndb.getCollection(${JSON.stringify(table)}).runCommand({collMod: ${JSON.stringify(table)}});`,
+};
+
 const FAMILY_PROFILE: Record<SqlDialectFamily, SqlDialectProfile> = {
   MYSQL_LIKE,
   POSTGRES_LIKE,
@@ -418,6 +448,7 @@ const FAMILY_PROFILE: Record<SqlDialectFamily, SqlDialectProfile> = {
   SQLSERVER_LIKE,
   SQLITE_LIKE,
   H2_LIKE,
+  MONGODB_LIKE,
 };
 
 /** 解析完整方言配置（编辑器 / 模板 / 结果行 DML 统一入口） */

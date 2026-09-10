@@ -74,8 +74,8 @@ async function onSubmit() {
     return;
   }
   const name = form.file.name.toLowerCase();
-  if (!(name.endsWith('.sql') || name.endsWith('.txt'))) {
-    ElMessage.warning('仅支持 .sql / .txt 文件');
+  if (!(name.endsWith('.sql') || name.endsWith('.txt') || name.endsWith('.js'))) {
+    ElMessage.warning('仅支持 .sql / .txt / .js 文件');
     return;
   }
 
@@ -121,14 +121,14 @@ async function onSubmit() {
         <ElUpload
           :auto-upload="false"
           :limit="1"
-          accept=".sql,.txt"
+          accept=".sql,.txt,.js"
           :on-change="onFileChange"
           :on-remove="onFileRemove"
           :on-exceed="onExceed"
         >
           <ElButton>选择文件</ElButton>
           <template #tip>
-            <div class="tip">支持 .sql / .txt，多语句、多行过程体会按当前库方言拆分后后台执行</div>
+            <div class="tip">支持 .sql / .txt / .js，多语句会按当前数据库命令规则拆分后后台执行</div>
           </template>
         </ElUpload>
       </ElFormItem>

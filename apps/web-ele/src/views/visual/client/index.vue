@@ -85,8 +85,15 @@ import {
 import {
   metadataTableName,
   parseQueryTables,
+  type QueryTableRef,
   type TableRef,
 } from './utils/resultRowSql';
+import {
+  isMongoDbType,
+  isMongoEditableQuery,
+  mongoCommandKind,
+  parseMongoCollection,
+} from './utils/mongoCommand';
 import type { ResultTableMeta } from './utils/resultJoinUpdate';
 import {
   mergePrimaryKeys,
@@ -302,10 +309,20 @@ function onSelectInstance(instanceName: string) {
 }
 
 /** 结果集对应表：仅用「已执行 SQL」解析，避免编辑时反复触发副作用 */
-const resultQueryTables = computed(() => {
+const resultQueryTables = computed<QueryTableRef[]>(() => {
   const sql = activeTab.value?.result?.sourceSql || '';
-  return sql ? parseQueryTables(sql) : [];
+  if (!sql) return [];
+  if (isMongoDbType(activeConnection.value?.dbType)) {
+    const table = parseMongoCollectionForResult(sql);
+    return table ? [table] : [];
+  }
+  return parseQueryTables(sql);
 });
+
+function parseMongoCollectionForResult(sql: string): QueryTableRef | null {
+  // Kept local so the metadata pipeline remains QueryTableRef-compatible.
+  return isMongoEditableQuery(sql) ? parseMongoCollection(sql) : null;
+}
 
 const resultTableRef = computed<TableRef | null>(() => {
   const t = resultQueryTables.value[0];
@@ -1308,6 +1325,26 @@ async function runSql(opts?: { sql?: string; source?: string }) {
   }
   const source = opts?.source || 'manual';
 
+  if (isMongoDbType(activeConnection.value.dbType)) {
+    const kind = mongoCommandKind(sql);
+    if (kind === 'unknown') {
+      ElMessage.warning('无法识别 MongoDB 命令，请使用 db.collection.find/aggregate/insert/update/delete 等 mongosh 语法');
+      return;
+    }
+    if (kind === 'session') {
+      ElMessage.warning('编辑器执行不支持 use() 切库，请在左侧选择数据库；use() 可放在 MongoDB 脚本中执行');
+      return;
+    }
+    if (kind === 'data') {
+      await runFreeDml(sql, source);
+      return;
+    }
+    if (kind === 'schema' || kind === 'manage') {
+      await runControlledDdl(sql, { forceConfirm: /\.drop(Database)?\s*\(/i.test(sql) });
+      return;
+    }
+  }
+
   // 自由 DML：只读 executeSql 会拒绝；确认后走 executeDml
   if (isFreeDmlSql(sql)) {
     await runFreeDml(sql, source);
@@ -1453,7 +1490,11 @@ async function runControlledDdl(
     };
     activeTab.value.resultTab = 'messages';
     ElMessage.success(msg);
-    refreshObjectTreeAfterDdl(sql, activeTab.value.instanceName || '');
+    if (isMongoDbType(activeConnection.value?.dbType)) {
+      objectTreeRef.value?.reload?.();
+    } else {
+      refreshObjectTreeAfterDdl(sql, activeTab.value.instanceName || '');
+    }
   } catch (e: any) {
     const clientElapsedMs = Math.round(performance.now() - t0);
     const errText = pickErrorMsg(e, '执行 DDL 失败');

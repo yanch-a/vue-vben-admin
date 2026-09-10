@@ -15,6 +15,7 @@
 /** 方言族：决定 quote / LIMIT / 布尔字面量等核心语法 */
 export type SqlDialectFamily =
   | 'H2_LIKE'
+  | 'MONGODB_LIKE'
   | 'MYSQL_LIKE'
   | 'ORACLE_LIKE'
   | 'POSTGRES_LIKE'
@@ -91,6 +92,15 @@ const EMBEDDED_OBJECTS: DbObjectCapabilities = {
   triggers: true,
   events: false,
   manageInstance: false,
+};
+
+const MONGODB_OBJECTS: DbObjectCapabilities = {
+  views: true,
+  procedures: false,
+  functions: false,
+  triggers: false,
+  events: false,
+  manageInstance: true,
 };
 
 const MYSQL_PARAMS =
@@ -229,6 +239,18 @@ export const DB_TYPE_REGISTRY: Record<string, DbTypeDescriptor> = {
     capabilities: { ...EMBEDDED_OBJECTS, functions: true, manageInstance: true },
     fileExample: 'D:/data/h2/app',
   },
+  MONGODB: {
+    code: 'MONGODB',
+    label: 'MongoDB',
+    family: 'MONGODB_LIKE',
+    connectionForm: 'SERVER',
+    instanceKind: 'DATABASE',
+    defaultPort: 27017,
+    urlTemplate: 'mongodb://{host}:{port}/{database}',
+    maintenanceDatabase: 'admin',
+    credentialRequired: false,
+    capabilities: MONGODB_OBJECTS,
+  },
 };
 
 const FALLBACK = DB_TYPE_REGISTRY.MY_SQL as DbTypeDescriptor;
@@ -257,6 +279,7 @@ export function normalizeDbTypeCode(dbType?: null | string): string {
   }
   if (raw.includes('POLAR')) return 'POLARDB_MYSQL';
   if (raw.includes('SQLITE')) return 'SQLITE';
+  if (raw.includes('MONGO')) return 'MONGODB';
   return raw;
 }
 

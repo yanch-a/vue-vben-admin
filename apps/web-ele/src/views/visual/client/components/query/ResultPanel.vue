@@ -36,6 +36,13 @@ import {
   parseQueryTables,
 } from '../../utils/resultRowSql';
 import {
+  buildMongoDeleteCommand,
+  buildMongoInsertCommand,
+  buildMongoUpdateCommand,
+  isMongoDbType,
+  isMongoEditableQuery,
+} from '../../utils/mongoCommand';
+import {
   buildJoinCopyUpdateSqls,
   buildJoinUpdateSqls,
 } from '../../utils/resultJoinUpdate';
@@ -140,6 +147,7 @@ const displayRows = computed(() =>
   editMode.value ? editRows.value : tableRows.value,
 );
 const dbType = computed(() => props.dbType || 'MY_SQL');
+const isMongo = computed(() => isMongoDbType(dbType.value));
 
 function matchResultColumn(name: string, cols: string[]): string | undefined {
   if (cols.includes(name)) return name;
@@ -160,6 +168,9 @@ const whereCols = computed(() =>
 );
 
 const isJoinQuery = computed(() => {
+  if (isMongo.value) {
+    return !isMongoEditableQuery(props.result?.sourceSql || '');
+  }
   if ((props.tableMetas?.length || 0) > 1) return true;
   const sql = props.result?.sourceSql || '';
   return parseQueryTables(sql).length > 1;
@@ -353,6 +364,21 @@ function joinUpdateContext() {
 }
 
 function buildEditsSqls(item: DirtyRowEdit): string[] {
+  if (isMongo.value) {
+    if (!isMongoEditableQuery(props.result?.sourceSql || '')) {
+      throw new Error('MongoDB 聚合/命令结果不支持直接编辑，请对单集合执行 find/findOne');
+    }
+    const table = requireTable();
+    return [
+      buildMongoUpdateCommand(
+        table,
+        item.original as Record<string, any>,
+        item.edited as Record<string, any>,
+        item.changedColumns,
+        whereCols.value,
+      ),
+    ];
+  }
   if (isJoinQuery.value) {
     if ((props.tableMetas?.length || 0) < 2) {
       throw new Error('正在读取联表信息，请稍后再保存');
@@ -462,6 +488,11 @@ function onCopyInsert() {
   }
   try {
     const ref = requireTable();
+    if (isMongo.value) {
+      const command = buildMongoInsertCommand(ref, selectedRow.value, columns.value);
+      copyText(command, '已复制 MongoDB insertOne 命令');
+      return;
+    }
     const sql = buildInsertSql(ref, selectedRow.value, columns.value, dbType.value);
     copyText(sql, '已复制 INSERT 语句');
   } catch (e: any) {
@@ -473,6 +504,18 @@ function onCopyUpdate() {
   closeCtxMenu();
   if (!selectedRow.value) return;
   try {
+    if (isMongo.value) {
+      const ref = requireTable();
+      const command = buildMongoUpdateCommand(
+        ref,
+        selectedRow.value,
+        selectedRow.value,
+        columns.value,
+        whereCols.value,
+      );
+      copyText(command, '已复制 MongoDB updateOne 命令');
+      return;
+    }
     if (isJoinQuery.value) {
       const ctx = joinUpdateContext();
       const sqls = buildJoinCopyUpdateSqls(
@@ -533,7 +576,17 @@ function onEditField(col: string, v: string) {
     editForm.value[col] = null;
     return;
   }
-  editForm.value[col] = v;
+  if (isMongo.value && original && typeof original === 'object') {
+    try {
+      editForm.value[col] = JSON.parse(v);
+      return;
+    } catch {
+      // 保留文本，让后端拒绝非法 JSON，而不是静默丢失用户输入。
+    }
+  }
+  editForm.value[col] = isMongo.value
+    ? coerceSheetValue(original, v)
+    : v;
 }
 
 async function onDelete() {
@@ -563,6 +616,16 @@ async function onDelete() {
   }
   try {
     const ref = requireTable();
+    if (isMongo.value) {
+      const command = buildMongoDeleteCommand(
+        ref,
+        selectedRow.value,
+        columns.value,
+        whereCols.value,
+      );
+      emit('run-dml', command);
+      return;
+    }
     const sql = buildDeleteSql(
       ref,
       selectedRow.value,
@@ -646,6 +709,25 @@ function displayCell(value: unknown): string {
   if (value === null || value === undefined) {
     return editMode.value ? 'NULL' : '';
   }
+  if (isMongo.value && typeof value === 'object') {
+    try {
+      return JSON.stringify(value);
+    } catch {
+      return String(value);
+    }
+  }
+  return String(value);
+}
+
+function editFieldText(value: unknown): string {
+  if (value === null || value === undefined) return '';
+  if (isMongo.value && typeof value === 'object') {
+    try {
+      return JSON.stringify(value, null, 2);
+    } catch {
+      return String(value);
+    }
+  }
   return String(value);
 }
 
@@ -659,7 +741,10 @@ async function startEditCell(rowIndex: number, col: string) {
   const row = editRows.value[rowIndex];
   if (!row) return;
   editingCell.value = { row: rowIndex, col };
-  editDraft.value = toSheetText(row[col]);
+  editDraft.value =
+    isMongo.value && row[col] && typeof row[col] === 'object'
+      ? JSON.stringify(row[col])
+      : toSheetText(row[col]);
   await nextTick();
   cellInputRef.value?.focus();
   cellInputRef.value?.select();
@@ -1130,7 +1215,7 @@ watch(
             :model-value="
               editForm[col] === null || editForm[col] === undefined
                 ? ''
-                : String(editForm[col])
+                : editFieldText(editForm[col])
             "
             type="textarea"
             :autosize="{ minRows: 1, maxRows: 4 }"

@@ -166,6 +166,7 @@ const FAMILY_GROUP_LABEL: Record<string, string> = {
   SQLSERVER_LIKE: 'SQL Server',
   SQLITE_LIKE: '嵌入式 - SQLite',
   H2_LIKE: '嵌入式 - H2',
+  MONGODB_LIKE: 'MongoDB',
 };
 
 const dbTypeGroups = computed(() => {
