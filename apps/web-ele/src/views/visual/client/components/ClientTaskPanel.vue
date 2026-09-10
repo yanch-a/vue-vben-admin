@@ -151,7 +151,9 @@ async function onCancel(t: ClientTask) {
         </div>
         <div v-if="t.errors.length" class="errs">
           <div v-for="(e, i) in t.errors.slice(0, 3)" :key="i">{{ e }}</div>
-          <div v-if="t.errors.length > 3">还有 {{ t.errors.length - 3 }} 条</div>
+          <div v-if="(t.errorTotal || t.errors.length) > 3">
+            还有 {{ (t.errorTotal || t.errors.length) - 3 }} 条
+          </div>
         </div>
         <div v-if="canCancel(t)" class="actions">
           <ElButton size="small" type="danger" plain @click="onCancel(t)">取消</ElButton>

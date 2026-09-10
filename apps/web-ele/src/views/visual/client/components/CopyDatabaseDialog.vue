@@ -76,6 +76,9 @@ const form = reactive({
   dropIfExists: true,
   bulkInsert: true,
   ignoreDefiner: false,
+  /** 默认全表；勾选后才按 maxRows 截断 */
+  limitRows: false,
+  maxRows: visualClientConfig.exportMaxRows,
 });
 
 async function loadTables() {
@@ -151,11 +154,13 @@ async function loadTargetInstances() {
     targetInstances.value = (instances || [])
       .map((i: any) => i.instanceName || i.name)
       .filter(Boolean);
+    // 安全：不自动选中第一个库（常为业务库且配合 dropIfExists 极易误伤）
+    // 仅当当前值仍在列表中时保留，否则清空，强制用户显式选择
     if (
-      !form.targetInstance ||
+      form.targetInstance &&
       !targetInstances.value.includes(form.targetInstance)
     ) {
-      form.targetInstance = targetInstances.value[0] || '';
+      form.targetInstance = '';
     }
   } catch {
     targetInstances.value = [];
@@ -173,6 +178,9 @@ watch(
     form.dropIfExists = true;
     form.bulkInsert = true;
     form.ignoreDefiner = false;
+    form.limitRows = false;
+    form.maxRows = visualClientConfig.exportMaxRows;
+    form.targetInstance = '';
     await Promise.all([loadTables(), loadTargetConfigs()]);
     await loadTargetInstances();
   },
@@ -181,6 +189,9 @@ watch(
 watch(
   () => form.targetDbConfigId,
   () => {
+    // 切换目标连接时立即清空库名，避免残留上一连接的同名库（如 jeepaydb）
+    form.targetInstance = '';
+    targetInstances.value = [];
     loadTargetInstances();
   },
 );
@@ -202,6 +213,13 @@ async function onCopy() {
     ElMessage.warning('请选择目标数据库');
     return;
   }
+  if (
+    String(props.sourceConnection?.id) === String(form.targetDbConfigId) &&
+    props.sourceInstance === form.targetInstance
+  ) {
+    ElMessage.warning('目标库不能与源库相同');
+    return;
+  }
   if (!checkedTables.value.length) {
     ElMessage.warning('请至少选择一张表');
     return;
@@ -218,8 +236,8 @@ async function onCopy() {
       dropIfExists: form.dropIfExists,
       bulkInsert: form.bulkInsert,
       ignoreDefiner: form.ignoreDefiner,
-      maxRows: visualClientConfig.exportMaxRows,
-      batchSize: 200,
+      maxRows: form.limitRows ? form.maxRows : 0,
+      batchSize: form.bulkInsert ? 200 : 50,
       continueOnError: true,
     });
     const task = (res?.data || res) as DbCopyTaskVO;
@@ -363,14 +381,20 @@ async function onCopy() {
 
         <div class="opts">
           <ElCheckbox v-model="form.dropIfExists">如果目标中存在则删除</ElCheckbox>
-          <ElCheckbox v-model="form.bulkInsert">使用大容量插入</ElCheckbox>
+          <ElCheckbox v-model="form.bulkInsert">使用大容量插入（多值 INSERT）</ElCheckbox>
           <ElCheckbox v-if="showIgnoreDefiner" v-model="form.ignoreDefiner">
             忽略 DEFINER
           </ElCheckbox>
+          <ElCheckbox v-model="form.limitRows">限制每表导出行数</ElCheckbox>
+          <div v-if="form.limitRows" class="max-rows">
+            <span class="label">上限</span>
+            <ElInputNumber v-model="form.maxRows" :min="1" :max="10000000" :step="10000" />
+          </div>
         </div>
 
         <div class="hint">
-          单表数据上限 {{ visualClientConfig.exportMaxRows }} 行；异库类型将按统一类型标准映射建表。
+          默认复制全表数据。勾选「限制每表导出行数」时，超出部分会截断并把任务标为部分成功。
+          异库类型按统一标准映射建表（含主键、唯一/普通索引、自增、安全默认值）。
         </div>
       </div>
     </div>
@@ -474,5 +498,11 @@ async function onCopy() {
   font-size: var(--vc-ui-font-size-sm, 12px);
   color: var(--el-text-color-secondary);
   line-height: 1.5;
+}
+.max-rows {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-left: 22px;
 }
 </style>

@@ -37,6 +37,8 @@ export interface ClientTask {
   createTime: number;
   updateTime?: number;
   errors: string[];
+  /** 后端错误总数（列表可能截断 errors） */
+  errorTotal?: number;
 }
 
 const CACHE_KEY = 'vc:client-running-tasks';
@@ -116,6 +118,7 @@ function fromCopy(raw: DbCopyTaskVO): ClientTask {
     errors: (raw.errors || []).map((e) =>
       [e.objectName, e.phase ? `[${e.phase}]` : '', e.message].filter(Boolean).join(' '),
     ),
+    errorTotal: raw.errorTotal || (raw.errors || []).length,
   };
 }
 
@@ -195,6 +198,8 @@ export function useClientTasks() {
   }
 
   async function refreshAll() {
+    // 上一轮没结束就跳过，避免 setInterval 叠请求；超时 abort 会打爆后端 ClientAbortException
+    if (refreshing.value) return;
     refreshing.value = true;
     try {
       await doRefreshAll();
@@ -282,11 +287,12 @@ export function useClientTasks() {
     }
     polling.value = true;
     timerMs = ms;
-    timer = setInterval(async () => {
-      await refreshAll();
-      if (!hasRunning.value) {
-        stopPolling();
-      }
+    timer = setInterval(() => {
+      void refreshAll().then(() => {
+        if (!hasRunning.value) {
+          stopPolling();
+        }
+      });
     }, ms);
   }
 

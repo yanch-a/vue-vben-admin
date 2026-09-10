@@ -18,7 +18,7 @@ import {
 } from 'vue';
 import { useRouter } from 'vue-router';
 
-import { executeDdl, executeDml, executeSql, cancelSql, exportSqlExcel, exportSqlInsert, getInstances, getObjectScript, getTableColumns, getTableDDL, getTableInfo, getTables } from '#/api/visual/database';
+import { executeDdl, executeDml, executeSql, cancelSql, exportSqlExcel, exportSqlInsert, exportTableSchemaExcel, getInstances, getObjectScript, getTableColumns, getTableDDL, getTableInfo, getTables } from '#/api/visual/database';
 import { feedbackSchemaDoc } from '#/api/ai/agent';
 import {
   addSavedQuery,
@@ -83,9 +83,16 @@ import {
 } from './utils/sqlWriteGuard';
 import {
   metadataTableName,
-  parseTableFromSql,
+  parseQueryTables,
   type TableRef,
 } from './utils/resultRowSql';
+import type { ResultTableMeta } from './utils/resultJoinUpdate';
+import {
+  mergePrimaryKeys,
+  primaryKeysFromColumns,
+  primaryKeysFromDdl,
+  primaryKeysFromIndexes,
+} from './utils/resultPrimaryKeys';
 import {
   clearColumnCache,
   getCachedColumns,
@@ -287,34 +294,124 @@ function onSelectInstance(instanceName: string) {
 }
 
 /** 结果集对应表：仅用「已执行 SQL」解析，避免编辑时反复触发副作用 */
-const resultTableRef = computed<TableRef | null>(() => {
+const resultQueryTables = computed(() => {
   const sql = activeTab.value?.result?.sourceSql || '';
-  return sql ? parseTableFromSql(sql) : null;
+  return sql ? parseQueryTables(sql) : [];
+});
+
+const resultTableRef = computed<TableRef | null>(() => {
+  const t = resultQueryTables.value[0];
+  return t ? { schema: t.schema, table: t.table } : null;
 });
 
 /** 结果表主键：查询完成后按当前实例拉元数据，不用 SQL 里的 schema 冒充库名 */
 const resultPrimaryKeys = ref<string[]>([]);
 const resultPrimaryKeysReady = ref(false);
+const resultTableMetas = ref<ResultTableMeta[]>([]);
+
+/**
+ * 拉一张表的列名 + 主键。不走空主键的补全缓存。
+ */
+async function fetchTableMeta(
+  instanceName: string,
+  tableName: string,
+): Promise<{ columns: string[]; primaryKeys: string[] }> {
+  const conn = activeConnection.value;
+  if (!conn) return { columns: [], primaryKeys: [] };
+  let columns: string[] = [];
+  let fromCols: string[] = [];
+  try {
+    const colRes: any = await getTableColumns(conn.id, instanceName, tableName);
+    const colList = colRes?.data || colRes || [];
+    const arr = Array.isArray(colList) ? colList : [];
+    columns = arr
+      .map((c: any) => String(c?.fieldName || c?.columnName || c?.name || '').trim())
+      .filter(Boolean);
+    fromCols = primaryKeysFromColumns(arr);
+  } catch (e) {
+    console.warn('getTableColumns 读列/主键失败', e);
+  }
+  let keys = fromCols;
+  if (!keys.length) {
+    try {
+      const infoRes: any = await getTableInfo(conn.id, instanceName, tableName);
+      const info = infoRes?.data || infoRes || {};
+      if (!columns.length && Array.isArray(info.columns)) {
+        columns = info.columns
+          .map((c: any) => String(c?.fieldName || c?.columnName || c?.name || '').trim())
+          .filter(Boolean);
+      }
+      keys = mergePrimaryKeys(
+        fromCols,
+        primaryKeysFromColumns(info.columns || []),
+        primaryKeysFromIndexes(info.indexes || []),
+        primaryKeysFromDdl(info.ddl || ''),
+      );
+    } catch (e) {
+      console.warn('getTableInfo 读主键失败', e);
+    }
+  }
+  if (columns.length || keys.length) {
+    const cached = getCachedColumns(conn.id, instanceName, tableName);
+    setCachedColumns(
+      conn.id,
+      instanceName,
+      tableName,
+      columns.length ? columns : cached?.columns || [],
+      keys,
+    );
+  }
+  return { columns, primaryKeys: keys };
+}
 
 async function refreshResultPrimaryKeys() {
-  resultPrimaryKeysReady.value = false;
-  resultPrimaryKeys.value = [];
-  const tableRef = resultTableRef.value;
+  const tables = resultQueryTables.value;
   const conn = activeConnection.value;
   const inst = activeTab.value?.instanceName || conn?.schemaName || '';
-  if (!tableRef?.table || !conn || !inst) {
+  if (!tables.length || !conn || !inst) {
+    resultTableMetas.value = [];
+    resultPrimaryKeys.value = [];
     resultPrimaryKeysReady.value = true;
     return;
   }
+  resultPrimaryKeysReady.value = false;
   try {
-    const metaName = metadataTableName(tableRef, conn.dbType);
-    const { primaryKeys } = await loadEditorColumns(inst, metaName);
-    resultPrimaryKeys.value = primaryKeys || [];
-  } catch {
+    const metas: ResultTableMeta[] = await Promise.all(
+      tables.map(async (t) => {
+        const metaName = metadataTableName(t, conn.dbType);
+        try {
+          const { columns, primaryKeys } = await fetchTableMeta(inst, metaName);
+          return {
+            ref: { schema: t.schema, table: t.table },
+            alias: t.alias,
+            columns,
+            primaryKeys,
+          };
+        } catch (e) {
+          console.warn('读取联表元数据失败', t.table, e);
+          return {
+            ref: { schema: t.schema, table: t.table },
+            alias: t.alias,
+            columns: [] as string[],
+            primaryKeys: [] as string[],
+          };
+        }
+      }),
+    );
+    resultTableMetas.value = metas;
+    resultPrimaryKeys.value = metas[0]?.primaryKeys || [];
+  } catch (e) {
+    console.warn('读取表主键失败', e);
+    resultTableMetas.value = [];
     resultPrimaryKeys.value = [];
   } finally {
     resultPrimaryKeysReady.value = true;
   }
+}
+
+async function ensureResultPrimaryKeys(): Promise<string[]> {
+  await refreshResultPrimaryKeys();
+  return resultPrimaryKeys.value;
 }
 
 watch(
@@ -863,6 +960,49 @@ async function onTreeContextAction(payload: {
         }
       }
       return;
+    case 'truncateTable':
+      if (!activeConnection.value) {
+        ElMessage.warning('请先打开数据库连接');
+        return;
+      }
+      try {
+        const ident = resolveTableIdent(activeConnection.value.dbType, {
+          instanceName,
+          schemaName: node.schemaName,
+          tableName,
+        });
+        const truncateSql = activeDialect.value.truncateTableSql(
+          ident.schema,
+          ident.table,
+        );
+        const viaDml = !!activeDialect.value.truncateViaDml;
+        const how = viaDml
+          ? '当前库不支持 TRUNCATE，将执行 DELETE FROM 清空全部行。'
+          : '将执行 TRUNCATE TABLE，表结构保留。若存在外键引用可能失败。';
+        await ElMessageBox.confirm(
+          `确认清空表 ${instanceName}.${tableName}？数据不可恢复。${how}`,
+          '清空表',
+          { type: 'warning', confirmButtonText: '清空', cancelButtonText: '取消' },
+        );
+        const res: any = viaDml
+          ? await executeDml({
+              dbConfigId: activeConnection.value.id,
+              instanceName,
+              sql: truncateSql,
+            })
+          : await executeDdl({
+              dbConfigId: activeConnection.value.id,
+              instanceName,
+              sql: truncateSql,
+            });
+        const data = res?.data || res;
+        ElMessage.success(data?.message || '表已清空');
+      } catch (e: any) {
+        if (e !== 'cancel' && e !== 'close') {
+          ElMessage.error(e?.msg || e?.message || '清空表失败');
+        }
+      }
+      return;
     case 'alterTable':
       await openProgramObjectScript(
         { ...node, nodeType: 'table', objectKind: 'table', name: tableName },
@@ -890,6 +1030,9 @@ async function onTreeContextAction(payload: {
     }
     case 'exportTableExcel':
       await exportTableAsExcel(instanceName, tableName, node.schemaName);
+      return;
+    case 'exportTableSchemaExcel':
+      await exportInstanceSchemaExcel(instanceName);
       return;
     case 'exportTableSql':
       sqlDump.instanceName = instanceName;
@@ -1167,6 +1310,7 @@ async function runSql(opts?: { sql?: string; source?: string }) {
     // markRaw：避免对成百上千行做深层响应式代理，减轻结果表卡顿
     activeTab.value.result = {
       columns: data.columns || [],
+      columnTables: data.columnTables || [],
       rows: markRaw(data.rows || []),
       rowCount: data.rowCount || 0,
       elapsedMs: data.elapsedMs,
@@ -1559,6 +1703,30 @@ async function exportTableAsExcel(
   );
 }
 
+/**
+ * 实例右键：导出该库/模式下全部表结构（列名、注释、类型、最大长度）
+ * @author yanch
+ */
+async function exportInstanceSchemaExcel(instanceName: string) {
+  if (!activeConnection.value) {
+    ElMessage.warning('请先打开数据库连接');
+    return;
+  }
+  if (!instanceName) {
+    ElMessage.warning(`请先选择${instanceLabel.value}`);
+    return;
+  }
+  await downloadFileBlob(
+    () =>
+      exportTableSchemaExcel({
+        dbConfigId: activeConnection.value!.id,
+        instanceName,
+      }),
+    `${instanceName}_表结构.xlsx`.replace(/[\\/:*?"<>|]/g, '_'),
+    '表结构已导出',
+  );
+}
+
 /** 按库方言拼 SELECT *（给导出用） */
 function buildSelectAllSql(
   dbType: string,
@@ -1636,16 +1804,12 @@ async function loadEditorColumns(instanceName: string, tableName: string) {
   const conn = activeConnection.value;
   if (!conn) return { columns: [] as string[], primaryKeys: [] as string[] };
   const cached = getCachedColumns(conn.id, instanceName, tableName);
-  if (cached) return cached;
+  if (cached?.primaryKeys?.length) return cached;
   const res: any = await getTableColumns(conn.id, instanceName, tableName);
   const list = res?.data || res || [];
-  const columns = (Array.isArray(list) ? list : [])
-    .map((c: any) => c.fieldName)
-    .filter(Boolean);
-  const primaryKeys = (Array.isArray(list) ? list : [])
-    .filter((c: any) => c.isPrimary === 1 || c.isPrimary === true)
-    .map((c: any) => c.fieldName)
-    .filter(Boolean);
+  const arr = Array.isArray(list) ? list : [];
+  const columns = arr.map((c: any) => c.fieldName).filter(Boolean);
+  const primaryKeys = primaryKeysFromColumns(arr);
   setCachedColumns(conn.id, instanceName, tableName, columns, primaryKeys);
   return { columns, primaryKeys };
 }
@@ -1769,6 +1933,35 @@ async function confirmSaveQuery() {
 }
 
 /**
+ * 表格编辑按行 UPDATE：只执行、不刷新，失败时由结果区保住未保存脏行。
+ */
+async function executeRowDml(sql: string) {
+  if (!activeConnection.value || !activeTab.value) {
+    throw new Error('无可用连接');
+  }
+  const res: any = await executeDml({
+    dbConfigId: activeConnection.value.id,
+    instanceName:
+      activeTab.value.instanceName || activeConnection.value.schemaName,
+    sql,
+  });
+  return res?.data || res;
+}
+
+/** 表格编辑全部保存成功后，按原 SELECT 重查 */
+async function onRefreshResult() {
+  if (!activeTab.value) return;
+  const sourceSql = activeTab.value.result?.sourceSql?.trim();
+  if (!sourceSql) return;
+  activeTab.value.executing = true;
+  try {
+    await refreshQueryResult(sourceSql);
+  } finally {
+    activeTab.value.executing = false;
+  }
+}
+
+/**
  * 结果行右键：修改 / 删除 触发的 DML
  * 成功后自动重新执行原查询以刷新结果。
  */
@@ -1824,6 +2017,7 @@ async function refreshQueryResult(sql: string) {
     const data = res?.data || res;
     activeTab.value.result = {
       columns: data.columns || [],
+      columnTables: data.columnTables || [],
       rows: markRaw(data.rows || []),
       rowCount: data.rowCount || 0,
       elapsedMs: data.elapsedMs,
@@ -2430,12 +2624,16 @@ onBeforeUnmount(() => {
               :executing="activeTab.executing"
               :exporting="exporting"
               :table-ref="resultTableRef"
+              :table-metas="resultTableMetas"
               :db-type="activeConnection?.dbType"
               :primary-keys="resultPrimaryKeys"
               :primary-keys-ready="resultPrimaryKeysReady"
+              :ensure-primary-keys="ensureResultPrimaryKeys"
               @update:visible="(v) => (activeTab!.resultVisible = v)"
               @update:active-tab="(v) => (activeTab!.resultTab = v)"
+              :execute-row-dml="executeRowDml"
               @run-dml="onRunDml"
+              @refresh-result="onRefreshResult"
               @export-excel="onExportExcel"
               @export-sql="onExportSqlInsert"
               @ask-ai-fix="onAskAiFix"

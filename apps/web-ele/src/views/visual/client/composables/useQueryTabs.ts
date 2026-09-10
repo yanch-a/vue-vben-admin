@@ -12,6 +12,8 @@ import { notifyClientSessionChange } from './clientSessionNotify';
 
 export interface QueryResultState {
   columns: string[];
+  /** 与 columns 等长：JDBC 表名，联表编辑用来把列归属到表 */
+  columnTables?: string[];
   rows: Record<string, any>[];
   rowCount: number;
   /** 服务端 SQL 执行耗时（ms） */

@@ -47,8 +47,13 @@ export interface DbCopyTaskVO {
   createTime?: number;
   updateTime?: number;
   message?: string;
+  copiedRows?: number;
+  currentTableRows?: number;
+  truncated?: boolean;
   cancelRequested?: boolean;
   errors?: DbCopyErrorVO[];
+  /** 错误总数；列表接口可能只带最近若干条 errors */
+  errorTotal?: number;
   progressPercent?: number;
 }
 
@@ -66,6 +71,8 @@ export function listDbCopyTasks() {
   return request({
     url: dbCopyUrl + 'tasks',
     method: 'get',
+    // 复制进行中列表可能较大，避免默认 10s 超时把连接掐断
+    timeout: 30_000,
   });
 }
 
@@ -74,6 +81,7 @@ export function getDbCopyTask(taskId: string) {
   return request({
     url: dbCopyUrl + 'task/' + encodeURIComponent(taskId),
     method: 'get',
+    timeout: 30_000,
   });
 }
 

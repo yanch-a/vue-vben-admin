@@ -101,16 +101,23 @@ const errors = computed(() => props.task?.errors || []);
             ? 'exception'
             : task.status === 'SUCCESS'
               ? 'success'
-              : undefined
+              : task.status === 'PARTIAL'
+                ? 'warning'
+                : undefined
         "
       />
 
       <div class="detail">
-        <div>进度：{{ task.processedObjects }} / {{ task.totalObjects }}</div>
-        <div v-if="task.currentObject">当前：{{ task.currentObject }}</div>
-        <div>
-          成功 {{ task.successCount || 0 }}，失败 {{ task.failedCount || 0 }}
+        <div>表进度：{{ task.processedObjects }} / {{ task.totalObjects }}</div>
+        <div v-if="task.currentObject">
+          当前：{{ task.currentObject }}
+          <span v-if="task.currentTableRows">（本表 {{ task.currentTableRows }} 行）</span>
         </div>
+        <div>
+          成功 {{ task.successCount || 0 }}，失败 {{ task.failedCount || 0 }}，已写入
+          {{ task.copiedRows || 0 }} 行
+        </div>
+        <div v-if="task.truncated" class="trunc">部分表因行数上限被截断</div>
         <div v-if="task.message" class="msg">{{ task.message }}</div>
       </div>
 
@@ -168,6 +175,9 @@ const errors = computed(() => props.task?.errors || []);
 }
 .msg {
   color: var(--el-text-color-secondary);
+}
+.trunc {
+  color: var(--el-color-warning);
 }
 .errors {
   margin-top: 14px;

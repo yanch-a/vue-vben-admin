@@ -28,11 +28,14 @@ import { listSavedQueries } from '#/api/visual/savedQuery';
 
 import { instanceLabelOf, resolveCapabilities } from '../../dialect/dbTypes';
 import { rememberInstanceTables } from '../../utils/sqlEditorAssist';
+import { useClientPreferences } from '../../composables/useClientPreferences';
 import ObjectTreeContextMenu, {
   type TreeCtxAction,
 } from './ObjectTreeContextMenu.vue';
 
 defineOptions({ name: 'ObjectTree' });
+
+const { preferences } = useClientPreferences();
 
 const props = defineProps<{
   dbConfigId: number | string;
@@ -182,6 +185,8 @@ async function loadFolder(node: any, resolve: (data: any[]) => void) {
             ? `${t.tableName} (${t.displayName})`
             : t.tableName,
         name: t.tableName,
+        /** 表注释，隐藏备注时展示只用 name */
+        displayName: t.displayName || '',
         nodeType: 'table',
         instanceName,
         /** 真实 schema（PG=public；达梦=OWNER）；打开表 SQL 优先用此字段 */
@@ -402,6 +407,14 @@ function onCtxAction(action: TreeCtxAction) {
 function filterNode(value: string, data: any) {
   if (!value) return true;
   return (data.label || '').toLowerCase().includes(value.toLowerCase());
+}
+
+/** 勾选「隐藏表备注」后，表节点只显示物理表名 */
+function formatNodeLabel(data: any, node: any) {
+  if (data?.nodeType === 'table' && preferences.hideTableComments) {
+    return data.name || node.label;
+  }
+  return node.label;
 }
 
 /** ElTree getNode 区分大小写；H2 的 public/PUBLIC 可能与节点 id 不一致 */
@@ -638,7 +651,7 @@ defineExpose({
               !!locateKey && String(data.id) === String(locateKey),
           }"
           @dblclick.stop="onNodeDblClick(data)"
-        >{{ node.label }}</span>
+        >{{ formatNodeLabel(data, node) }}</span>
       </template>
     </ElTree>
     <ObjectTreeContextMenu

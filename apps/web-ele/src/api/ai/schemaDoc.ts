@@ -62,7 +62,11 @@ export function schemaDocTask(taskId: string) {
 
 /** 当前用户结构文档任务（进行中 + 缓存里近 7 天已完成） */
 export function schemaDocTaskList() {
-  return request({ url: url + 'task/list', method: 'get' });
+  return request({
+    url: url + 'task/list',
+    method: 'get',
+    timeout: 30_000,
+  });
 }
 
 export function cancelSchemaDocTask(taskId: string) {

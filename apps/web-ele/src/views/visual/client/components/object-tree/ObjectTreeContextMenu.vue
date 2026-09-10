@@ -13,10 +13,12 @@ export type TreeCtxAction =
   | 'dropDatabase'
   | 'importData'
   | 'runSqlScript'
+  | 'exportTableSchemaExcel'
   | 'createTable'
   | 'copyDbToHost'
   | 'openTable'
   | 'viewTableInfo'
+  | 'truncateTable'
   | 'dropTable'
   | 'alterTable'
   | 'copyDdl'
@@ -123,6 +125,9 @@ function onAction(action: TreeCtxAction) {
           将{{ instanceLabel }}复制到不同主机
         </div>
         <div class="item" @click="onAction('runSqlScript')">执行 SQL 脚本（预览）</div>
+        <div class="item" @click="onAction('exportTableSchemaExcel')">
+          把表结构导出为 Excel
+        </div>
       </template>
       <template v-else-if="isTablesFolder()">
         <div class="item" @click="onAction('createTable')">创建表</div>
@@ -150,6 +155,7 @@ function onAction(action: TreeCtxAction) {
       <template v-else-if="isTable()">
         <div class="item" @click="onAction('openTable')">打开表 (F11)</div>
         <div class="item" @click="onAction('viewTableInfo')">查看表信息</div>
+        <div class="item danger" @click="onAction('truncateTable')">清空表</div>
         <div class="item danger" @click="onAction('dropTable')">删除表</div>
         <div class="item" @click="onAction('alterTable')">改变表</div>
         <div class="item" @click="onAction('copyDdl')">复制 DDL</div>

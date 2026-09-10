@@ -5,6 +5,8 @@
  * - SQL 编辑器字号（仅 Monaco）
  * - 界面字号（工具栏 / 对象树 / 页签 / 结果区 / 弹窗，不含框架全局字号）
  * - AI 对话字号（助手浮窗消息、输入区、SQL 卡片）
+ * - 对象树是否隐藏表备注
+ *
  * @author yanch
  */
 import { computed, reactive, watch } from 'vue';
@@ -32,6 +34,8 @@ export interface ClientPreferences {
    * 空字符串表示使用默认样式。
    */
   connectionColors: Record<string, string>;
+  /** 左侧对象树隐藏表名后的括号备注，默认不隐藏 */
+  hideTableComments: boolean;
 }
 
 const defaults: ClientPreferences = {
@@ -41,6 +45,7 @@ const defaults: ClientPreferences = {
   uiFontSize: 13,
   aiChatFontSize: 13,
   connectionColors: {},
+  hideTableComments: false,
 };
 
 const TABS_LEFT_MIN = 80;
@@ -104,6 +109,7 @@ function load(): ClientPreferences {
           : defaults.aiChatFontSize,
       ),
       connectionColors: normalizeConnectionColors(parsed?.connectionColors),
+      hideTableComments: parsed?.hideTableComments === true,
     };
   } catch {
     return { ...defaults };
@@ -158,6 +164,7 @@ watch(
           uiFontSize: state.uiFontSize,
           aiChatFontSize: state.aiChatFontSize,
           connectionColors: state.connectionColors,
+          hideTableComments: state.hideTableComments,
         }),
       );
     } catch {
@@ -220,6 +227,13 @@ export function useClientPreferences() {
     },
   });
 
+  const hideTableComments = computed({
+    get: () => state.hideTableComments,
+    set: (v: boolean) => {
+      state.hideTableComments = !!v;
+    },
+  });
+
   function setQueryTabsPlacement(v: QueryTabsPlacement) {
     queryTabsPlacement.value = v;
   }
@@ -247,6 +261,7 @@ export function useClientPreferences() {
     sqlEditorFontSize,
     uiFontSize,
     aiChatFontSize,
+    hideTableComments,
     setQueryTabsPlacement,
     getConnectionColor,
     setConnectionColor,

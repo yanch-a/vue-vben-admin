@@ -22,6 +22,7 @@ const {
   sqlEditorFontSize,
   uiFontSize,
   aiChatFontSize,
+  hideTableComments,
   SQL_FONT_MIN,
   SQL_FONT_MAX,
   UI_FONT_MIN,
@@ -119,6 +120,12 @@ const {
           <span class="font-size-unit">px</span>
         </div>
         <div class="font-size-hint">AI 助手浮窗消息、输入区、SQL 卡片与任务栏</div>
+      </ElFormItem>
+      <ElFormItem label="对象树">
+        <ElCheckbox v-model="hideTableComments">隐藏表备注</ElCheckbox>
+        <div class="font-size-hint">
+          默认显示「表名 (注释)」。勾选后左侧表列表只显示表名，不再带括号和备注
+        </div>
       </ElFormItem>
     </ElForm>
     <template #footer>

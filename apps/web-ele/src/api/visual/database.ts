@@ -94,11 +94,11 @@ export function getTableColumns(dbConfigId: any, instanceName: any, tableName: a
     url:
       databaseUrl +
       'getTableColumns/' +
-      dbConfigId +
+      encodeURIComponent(dbConfigId) +
       '/' +
-      instanceName +
+      encodeURIComponent(instanceName) +
       '/' +
-      tableName,
+      encodeURIComponent(tableName),
     method: 'get',
   })
 }
@@ -140,11 +140,11 @@ export function getTableInfo(
     url:
       databaseUrl +
       'getTableInfo/' +
-      dbConfigId +
+      encodeURIComponent(String(dbConfigId)) +
       '/' +
-      instanceName +
+      encodeURIComponent(instanceName) +
       '/' +
-      tableName,
+      encodeURIComponent(tableName),
     method: 'get',
   })
 }
@@ -221,6 +221,19 @@ export function exportSqlExcel(data: {
 }) {
   return request({
     url: databaseUrl + 'exportExcel',
+    method: 'post',
+    responseType: 'blob',
+    data,
+  })
+}
+
+/** 导出实例下全部表结构为 Excel（表名 + 列名/注释/类型/最大长度） */
+export function exportTableSchemaExcel(data: {
+  dbConfigId: number | string
+  instanceName: string
+}) {
+  return request({
+    url: databaseUrl + 'exportTableSchemaExcel',
     method: 'post',
     responseType: 'blob',
     data,
