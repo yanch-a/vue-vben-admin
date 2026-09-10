@@ -34,7 +34,6 @@ export function startSqlScript(form: FormData) {
     url: sqlScriptUrl + 'start',
     method: 'post',
     data: form,
-    headers: { 'Content-Type': 'multipart/form-data' },
     timeout: 0,
   });
 }

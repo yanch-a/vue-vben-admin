@@ -98,6 +98,9 @@ export function resolveResultColumnOwner(
   const qualified = splitQualifiedResultCol(resultCol);
   const hint = pickHint(resultCol, hints);
 
+  // JDBC 的 columnTable 只能辅助确认物理列归属，不能把表达式别名变成可写列。
+  if (hint?.writable === false) return 'unknown';
+
   const tryOwner = (
     tableKey: string | undefined,
     physical: string | undefined,
@@ -230,6 +233,8 @@ function findPkResultCol(
   for (let i = 0; i < resultCols.length; i++) {
     const col = resultCols[i]!;
     const hint = pickHint(col, hints);
+    // 表达式别名即使恰好叫 id，也不能作为真实主键定位行。
+    if (hint?.writable === false) continue;
     if (hint?.column && identEq(hint.column, pk)) {
       const idx = matchTableIndex(tables, hint.tableKey);
       if (idx === tableIndex) return col;
@@ -244,9 +249,15 @@ function findPkResultCol(
     }
   }
 
-  const bare = resultCols.filter((c) => identEq(splitQualifiedResultCol(c).column, pk)
-    && !splitQualifiedResultCol(c).tableKey);
-  const exactBare = resultCols.filter((c) => identEq(c, pk));
+  const writableResultCols = resultCols.filter((c) => {
+    const hint = pickHint(c, hints);
+    return hint?.writable !== false;
+  });
+  const bare = writableResultCols.filter(
+    (c) => identEq(splitQualifiedResultCol(c).column, pk)
+      && !splitQualifiedResultCol(c).tableKey,
+  );
+  const exactBare = writableResultCols.filter((c) => identEq(c, pk));
   const candidates = exactBare.length ? exactBare : bare;
   if (candidates.length === 1) {
     const col = candidates[0]!;

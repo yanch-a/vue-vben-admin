@@ -78,7 +78,7 @@ const NO_EVENT_OBJECTS: DbObjectCapabilities = {
   events: true,
 };
 
-/** Oracle / 达梦：一级节点是用户模式，建删由 DBA 操作，不在客户端开放 */
+/** Oracle/达梦的对象树不开放一级节点管理，Oracle 节点是服务对应的数据库，达梦节点是用户模式。 */
 const SCHEMA_OBJECTS: DbObjectCapabilities = {
   ...NO_EVENT_OBJECTS,
   manageInstance: false,
@@ -137,7 +137,8 @@ function oracleLike(code: string, label: string): DbTypeDescriptor {
     label,
     family: 'ORACLE_LIKE',
     connectionForm: 'SERVER',
-    instanceKind: 'SCHEMA',
+    // 后端 Oracle Handler 返回 V$SERVICES 的服务名；真实对象 schema 仍由表元数据提供。
+    instanceKind: 'DATABASE',
     defaultPort: 1521,
     urlTemplate: 'jdbc:oracle:thin:@//{host}:{port}/{database}',
     credentialRequired: true,

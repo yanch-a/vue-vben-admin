@@ -153,7 +153,7 @@ export interface TableIdent {
 
 /**
  * 对象树节点 → SQL 限定名用的 schema + 裸表名。
- * instance 含义：MySQL/PG/SS=库，H2/达梦=schema，Oracle=服务名（不能当 schema）。
+ * instance 含义：MySQL/PG/SS=库，H2/达梦=schema，Oracle=服务名（连接级数据库，不能当 schema）。
  */
 export function resolveTableIdent(
   dbType: string | undefined | null,

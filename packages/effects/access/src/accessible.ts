@@ -144,7 +144,8 @@ async function generateRoutes(
       return route;
     }
 
-    const nextRedirect = buildChildRedirect(route, parent, visibleChild);
+    const childRoute = visibleChild as RouteRecordRaw;
+    const nextRedirect = buildChildRedirect(route, parent, childRoute);
     if (!nextRedirect) {
       return route;
     }
@@ -214,7 +215,7 @@ function isRedirectToHiddenChild(
  */
 function buildChildRedirect(
   route: RouteRecordRaw,
-  parent: RouteRecordRaw | undefined,
+  parent: RouteRecordRaw | null | undefined,
   child: RouteRecordRaw,
 ): null | string {
   if (child.path?.startsWith('/')) {

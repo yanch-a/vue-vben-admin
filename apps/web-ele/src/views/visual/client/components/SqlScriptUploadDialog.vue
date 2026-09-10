@@ -6,6 +6,7 @@
 import { computed, reactive, ref, watch } from 'vue';
 
 import { ElMessage } from 'element-plus';
+import type { UploadRawFile } from 'element-plus';
 
 import {
   startSqlScript,
@@ -55,7 +56,7 @@ function onFileRemove() {
   form.file = null;
 }
 
-function onExceed(files: File[]) {
+function onExceed(files: UploadRawFile[]) {
   form.file = files?.[0] || null;
 }
 

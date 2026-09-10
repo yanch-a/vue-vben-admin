@@ -200,6 +200,8 @@ export interface SelectHint {
   column?: string;
   starTable?: string;
   starAll?: boolean;
+  /** 表达式、聚合、窗口函数和 CASE 等结果列不可直接回写。 */
+  writable?: boolean;
 }
 
 function splitTopComma(s: string): string[] {
@@ -269,16 +271,20 @@ function parseSelectItem(item: string): SelectHint {
     return { resultName: '*', starTable: key };
   }
   if (/[()]/.test(t) || /\bCASE\b/i.test(t)) {
-    return { resultName: trailingAlias(t) || t };
+    return { resultName: trailingAlias(t) || t, writable: false };
   }
   const q = consumeQualifiedName(t);
   if (!q) {
-    return { resultName: trailingAlias(t) || t };
+    return { resultName: trailingAlias(t) || t, writable: false };
   }
   const aliasMatch = q.rest.match(
     new RegExp(`^\\s+(?:AS\\s+)?(${IDENT})\\s*$`, 'iu'),
   );
   const aliasName = aliasMatch ? pickIdent(aliasMatch, 1) : undefined;
+  // 只允许完整的列引用或列引用加别名；剩余 token 说明这是表达式。
+  if (q.rest.trim() && !aliasName) {
+    return { resultName: trailingAlias(t) || t, writable: false };
+  }
   if (q.parts.length >= 2) {
     const column = q.parts[q.parts.length - 1]!;
     const tableKey = q.parts[q.parts.length - 2]!;
@@ -286,11 +292,13 @@ function parseSelectItem(item: string): SelectHint {
       resultName: aliasName || column,
       tableKey,
       column,
+      writable: true,
     };
   }
   return {
     resultName: aliasName || q.parts[0]!,
     column: q.parts[0],
+    writable: true,
   };
 }
 
