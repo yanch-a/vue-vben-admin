@@ -130,7 +130,7 @@ function onAction(action: TreeCtxAction) {
         <div class="item" @click="onAction('copyDbToHost')">
           将{{ instanceLabel }}复制到不同主机
         </div>
-        <div class="item" @click="onAction('runSqlScript')">执行 SQL 脚本（预览）</div>
+        <div class="item" @click="onAction('runSqlScript')">执行 SQL 脚本</div>
         <div class="item" @click="onAction('exportTableSchemaExcel')">
           把表结构导出为 Excel
         </div>

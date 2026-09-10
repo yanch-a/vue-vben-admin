@@ -1,5 +1,5 @@
 /**
- * 客户端后台任务：跨主机复制 + 结构文档（初始化/生成/分析）。
+ * 客户端后台任务：跨主机复制 + SQL 脚本 + 结构文档。
  * 进行中写入 localStorage，刷新后角标还能显示；服务端 Redis 是权威源。
  * 有进行中就轮询：面板打开 5 秒一次，收起后台 20 秒一次。
  * 刚提交的任务会立刻拉一次详情，避免等第一个 interval。
@@ -19,9 +19,20 @@ import {
   listDbCopyTasks,
   type DbCopyTaskVO,
 } from '#/api/visual/dbCopy';
+import {
+  cancelSqlScriptTask,
+  getSqlScriptTask,
+  listSqlScriptTasks,
+  type SqlScriptTaskVO,
+} from '#/api/visual/sqlScript';
 
-export type ClientTaskKind = 'COPY' | 'SCHEMA_INIT' | 'SCHEMA_GENERATE' | 'SCHEMA_ANALYZE';
-export type ClientTaskSource = 'copy' | 'schema';
+export type ClientTaskKind =
+  | 'COPY'
+  | 'SQL_SCRIPT'
+  | 'SCHEMA_INIT'
+  | 'SCHEMA_GENERATE'
+  | 'SCHEMA_ANALYZE';
+export type ClientTaskSource = 'copy' | 'schema' | 'sqlScript';
 
 export interface ClientTask {
   id: string;
@@ -122,6 +133,27 @@ function fromCopy(raw: DbCopyTaskVO): ClientTask {
   };
 }
 
+function fromSqlScript(raw: SqlScriptTaskVO): ClientTask {
+  const file = raw.fileName || 'SQL 脚本';
+  const inst = raw.instanceName || '';
+  return {
+    id: raw.taskId,
+    source: 'sqlScript',
+    kind: 'SQL_SCRIPT',
+    title: `执行 ${file}`,
+    subtitle: inst,
+    status: normalizeStatus(raw.status),
+    total: raw.total || 0,
+    done: raw.done || 0,
+    current: raw.currentSql,
+    message: raw.message,
+    createTime: raw.createTime || 0,
+    updateTime: raw.updateTime,
+    errors: Array.isArray(raw.errors) ? raw.errors.map(String) : [],
+    errorTotal: raw.errorTotal || (raw.errors || []).length,
+  };
+}
+
 function fromSchema(raw: any): ClientTask {
   const scope = [raw.dbName, raw.instanceName].filter(Boolean).join(' / ');
   return {
@@ -212,7 +244,11 @@ export function useClientTasks() {
     const wasRunningKeys = new Set(
       tasks.value.filter((t) => isActive(t.status)).map((t) => `${t.source}:${t.id}`),
     );
-    const [copyRes, schemaRes] = await Promise.allSettled([listDbCopyTasks(), schemaDocTaskList()]);
+    const [copyRes, schemaRes, scriptRes] = await Promise.allSettled([
+      listDbCopyTasks(),
+      schemaDocTaskList(),
+      listSqlScriptTasks(),
+    ]);
     const next: ClientTask[] = [];
     if (copyRes.status === 'fulfilled') {
       for (const raw of unwrapList(copyRes.value)) {
@@ -222,6 +258,11 @@ export function useClientTasks() {
     if (schemaRes.status === 'fulfilled') {
       for (const raw of unwrapList(schemaRes.value)) {
         if (raw?.taskId) next.push(fromSchema(raw));
+      }
+    }
+    if (scriptRes.status === 'fulfilled') {
+      for (const raw of unwrapList(scriptRes.value)) {
+        if (raw?.taskId) next.push(fromSqlScript(raw));
       }
     }
     // 刚提交的任务列表可能还没带上，进行中即使不在列表里也先钉住，再 refreshOne。
@@ -254,10 +295,20 @@ export function useClientTasks() {
   async function refreshOne(task: ClientTask) {
     try {
       const res: any =
-        task.source === 'copy' ? await getDbCopyTask(task.id) : await schemaDocTask(task.id);
+        task.source === 'copy'
+          ? await getDbCopyTask(task.id)
+          : task.source === 'sqlScript'
+            ? await getSqlScriptTask(task.id)
+            : await schemaDocTask(task.id);
       const raw = unwrapOne(res);
       if (!raw) return;
-      upsert(task.source === 'copy' ? fromCopy(raw) : fromSchema(raw));
+      upsert(
+        task.source === 'copy'
+          ? fromCopy(raw)
+          : task.source === 'sqlScript'
+            ? fromSqlScript(raw)
+            : fromSchema(raw),
+      );
       persistRunning();
     } catch (e: any) {
       const msg = String(e?.message || e?.msg || '');
@@ -351,6 +402,16 @@ export function useClientTasks() {
     void refreshOne(task).then(() => syncPolling());
   }
 
+  /** SQL 脚本任务启动后立刻入列表并打开面板 */
+  function trackSqlScript(raw: SqlScriptTaskVO) {
+    if (!raw?.taskId) return;
+    const task = fromSqlScript(raw);
+    upsert(task);
+    persistRunning();
+    openPanel('running');
+    void refreshOne(task).then(() => syncPolling());
+  }
+
   /** 结构文档任务只拿到 taskId 时先占位，再拉一次详情 */
   async function trackSchema(taskId: string, hint?: Partial<ClientTask>) {
     if (!taskId || taskId.includes('[object') || taskId.includes(',')) return;
@@ -387,6 +448,8 @@ export function useClientTasks() {
   async function cancel(task: ClientTask) {
     if (task.source === 'copy') {
       await cancelDbCopyTask(task.id);
+    } else if (task.source === 'sqlScript') {
+      await cancelSqlScriptTask(task.id);
     } else {
       await cancelSchemaDocTask(task.id);
     }
@@ -444,6 +507,7 @@ export function useClientTasks() {
     dispose,
     refreshAll,
     trackCopy,
+    trackSqlScript,
     trackSchema,
     cancel,
     openPanel,

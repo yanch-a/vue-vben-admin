@@ -44,6 +44,7 @@ import SqlEditor from './components/query/SqlEditor.vue';
 import SqlDumpDialog from './components/SqlDumpDialog.vue';
 import CreateDatabaseDialog from './components/CreateDatabaseDialog.vue';
 import CopyDatabaseDialog from './components/CopyDatabaseDialog.vue';
+import SqlScriptUploadDialog from './components/SqlScriptUploadDialog.vue';
 import ClientTaskPanel from './components/ClientTaskPanel.vue';
 import SystemFunctionsDialog from './components/SystemFunctionsDialog.vue';
 import TableInfoDialog from './components/TableInfoDialog.vue';
@@ -124,6 +125,7 @@ const {
   dispose: disposeTasks,
   refreshAll: refreshClientTasks,
   trackCopy,
+  trackSqlScript,
   cancel: cancelClientTask,
   togglePanel: toggleTaskPanel,
 } = useClientTasks();
@@ -231,6 +233,12 @@ const createDbDialog = reactive({
   visible: false,
   /** 执行 DDL 时连到的已有实例 */
   connectInstance: '',
+});
+
+/** 上传 SQL 文件后台执行 */
+const sqlScriptDialog = reactive({
+  visible: false,
+  instanceName: '',
 });
 
 /** 左侧对象树当前选中的表（单击 Tables 下某表，供 F11 打开） */
@@ -940,12 +948,16 @@ async function onTreeContextAction(payload: {
       }
       return;
     case 'runSqlScript':
-      promptDialog.mode = action;
-      promptDialog.title = '执行 SQL 脚本（预览）';
-      promptDialog.instanceName = instanceName;
-      promptDialog.input = '';
-      promptDialog.sqlPreview = '';
-      promptDialog.visible = true;
+      if (!activeConnection.value) {
+        ElMessage.warning('请先打开数据库连接');
+        return;
+      }
+      if (!instanceName) {
+        ElMessage.warning(`请先选择${instanceLabel.value}`);
+        return;
+      }
+      sqlScriptDialog.instanceName = instanceName;
+      sqlScriptDialog.visible = true;
       return;
     case 'createTable':
       promptDialog.mode = action;
@@ -1250,13 +1262,6 @@ async function confirmPromptDialog() {
       }
     }
     openSqlInNewTab(sql, `Create ${name}`, inst);
-  } else if (mode === 'runSqlScript') {
-    const sql = promptDialog.input.trim();
-    if (!sql) {
-      ElMessage.warning('请输入 SQL 脚本');
-      return;
-    }
-    openSqlInNewTab(sql, 'SQL Script', inst);
   }
   promptDialog.visible = false;
 }
@@ -1267,6 +1272,10 @@ function onDatabaseCreated(newInstanceName: string) {
   if (newInstanceName && activeTab.value) {
     activeTab.value.instanceName = newInstanceName;
   }
+}
+
+function onSqlScriptStarted(task: { taskId: string }) {
+  trackSqlScript(task as any);
 }
 
 /** 当前正在执行的自由 SQL（用于停止） */
@@ -2790,14 +2799,7 @@ onBeforeUnmount(() => {
       width="560px"
       destroy-on-close
     >
-      <ElInput
-        v-if="promptDialog.mode === 'runSqlScript'"
-        v-model="promptDialog.input"
-        type="textarea"
-        :rows="12"
-        placeholder="粘贴 SQL 脚本，确认后打开到查询编辑器预览"
-      />
-      <ElForm v-else label-width="100px">
+      <ElForm label-width="100px">
         <ElFormItem label="表名">
           <ElInput v-model="promptDialog.input" clearable />
         </ElFormItem>
@@ -2805,10 +2807,18 @@ onBeforeUnmount(() => {
       <template #footer>
         <ElButton @click="promptDialog.visible = false">取消</ElButton>
         <ElButton type="primary" @click="confirmPromptDialog">
-          {{ promptDialog.mode === 'runSqlScript' ? '打开到查询' : '生成 SQL' }}
+          生成 SQL
         </ElButton>
       </template>
     </ElDialog>
+
+    <SqlScriptUploadDialog
+      v-if="activeConnection"
+      v-model="sqlScriptDialog.visible"
+      :db-config-id="activeConnection.id"
+      :instance-name="sqlScriptDialog.instanceName"
+      @started="onSqlScriptStarted"
+    />
 
     <CreateDatabaseDialog
       v-if="activeConnection"
