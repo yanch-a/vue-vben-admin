@@ -56,6 +56,18 @@ const form = reactive({
   convertBlobToHex: false,
 });
 
+const dumpExtension = computed(() => {
+  if (props.dbType === 'MONGODB') return '.archive';
+  if (
+    props.dbType === 'SQL_SERVER' &&
+    form.mode === 'data' &&
+    checkedTables.value.length === 1
+  ) {
+    return '.csv';
+  }
+  return '.sql';
+});
+
 async function loadTables() {
   if (!props.dbConfigId || !props.instanceName) {
     tableNames.value = [];
@@ -82,9 +94,9 @@ function syncFileName() {
   const inst = props.instanceName || 'dump';
   const tables = checkedTables.value;
   if (tables.length === 1) {
-    fileName.value = `${inst}_${tables[0]}.sql`;
+    fileName.value = `${inst}_${tables[0]}${dumpExtension.value}`;
   } else {
-    fileName.value = `${inst}_dump.sql`;
+    fileName.value = `${inst}_dump${dumpExtension.value}`;
   }
 }
 
@@ -98,10 +110,37 @@ watch(
   },
 );
 
-watch(checkedTables, () => syncFileName(), { deep: true });
+watch(
+  [checkedTables, () => form.mode, () => props.dbType],
+  () => syncFileName(),
+  { deep: true },
+);
 
 function toggleAll(check: boolean) {
   checkedTables.value = check ? [...tableNames.value] : [];
+}
+
+async function resolveDownloadExtension(fileBlob: Blob, response: any) {
+  const engine = String(
+    response?.headers?.['x-lemon-transfer-engine'] || '',
+  ).toLowerCase();
+  if (engine === 'jdbc') {
+    if (props.dbType === 'MONGODB') return '.js';
+    if (props.dbType === 'SQL_SERVER') return '.sql';
+  }
+  if (engine === 'native') {
+    if (props.dbType === 'MONGODB') return '.archive';
+    if (props.dbType === 'SQL_SERVER') return '.csv';
+  }
+  if (props.dbType !== 'MONGODB') return dumpExtension.value;
+  // MongoDB 没有官方工具时后端会回退为 mongosh JS；用文件头避免把 JS 误命名为 archive。
+  const head = await fileBlob.slice(0, 128).text();
+  return /^\s*\/\//.test(head) ? '.js' : '.archive';
+}
+
+function withExtension(name: string, extension: string) {
+  const clean = name.replace(/[\\/:*?"<>|]/g, '_');
+  return clean.replace(/\.[a-z0-9]+$/i, '') + extension;
 }
 
 async function onExport() {
@@ -156,10 +195,14 @@ async function onExport() {
     const url = window.URL.createObjectURL(fileBlob);
     const link = document.createElement('a');
     link.href = url;
-    link.download = (fileName.value || 'dump.sql').replace(/[\\/:*?"<>|]/g, '_');
+    const extension = await resolveDownloadExtension(fileBlob, res);
+    link.download = withExtension(
+      fileName.value || `dump${extension}`,
+      extension,
+    );
     link.click();
     window.URL.revokeObjectURL(url);
-    ElMessage.success('SQL 导出成功');
+    ElMessage.success('数据导出成功');
     visible.value = false;
   } catch (e: any) {
     ElMessage.error(e?.msg || e?.message || '导出失败');

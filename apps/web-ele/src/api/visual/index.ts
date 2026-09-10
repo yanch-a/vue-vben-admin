@@ -16,4 +16,5 @@ export * from './vq';
 export * from './queryResultFile';
 export * from './savedQuery';
 export * from './dbCopy';
+export * from './databaseTool';
 export * from './vqBundle';

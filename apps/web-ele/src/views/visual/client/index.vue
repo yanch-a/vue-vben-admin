@@ -45,6 +45,8 @@ import SqlDumpDialog from './components/SqlDumpDialog.vue';
 import CreateDatabaseDialog from './components/CreateDatabaseDialog.vue';
 import CopyDatabaseDialog from './components/CopyDatabaseDialog.vue';
 import SqlScriptUploadDialog from './components/SqlScriptUploadDialog.vue';
+import NativeImportDialog from './components/NativeImportDialog.vue';
+import DatabaseToolDialog from './components/DatabaseToolDialog.vue';
 import ClientTaskPanel from './components/ClientTaskPanel.vue';
 import SystemFunctionsDialog from './components/SystemFunctionsDialog.vue';
 import TableInfoDialog from './components/TableInfoDialog.vue';
@@ -247,6 +249,13 @@ const sqlScriptDialog = reactive({
   visible: false,
   instanceName: '',
 });
+
+/** 使用服务端官方客户端导入备份 */
+const nativeImportDialog = reactive({
+  visible: false,
+  instanceName: '',
+});
+const databaseToolVisible = ref(false);
 
 /** 左侧对象树当前选中的表（单击 Tables 下某表，供 F11 打开） */
 const selectedTreeTable = ref<{
@@ -555,6 +564,10 @@ function onAddQueryTab() {
 function onOpenSystemFunctions(mode: 'export' | 'import') {
   systemFunctionsMode.value = mode;
   systemFunctionsVisible.value = true;
+}
+
+function onOpenDatabaseTools() {
+  databaseToolVisible.value = true;
 }
 
 function onOpenPreferences() {
@@ -872,7 +885,16 @@ async function onTreeContextAction(payload: {
       await refreshBrowseObjects(undefined, { silent: false });
       return;
     case 'importData':
-      ElMessage.info('功能预留，后续版本开放');
+      if (!activeConnection.value) {
+        ElMessage.warning('请先打开数据库连接');
+        return;
+      }
+      if (!instanceName) {
+        ElMessage.warning(`请先选择${instanceLabel.value}`);
+        return;
+      }
+      nativeImportDialog.instanceName = instanceName;
+      nativeImportDialog.visible = true;
       return;
     case 'copyDbToHost': {
       copyDb.instanceName = instanceName;
@@ -2492,6 +2514,7 @@ onBeforeUnmount(() => {
         @saved-queries="goSavedQueryManage"
         @progress="onOpenTaskPanel"
         @system="onOpenSystemFunctions"
+        @tools="onOpenDatabaseTools"
         @preferences="onOpenPreferences"
         @license="onOpenLicense"
         @ai="openAiAssistant()"
@@ -2857,7 +2880,17 @@ onBeforeUnmount(() => {
       v-if="activeConnection"
       v-model="sqlScriptDialog.visible"
       :db-config-id="activeConnection.id"
+      :db-type="activeConnection.dbType"
       :instance-name="sqlScriptDialog.instanceName"
+      @started="onSqlScriptStarted"
+    />
+
+    <NativeImportDialog
+      v-if="activeConnection"
+      v-model="nativeImportDialog.visible"
+      :db-config-id="activeConnection.id"
+      :db-type="activeConnection.dbType"
+      :instance-name="nativeImportDialog.instanceName"
       @started="onSqlScriptStarted"
     />
 
@@ -2874,6 +2907,7 @@ onBeforeUnmount(() => {
       :mode="systemFunctionsMode"
       @imported="onBundleImported"
     />
+    <DatabaseToolDialog v-model="databaseToolVisible" />
     <ClientPreferencesDialog
       v-model="preferencesVisible"
       v-model:query-tabs-placement="queryTabsPlacement"

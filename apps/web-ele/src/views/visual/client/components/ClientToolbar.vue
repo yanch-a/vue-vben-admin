@@ -39,6 +39,8 @@ const emit = defineEmits<{
   schemaDoc: [];
   /** 打开查询历史 */
   history: [];
+  /** 管理服务端官方数据库客户端 */
+  tools: [];
 }>();
 
 function onSystemCommand(cmd: string | number) {
@@ -83,6 +85,9 @@ function onSystemCommand(cmd: string | number) {
       查询历史
     </ElButton>
     <ElDivider direction="vertical" />
+    <ElButton size="small" @click="emit('tools')">
+      客户端工具
+    </ElButton>
     <ElDropdown trigger="click" @command="onSystemCommand">
       <ElButton size="small">
         系统功能

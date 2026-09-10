@@ -12,12 +12,14 @@ import {
   startSqlScript,
   type SqlScriptTaskVO,
 } from '#/api/visual/sqlScript';
+import { startNativeDatabaseImport } from '#/api/visual/databaseTool';
 
 defineOptions({ name: 'SqlScriptUploadDialog' });
 
 const props = defineProps<{
   modelValue: boolean;
   dbConfigId?: number | string;
+  dbType?: string;
   instanceName: string;
 }>();
 
@@ -36,6 +38,13 @@ const form = reactive({
   file: null as File | null,
   continueOnError: true,
   charset: 'UTF-8',
+  engine: 'managed' as 'managed' | 'native',
+});
+
+const isMongo = computed(() => props.dbType === 'MONGODB');
+const fileAccept = computed(() => {
+  if (form.engine === 'native') return isMongo.value ? '.js' : '.sql,.txt';
+  return '.sql,.txt,.js';
 });
 
 watch(
@@ -45,6 +54,7 @@ watch(
     form.file = null;
     form.continueOnError = true;
     form.charset = 'UTF-8';
+    form.engine = 'managed';
   },
 );
 
@@ -74,8 +84,20 @@ async function onSubmit() {
     return;
   }
   const name = form.file.name.toLowerCase();
-  if (!(name.endsWith('.sql') || name.endsWith('.txt') || name.endsWith('.js'))) {
-    ElMessage.warning('仅支持 .sql / .txt / .js 文件');
+  const allowed =
+    form.engine === 'native'
+      ? isMongo.value
+        ? name.endsWith('.js')
+        : name.endsWith('.sql') || name.endsWith('.txt')
+      : name.endsWith('.sql') || name.endsWith('.txt') || name.endsWith('.js');
+  if (!allowed) {
+    ElMessage.warning(
+      form.engine === 'native'
+        ? isMongo.value
+          ? 'MongoDB 官方客户端脚本仅支持 .js'
+          : '官方客户端脚本仅支持 .sql / .txt'
+        : '仅支持 .sql / .txt / .js 文件',
+    );
     return;
   }
 
@@ -83,18 +105,29 @@ async function onSubmit() {
   data.append('dbConfigId', String(props.dbConfigId));
   data.append('instanceName', props.instanceName);
   data.append('file', form.file);
-  data.append('continueOnError', form.continueOnError ? 'true' : 'false');
-  data.append('charset', form.charset);
-
   submitting.value = true;
+  let starter: Promise<any>;
+  if (form.engine === 'native') {
+    data.append('dropExisting', 'false');
+    starter = startNativeDatabaseImport(data);
+  } else {
+    data.append('continueOnError', form.continueOnError ? 'true' : 'false');
+    data.append('charset', form.charset);
+    starter = startSqlScript(data);
+  }
+
   try {
-    const res: any = await startSqlScript(data);
+    const res: any = await starter;
     const task = (res?.data || res) as SqlScriptTaskVO;
     if (!task?.taskId) {
       ElMessage.error('任务创建失败');
       return;
     }
-    ElMessage.success(`已提交后台执行：${form.file.name}`);
+    ElMessage.success(
+      form.engine === 'native'
+        ? `已提交官方客户端执行：${form.file.name}`
+        : `已提交后台执行：${form.file.name}`,
+    );
     visible.value = false;
     emit('started', task);
   } catch (e: any) {
@@ -121,16 +154,24 @@ async function onSubmit() {
         <ElUpload
           :auto-upload="false"
           :limit="1"
-          accept=".sql,.txt,.js"
+          :accept="fileAccept"
           :on-change="onFileChange"
           :on-remove="onFileRemove"
           :on-exceed="onExceed"
         >
           <ElButton>选择文件</ElButton>
           <template #tip>
-            <div class="tip">支持 .sql / .txt / .js，多语句会按当前数据库命令规则拆分后后台执行</div>
+            <div class="tip">
+              {{ form.engine === 'native' && isMongo ? 'MongoDB mongosh 脚本' : '支持 .sql / .txt / .js' }}
+            </div>
           </template>
         </ElUpload>
+      </ElFormItem>
+      <ElFormItem label="执行方式">
+        <ElRadioGroup v-model="form.engine" size="small">
+          <ElRadioButton label="managed">逐条校验</ElRadioButton>
+          <ElRadioButton label="native">官方客户端</ElRadioButton>
+        </ElRadioGroup>
       </ElFormItem>
       <ElFormItem label="文件编码">
         <ElSelect v-model="form.charset" class="w-full">
@@ -138,10 +179,16 @@ async function onSubmit() {
           <ElOption label="GBK" value="GBK" />
         </ElSelect>
       </ElFormItem>
-      <ElFormItem label="遇错继续">
+      <ElFormItem v-if="form.engine === 'managed'" label="遇错继续">
         <ElSwitch v-model="form.continueOnError" />
         <span class="tip inline">关闭则第一条失败即停止</span>
       </ElFormItem>
+      <ElAlert
+        v-else
+        type="info"
+        :closable="false"
+        title="官方客户端由服务端执行；脚本错误会按厂商客户端返回失败。"
+      />
     </ElForm>
     <template #footer>
       <ElButton @click="visible = false">取消</ElButton>

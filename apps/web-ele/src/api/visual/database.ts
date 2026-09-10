@@ -283,6 +283,7 @@ export function exportSqlDump(data: {
     url: databaseUrl + 'exportSqlDump',
     method: 'post',
     responseType: 'blob',
+    responseReturn: 'raw',
     data,
   })
 }

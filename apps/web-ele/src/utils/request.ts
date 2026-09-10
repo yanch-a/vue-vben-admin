@@ -10,13 +10,14 @@ export default async function request(config: {
   method?: string;
   params?: any;
   responseType?: any;
+  responseReturn?: 'body' | 'raw';
   signal?: AbortSignal;
   timeout?: number;
   url: string;
 }) {
   const method = (config.method || 'get').toLowerCase();
   const options: Record<string, any> = {
-    responseReturn: 'body',
+    responseReturn: config.responseReturn || 'body',
   };
   if (config.params) options.params = config.params;
   if (config.responseType) options.responseType = config.responseType;

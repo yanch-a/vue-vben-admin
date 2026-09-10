@@ -126,7 +126,7 @@ function onAction(action: TreeCtxAction) {
           </div>
           <div class="divider" />
         </template>
-        <div class="item muted" @click="onAction('importData')">导入数据（预留）</div>
+        <div class="item" @click="onAction('importData')">导入数据（官方客户端）</div>
         <div class="item" @click="onAction('copyDbToHost')">
           将{{ instanceLabel }}复制到不同主机
         </div>
