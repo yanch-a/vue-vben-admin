@@ -25,6 +25,7 @@ const database = ref(0);
 const mode = ref<'browser' | 'cli'>('browser');
 const databaseStats = ref<Array<{ database: number; keyCount: number }>>([]);
 const databaseStatsLoading = ref(false);
+const databaseStatsError = ref('');
 const keyPattern = ref('*');
 const keys = ref<any[]>([]);
 const loadingKeys = ref(false);
@@ -84,9 +85,38 @@ async function loadConnections(selectId?: any) {
 
 async function loadDatabaseStats() {
   if (!activeId.value) { databaseStats.value = []; return; }
+  const connectionId = activeId.value;
   databaseStatsLoading.value = true;
-  try { databaseStats.value = unbox(await getRedisDatabases(activeId.value)) || []; }
-  finally { databaseStatsLoading.value = false; }
+  databaseStatsError.value = '';
+  try {
+    const payload = unbox(await getRedisDatabases(connectionId));
+    if (!Array.isArray(payload)) throw new TypeError('Redis DB 统计返回格式不正确');
+    if (activeId.value !== connectionId) return;
+    databaseStats.value = payload
+      .map((item: any) => ({ database: Number(item.database), keyCount: Number(item.keyCount) }))
+      .filter((item) => Number.isInteger(item.database) && Number.isFinite(item.keyCount));
+  } catch (error: any) {
+    if (activeId.value === connectionId) {
+      databaseStats.value = [];
+      databaseStatsError.value = cleanCommandError(error) || '统计失败';
+    }
+    throw error;
+  } finally {
+    if (activeId.value === connectionId) databaseStatsLoading.value = false;
+  }
+}
+
+function databaseOptionLabel(item: { database: number; keyCount: number }) {
+  if (item.keyCount >= 0) return `DB ${item.database} · ${item.keyCount} keys`;
+  if (databaseStatsLoading.value) return `DB ${item.database} · 统计中`;
+  if (databaseStatsError.value) return `DB ${item.database} · 统计失败`;
+  return `DB ${item.database}`;
+}
+
+function refreshStatsOnOpen(visible: boolean) {
+  if (visible && activeId.value && !databaseStatsLoading.value) {
+    loadDatabaseStats().catch(() => undefined);
+  }
 }
 
 async function loadKeys() {
@@ -284,6 +314,7 @@ async function scrollTerminalToEnd() {
 async function runCommand(allowDangerous = false) {
   const value = command.value.trim(); if (!value || !activeId.value) return;
   const executionDatabase = database.value;
+  let refreshStats = false;
   if (!allowDangerous) {
     commandHistory.value = [value, ...commandHistory.value.filter((item) => item !== value)].slice(0, 100);
     historyIndex.value = -1;
@@ -296,7 +327,7 @@ async function runCommand(allowDangerous = false) {
     historyIndex.value = -1;
     command.value = '';
     if (Number.isInteger(result?.database) && result.database !== database.value) database.value = result.database;
-    await loadDatabaseStats();
+    refreshStats = true;
   } catch (error: any) {
     const message = cleanCommandError(error);
     if (!allowDangerous && message.includes('危险命令')) {
@@ -307,6 +338,10 @@ async function runCommand(allowDangerous = false) {
   } finally {
     commandLoading.value = false;
     await scrollTerminalToEnd();
+  }
+  // DB 数量统计是附加刷新，失败不能把已经成功的命令再记成一次失败。
+  if (refreshStats) {
+    try { await loadDatabaseStats(); } catch { /* 保留现有统计，命令结果已经成功。 */ }
   }
 }
 
@@ -322,13 +357,14 @@ function onCommandKeydown(event: KeyboardEvent) {
 
 watch(activeId, async () => {
   databaseStats.value = [];
+  databaseStatsError.value = '';
   cliLines.value = [];
   historyIndex.value = -1;
   const databaseChanged = database.value !== 0;
   database.value = 0;
   newKey();
   if (!activeId.value) { keys.value = []; return; }
-  await loadDatabaseStats();
+  await loadDatabaseStats().catch(() => undefined);
   if (!databaseChanged) await loadKeys();
 });
 watch(database, () => { newKey(); loadKeys(); });
@@ -358,13 +394,18 @@ onBeforeUnmount(() => {
         <h2>Redis 工作台</h2>
         <ElButton :icon="connectionPaneVisible ? Fold : Expand" circle :title="connectionPaneVisible ? '隐藏连接区' : '显示连接区'" @click="toggleConnectionPane" />
         <template v-if="active">
-          <ElSelect v-model="database" class="db-select" :loading="databaseStatsLoading">
+          <ElSelect v-model="database" class="db-select" :loading="databaseStatsLoading" @visible-change="refreshStatsOnOpen">
             <ElOption
               v-for="item in dbOptions"
               :key="item.database"
-              :label="item.keyCount < 0 ? `DB ${item.database}` : `DB ${item.database} · ${item.keyCount} keys`"
+              :label="databaseOptionLabel(item)"
               :value="item.database"
-            />
+            >
+              <span>DB {{ item.database }}</span>
+              <span class="db-key-count">
+                {{ item.keyCount >= 0 ? `${item.keyCount} keys` : databaseStatsLoading ? '统计中' : databaseStatsError ? '统计失败' : '待统计' }}
+              </span>
+            </ElOption>
           </ElSelect>
         </template>
         <ElSegmented v-model="mode" :options="[{ label: '键浏览器', value: 'browser' }, { label: '命令行', value: 'cli' }]" />
@@ -394,7 +435,13 @@ onBeforeUnmount(() => {
 
         <template v-if="active && mode === 'browser'">
           <section class="key-list">
-            <div class="search-row"><ElInput v-model="keyPattern" placeholder="匹配模式，如 user:*" :prefix-icon="Search" @keyup.enter="loadKeys" /><ElButton :icon="Refresh" circle title="刷新键与数量" @click="refreshConnection(active)" /><ElButton v-if="writable" :icon="Plus" circle type="primary" title="新建键" @click="newKey" /></div>
+            <div class="search-row">
+              <ElInput v-model="keyPattern" placeholder="匹配模式，如 user:*" :prefix-icon="Search" @keyup.enter="loadKeys" />
+              <div class="key-actions">
+                <ElButton :icon="Refresh" circle title="刷新键与数量" @click="refreshConnection(active)" />
+                <ElButton v-if="writable" :icon="Plus" circle type="primary" title="新建键" @click="newKey" />
+              </div>
+            </div>
             <ElScrollbar v-loading="loadingKeys"><button v-for="item in keys" :key="item.key" class="key-item" :class="{ active: item.key === selectedKey }" @click="selectKey(item)"><ElTag size="small" effect="plain">{{ item.type }}</ElTag><span>{{ item.key }}</span><small>{{ item.ttlSeconds < 0 ? '永久' : `${item.ttlSeconds}s` }}</small></button><ElEmpty v-if="!loadingKeys && !keys.length" description="没有匹配的键" :image-size="64" /></ElScrollbar>
           </section>
           <div class="resize-handle" title="拖动调整键列表宽度" @pointerdown="startResize('keys', $event)"></div>
@@ -455,6 +502,7 @@ onBeforeUnmount(() => {
 .topbar h2 { margin: 0; font-size: 17px; letter-spacing: 0; white-space: nowrap; }
 .connection-state { min-width: 0; margin-left: auto; overflow: hidden; color: var(--el-text-color-secondary); text-overflow: ellipsis; white-space: nowrap; }
 .db-select { width: 180px; }
+.db-key-count { float: right; margin-left: 18px; color: var(--el-text-color-secondary); font-size: 12px; }
 .workspace { height: calc(100% - 53px); min-height: 0; display: grid; overflow: hidden; }
 .connections,.key-list,.editor,.cli { min-width: 0; min-height: 0; overflow: hidden; }
 .connections,.key-list { display: flex; flex-direction: column; }
@@ -472,7 +520,9 @@ onBeforeUnmount(() => {
 .resize-handle { position: relative; z-index: 2; cursor: col-resize; background: var(--el-border-color-lighter); touch-action: none; }
 .resize-handle::after { position: absolute; inset: 0 1px; content: ''; }
 .resize-handle:hover::after { background: var(--el-color-primary-light-5); }
-.search-row { display: grid; grid-template-columns: minmax(80px, 1fr) 32px 32px; gap: 6px; padding: 9px; border-bottom: 1px solid var(--el-border-color); }
+.search-row { display: grid; grid-template-columns: minmax(80px, 1fr) auto; gap: 6px; padding: 9px 16px 9px 9px; border-bottom: 1px solid var(--el-border-color); }
+.key-actions { display: flex; gap: 2px; padding-right: 2px; }
+.key-actions :deep(.el-button + .el-button) { margin-left: 0; }
 .key-item { min-height: 40px; padding: 6px 10px; }
 .key-item span:nth-child(2) { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .key-item small { color: var(--el-text-color-secondary); white-space: nowrap; }

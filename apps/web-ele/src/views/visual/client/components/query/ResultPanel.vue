@@ -301,6 +301,14 @@ const messagesText = computed(() => {
 
 const policyError = computed(() => isClientPolicyError(props.result?.error || ''));
 
+/** 仅查询结果集显示行数；DDL/DML 没有列，标签保持 Result */
+const resultTabLabel = computed(() => {
+  const r = props.result;
+  if (!r?.columns?.length) return 'Result';
+  const n = r.rowCount ?? r.rows?.length ?? 0;
+  return `Result (${n})`;
+});
+
 function closeCtxMenu() {
   ctxMenu.visible = false;
 }
@@ -1001,7 +1009,7 @@ watch(
         class="tabs"
         @update:model-value="onSwitchResultTab"
       >
-        <ElTabPane label="Result" name="result" />
+        <ElTabPane :label="resultTabLabel" name="result" />
         <ElTabPane label="Messages" name="messages" />
       </ElTabs>
       <div class="header-right">
