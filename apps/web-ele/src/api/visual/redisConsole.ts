@@ -7,6 +7,8 @@ export function redisConnections() { return request({ url: url + 'connections', 
 export function saveRedisConnection(data: Record<string, any>) { return request({ url: url + 'connection', method: 'post', data }); }
 export function deleteRedisConnection(id: number | string) { return request({ url: url + 'connection/' + id, method: 'delete' }); }
 export function testRedisConnection(id: number | string) { return request({ url: url + 'connection/' + id + '/test', method: 'get', timeout: 30_000 }); }
+export function getRedisDatabases(id: number | string) { return request({ url: url + 'connection/' + id + '/databases', method: 'get', timeout: 30_000 }); }
+export function getRedisInfo(id: number | string) { return request({ url: url + 'connection/' + id + '/info', method: 'get', timeout: 30_000 }); }
 export function scanRedisKeys(id: number | string, database: number, pattern: string) {
   return request({ url: url + id + '/keys', method: 'get', params: { database, pattern, count: 500 } });
 }

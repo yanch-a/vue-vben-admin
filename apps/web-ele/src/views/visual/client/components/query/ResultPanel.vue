@@ -5,6 +5,7 @@
  * - 选中行右键：修改（弹窗）/ 删除 / 拷贝 INSERT / 拷贝 UPDATE / 复制行
  * - 表格编辑：同一张结果表点单元格改，脏行底色，保存时按原值 WHERE 逐行 UPDATE（主键可改）
  * - 联表：改哪张表就必须带上该表主键，只按主键 UPDATE，不按全列定位
+ * - 结果表用虚拟滚动（非 ElTable）：避免 1000 行 × N 列挂上万个单元格组件把页面打到 GB 级
  *
  * @author yanch
  */
@@ -57,6 +58,7 @@ import {
   rememberSkipNoPkWarn,
   shouldSkipNoPkWarn,
 } from '../../utils/resultPrimaryKeys';
+import VirtualResultTable from './VirtualResultTable.vue';
 
 defineOptions({ name: 'ResultPanel' });
 
@@ -82,6 +84,8 @@ const props = defineProps<{
    * 表格编辑按行保存，中途失败时要保住未提交的脏行。
    */
   executeRowDml?: (sql: string) => Promise<unknown>;
+  /** 同一行涉及多表时，在后端同一事务中提交。 */
+  executeRowDmlBatch?: (sqls: string[]) => Promise<unknown>;
 }>();
 
 const emit = defineEmits<{
@@ -111,9 +115,10 @@ const selectedRow = ref<Record<string, any> | null>(null);
 const selectedIndex = ref(-1);
 /** 多选行（用于「复制选定行」） */
 const selectedRows = ref<Record<string, any>[]>([]);
-const tableElRef = ref<{ getSelectionRows?: () => Record<string, any>[] } | null>(
-  null,
-);
+const tableElRef = ref<{
+  getSelectionRows?: () => Record<string, any>[];
+  clearSelection?: () => void;
+} | null>(null);
 
 const ctxMenu = reactive({
   visible: false,
@@ -136,7 +141,6 @@ const editRows = shallowRef<Record<string, any>[]>([]);
 let originalRows: Record<string, unknown>[] = [];
 const editingCell = ref<{ row: number; col: string } | null>(null);
 const editDraft = ref('');
-const cellInputRef = ref<HTMLInputElement | null>(null);
 /** 保存成功后父级会换新 result，此时不要提示「修改已丢弃」 */
 const expectResultRefresh = ref(false);
 
@@ -301,10 +305,9 @@ function closeCtxMenu() {
   ctxMenu.visible = false;
 }
 
-function onRowContextMenu(row: Record<string, any>, _col: any, event: MouseEvent) {
+function onRowContextMenu(row: Record<string, any>, event: MouseEvent) {
   event.preventDefault();
   selectedRow.value = row;
-  selectedIndex.value = props.result?.rows?.indexOf(row) ?? -1;
   const pad = 8;
   const menuW = 220;
   const menuH = 260;
@@ -317,9 +320,17 @@ function onRowContextMenu(row: Record<string, any>, _col: any, event: MouseEvent
   ctxMenu.visible = true;
 }
 
-function onCurrentChange(row: Record<string, any> | undefined) {
+function onCurrentChange(
+  row: Record<string, any> | undefined,
+  index?: number,
+) {
   selectedRow.value = row || null;
-  selectedIndex.value = row && props.result?.rows ? props.result.rows.indexOf(row) : -1;
+  selectedIndex.value =
+    index != null && index >= 0
+      ? index
+      : row && props.result?.rows
+        ? props.result.rows.indexOf(row)
+        : -1;
 }
 
 function onSelectionChange(rows: Record<string, any>[]) {
@@ -657,14 +668,12 @@ async function onSaveEdit() {
       changedColumns,
     });
     if (isJoinQuery.value) {
-      if (!props.executeRowDml) {
-        ElMessage.error('当前页未提供行更新接口，无法保存联表修改');
+      if (!props.executeRowDmlBatch) {
+        ElMessage.error('当前页未提供事务更新接口，无法安全保存联表修改');
         return;
       }
       editVisible.value = false;
-      for (const sql of sqls) {
-        await props.executeRowDml(sql);
-      }
+      await props.executeRowDmlBatch(sqls);
       expectResultRefresh.value = true;
       emit('refresh-result');
       return;
@@ -697,12 +706,6 @@ function refreshDirtySet() {
   );
   dirtyIndexSet.value = new Set(edits.map((e) => e.rowIndex));
   dirtyCount.value = edits.length;
-}
-
-function tableRowClassName({ rowIndex }: { rowIndex: number }) {
-  return editMode.value && dirtyIndexSet.value.has(rowIndex)
-    ? 'is-dirty-row'
-    : '';
 }
 
 function displayCell(value: unknown): string {
@@ -745,9 +748,6 @@ async function startEditCell(rowIndex: number, col: string) {
     isMongo.value && row[col] && typeof row[col] === 'object'
       ? JSON.stringify(row[col])
       : toSheetText(row[col]);
-  await nextTick();
-  cellInputRef.value?.focus();
-  cellInputRef.value?.select();
 }
 
 async function commitEditingCell(): Promise<void> {
@@ -885,8 +885,12 @@ async function onSaveSheet() {
   if (sheetSaving.value) return;
   await commitEditingCell();
   const runDml = props.executeRowDml;
-  if (!runDml) {
-    ElMessage.error('当前页未提供行更新接口，无法保存');
+  if (isJoinQuery.value ? !props.executeRowDmlBatch : !runDml) {
+    ElMessage.error(
+      isJoinQuery.value
+        ? '当前页未提供事务更新接口，无法安全保存联表修改'
+        : '当前页未提供行更新接口，无法保存',
+    );
     return;
   }
   if (!(await confirmRowMutation('修改'))) {
@@ -901,7 +905,7 @@ async function onSaveSheet() {
   try {
     await ElMessageBox.confirm(
       isJoinQuery.value
-        ? `将按行、按表依次提交 UPDATE（共 ${edits.length} 行）。改某表字段时必须带该表主键，WHERE 只用主键原值。中途失败则已成功的语句已写入。是否继续？`
+        ? `将按行提交 UPDATE（共 ${edits.length} 行），同一行涉及的多表修改在一个事务中完成。改某表字段时必须带该表主键，WHERE 只用主键原值。是否继续？`
         : `将按行依次提交 ${edits.length} 条 UPDATE。主键若被改过，WHERE 使用修改前的原值。中途失败则已成功的行已写入。是否继续？`,
       isJoinQuery.value
         ? '保存联表修改（按各表主键定位）'
@@ -928,8 +932,13 @@ async function onSaveSheet() {
   try {
     for (const item of edits) {
       const sqls = buildEditsSqls(item);
-      for (const sql of sqls) {
-        await runDml(sql);
+      if (isJoinQuery.value) {
+        if (!props.executeRowDmlBatch) {
+          throw new Error('当前页未提供事务更新接口，无法安全保存联表修改');
+        }
+        await props.executeRowDmlBatch(sqls);
+      } else {
+        for (const sql of sqls) await runDml!(sql);
       }
       saved.push(item.rowIndex);
       markRowsSaved([item.rowIndex]);
@@ -967,6 +976,7 @@ watch(
     selectedRow.value = null;
     selectedIndex.value = -1;
     selectedRows.value = [];
+    tableElRef.value?.clearSelection?.();
     closeCtxMenu();
     if (expectResultRefresh.value) {
       expectResultRefresh.value = false;
@@ -1077,59 +1087,26 @@ watch(
       </p>
       <template v-if="activeTab === 'result'">
         <div v-if="result?.columns?.length" class="table-fill">
-          <ElTable
+          <VirtualResultTable
             ref="tableElRef"
-            class="result-table"
-            :data="displayRows"
-            border
-            stripe
-            height="100%"
-            size="small"
-            highlight-current-row
-            table-layout="fixed"
+            :rows="displayRows"
+            :columns="columns"
             empty-text="查询成功，无数据"
-            :row-class-name="tableRowClassName"
+            :edit-mode="editMode"
+            :editing-cell="editingCell"
+            :edit-draft="editDraft"
+            :dirty-indexes="dirtyIndexSet"
+            :format-cell="displayCell"
+            :is-null-cell="isNullCell"
             @current-change="onCurrentChange"
             @selection-change="onSelectionChange"
             @row-contextmenu="onRowContextMenu"
-          >
-          <ElTableColumn type="selection" width="42" fixed />
-          <ElTableColumn
-            v-for="col in result.columns"
-            :key="col"
-            :prop="col"
-            :label="col"
-            min-width="120"
-            class-name="result-cell"
-          >
-            <template #default="{ row, $index }">
-              <input
-                v-if="
-                  editMode &&
-                  editingCell &&
-                  editingCell.row === $index &&
-                  editingCell.col === col
-                "
-                ref="cellInputRef"
-                class="cell-editor"
-                :value="editDraft"
-                @click.stop
-                @input="editDraft = ($event.target as HTMLInputElement).value"
-                @blur="onCellBlur($index, col)"
-                @keydown="onCellEditorKeydown"
-              />
-              <span
-                v-else
-                class="cell-text"
-                :class="{
-                  'is-null': isNullCell(row[col]),
-                  'is-editable': editMode,
-                }"
-                @click="editMode && startEditCell($index, col)"
-              >{{ displayCell(row[col]) }}</span>
-            </template>
-          </ElTableColumn>
-          </ElTable>
+            @cell-click="startEditCell"
+            @update:edit-draft="editDraft = $event"
+            @cell-blur="onCellBlur"
+            @cell-keydown="onCellEditorKeydown"
+            @edit-offscreen="commitEditingCell"
+          />
         </div>
         <div v-else class="empty">暂无结果</div>
       </template>
@@ -1287,10 +1264,7 @@ watch(
   flex: 1;
   flex-direction: column;
   min-height: 0;
-  overflow: auto;
-  /* Firefox：用较宽的系统滚动条，避免 thin 几乎看不见 */
-  scrollbar-width: auto;
-  scrollbar-color: var(--el-text-color-regular) var(--el-fill-color-dark);
+  overflow: hidden;
 }
 .sheet-hint {
   flex: none;
@@ -1303,130 +1277,7 @@ watch(
 .table-fill {
   flex: 1;
   min-height: 0;
-}
-.result-body :deep(.is-dirty-row > td.el-table__cell) {
-  background: color-mix(in srgb, var(--el-color-warning) 28%, transparent) !important;
-}
-.cell-text {
-  display: block;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.cell-text.is-null {
-  font-style: italic;
-  color: var(--el-text-color-secondary);
-}
-.cell-text.is-editable {
-  cursor: text;
-  min-height: 18px;
-}
-/* 编辑中：输入框铺满格子，1px 边框叠在表格格子线上 */
-.result-body :deep(td.result-cell:has(.cell-editor)) {
-  position: relative;
-  z-index: 3;
-  overflow: visible !important;
-}
-.result-body :deep(td.result-cell:has(.cell-editor) .cell) {
-  padding: 0;
-  overflow: visible;
-}
-.cell-editor {
-  position: absolute;
-  inset: -1px;
-  box-sizing: border-box;
-  width: auto;
-  height: auto;
-  margin: 0;
-  padding: 4px 8px;
-  font: inherit;
-  line-height: inherit;
-  color: var(--el-text-color-primary);
-  background: var(--el-bg-color);
-  border: 1px solid var(--el-color-primary);
-  border-radius: 0;
-  outline: none;
-}
-/* 用 CSS 截断替代 show-overflow-tooltip，避免每格挂载 Tooltip 导致卡顿 */
-.result-body :deep(.result-cell .cell) {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-/*
- * 结果表横向滚动条：Element Plus 默认 6px、悬停才显示，叠在最后一行上很难发现。
- * 这里改为始终可见、加粗、带轨道，并给内容底部留空，避免挡住最后一行。
- */
-.result-body :deep(.result-table) {
-  --el-scrollbar-opacity: 1;
-  --el-scrollbar-hover-opacity: 1;
-  --el-scrollbar-bg-color: var(--el-text-color-regular);
-  --el-scrollbar-hover-bg-color: var(--el-color-primary);
-}
-.result-body :deep(.result-table .el-scrollbar__bar) {
-  opacity: 1;
-  z-index: 4;
-}
-.result-body :deep(.result-table .el-scrollbar__bar.is-horizontal) {
-  height: 14px;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  background: var(--el-fill-color-dark);
-  border-radius: 0;
-  border-top: 1px solid var(--el-border-color);
-}
-.result-body :deep(.result-table .el-scrollbar__bar.is-vertical) {
-  width: 12px;
-  top: 0;
-  bottom: 14px;
-  background: var(--el-fill-color);
-  border-left: 1px solid var(--el-border-color-lighter);
-}
-.result-body :deep(.result-table .el-scrollbar__thumb) {
-  border-radius: 7px;
-  cursor: grab;
-  opacity: 1;
-}
-.result-body :deep(.result-table .el-scrollbar__bar.is-horizontal .el-scrollbar__thumb) {
-  height: 10px;
-  margin: 2px 4px;
-  background-color: var(--el-text-color-regular);
-}
-.result-body :deep(.result-table .el-scrollbar__bar.is-horizontal .el-scrollbar__thumb:hover),
-.result-body :deep(.result-table .el-scrollbar__bar.is-horizontal .el-scrollbar__thumb:active) {
-  background-color: var(--el-color-primary);
-  cursor: grabbing;
-}
-.result-body :deep(.result-table .el-scrollbar__wrap) {
-  /* 滚动到底时最后一行仍露在滑块上方 */
-  padding-bottom: 14px;
-}
-
-/* Messages 区、以及未走 overlay 的原生滚动条 */
-.result-body :deep(.result-table .el-table__body-wrapper) {
-  scrollbar-width: auto;
-  scrollbar-color: var(--el-text-color-regular) var(--el-fill-color-dark);
-}
-.result-body::-webkit-scrollbar,
-.result-body :deep(.result-table .el-table__body-wrapper)::-webkit-scrollbar {
-  width: 12px;
-  height: 14px;
-}
-.result-body::-webkit-scrollbar-track,
-.result-body :deep(.result-table .el-table__body-wrapper)::-webkit-scrollbar-track {
-  background: var(--el-fill-color-dark);
-}
-.result-body::-webkit-scrollbar-thumb,
-.result-body :deep(.result-table .el-table__body-wrapper)::-webkit-scrollbar-thumb {
-  background: var(--el-text-color-regular);
-  border-radius: 8px;
-  border: 2px solid var(--el-fill-color-dark);
-}
-.result-body::-webkit-scrollbar-thumb:hover,
-.result-body :deep(.result-table .el-table__body-wrapper)::-webkit-scrollbar-thumb:hover {
-  background: var(--el-color-primary);
+  height: 100%;
 }
 .empty {
   padding: 16px;
@@ -1434,6 +1285,9 @@ watch(
 }
 .messages {
   margin: 0;
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
   padding: 12px;
   font-size: var(--vc-ui-font-size, 13px);
   white-space: pre-wrap;

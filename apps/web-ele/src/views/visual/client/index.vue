@@ -18,7 +18,7 @@ import {
 } from 'vue';
 import { useRouter } from 'vue-router';
 
-import { executeDdl, executeDml, executeSql, cancelSql, exportSqlExcel, exportSqlInsert, exportTableSchemaExcel, getInstances, getObjectScript, getTableColumns, getTableDDL, getTableInfo, getTables } from '#/api/visual/database';
+import { executeDdl, executeDml, executeDmlBatch, executeSql, cancelSql, exportSqlExcel, exportSqlInsert, exportTableSchemaExcel, getInstances, getObjectScript, getTableColumns, getTableDDL, getTableInfo, getTables } from '#/api/visual/database';
 import { feedbackSchemaDoc } from '#/api/ai/agent';
 import {
   addSavedQuery,
@@ -76,7 +76,6 @@ import {
 } from './composables/useQueryTabs';
 import { visualClientConfig } from './config';
 import { resolveSqlDialect, resolveTableIdent } from './dialect/sqlDialect';
-import { formatSqlByDialect } from './utils/formatSql';
 import { isDestructiveDdl, looksLikeControlledDdl } from './utils/controlledDdl';
 import {
   askAiPrefillForError,
@@ -1211,7 +1210,7 @@ async function onTreeContextAction(payload: {
 }
 
 /**
- * 视图/过程/函数/触发器/事件：向后端按方言取脚本，格式化后打开编辑器。
+ * 视图/过程/函数/触发器/事件：向后端按方言取脚本后原样打开编辑器（不自动格式化）。
  * 用户可在编辑器中执行：SELECT/SHOW 走只读查询；DDL/CALL 自动改走受控 executeDdl。
  */
 async function openProgramObjectScript(
@@ -1246,24 +1245,10 @@ async function openProgramObjectScript(
       objectName,
     });
     const data = res?.data || res || {};
-    let sql = String(data.sql || '').trim();
+    const sql = String(data.sql || '').trim();
     if (!sql) {
       ElMessage.warning('未生成脚本');
       return;
-    }
-    // DELIMITER 脚本不宜被 sql-formatter 拆坏；其余尝试格式化
-    const hasDelimiter = /^\s*DELIMITER\b/im.test(sql);
-    const skipFormat =
-      /\$\$/.test(sql) ||
-      /^\s*(CREATE|ALTER|DROP)\b[\s\S]*\b(PROCEDURE|FUNCTION|TRIGGER|EVENT|ALIAS)\b/i.test(
-        sql,
-      );
-    if (!hasDelimiter && !skipFormat) {
-      try {
-        sql = formatSqlByDialect(sql, activeConnection.value.dbType) || sql;
-      } catch {
-        // 保留后端原文
-      }
     }
     openSqlInNewTab(
       sql,
@@ -2054,6 +2039,20 @@ async function executeRowDml(sql: string) {
   return res?.data || res;
 }
 
+async function executeRowDmlBatch(sqls: string[]) {
+  if (!activeConnection.value || !activeTab.value) {
+    throw new Error('无可用连接');
+  }
+  const res: any = await executeDmlBatch({
+    dbConfigId: activeConnection.value.id,
+    instanceName:
+      activeTab.value.instanceName || activeConnection.value.schemaName,
+    sqls,
+    source: 'result-grid',
+  });
+  return res?.data || res;
+}
+
 /** 表格编辑全部保存成功后，按原 SELECT 重查 */
 async function onRefreshResult() {
   if (!activeTab.value) return;
@@ -2742,6 +2741,7 @@ onBeforeUnmount(() => {
               @update:visible="(v) => (activeTab!.resultVisible = v)"
               @update:active-tab="(v) => (activeTab!.resultTab = v)"
               :execute-row-dml="executeRowDml"
+              :execute-row-dml-batch="executeRowDmlBatch"
               @run-dml="onRunDml"
               @refresh-result="onRefreshResult"
               @export-excel="onExportExcel"

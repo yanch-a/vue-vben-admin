@@ -1,8 +1,9 @@
 <script lang="ts" setup>
-import { onMounted, reactive, ref, watch } from 'vue';
+import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue';
 import { useRouter } from 'vue-router';
 
 import { Page } from '@vben/common-ui';
+
 import { ArrowLeft, Download, Plus, Refresh, Search } from '@element-plus/icons-vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 
@@ -14,13 +15,15 @@ import {
   executeWorkOrder,
   reviewWorkOrder,
   saveWorkOrder,
-  submitWorkOrder,
   type SqlWorkOrder,
+  submitWorkOrder,
   workOrderCapabilities,
   workOrderDetail,
   workOrderPage,
 } from '#/api/visual/sqlWorkOrder';
 import { getDbConfigList } from '#/api/visual/vq';
+
+import { normalizeInstanceNames } from './instanceOptions';
 
 defineOptions({ name: 'SqlWorkOrder' });
 
@@ -29,10 +32,15 @@ const loading = ref(false);
 const rows = ref<SqlWorkOrder[]>([]);
 const total = ref(0);
 const dba = ref(false);
+const roleReady = ref(false);
 const scope = ref<'mine' | 'review'>('mine');
 const query = reactive({ pageNum: 1, pageSize: 20, status: '', title: '' });
 const connections = ref<any[]>([]);
+const sqlConnections = computed(() =>
+  connections.value.filter((item) => String(item.dbType || '').toUpperCase() !== 'MONGODB'),
+);
 const instances = ref<string[]>([]);
+const instancesLoading = ref(false);
 
 const editorVisible = ref(false);
 const editorSaving = ref(false);
@@ -52,10 +60,11 @@ const auditVisible = ref(false);
 const auditLoading = ref(false);
 const auditForm = reactive({ modelId: undefined as any, question: '' });
 const models = ref<any[]>([]);
+let refreshTimer: ReturnType<typeof setInterval> | undefined;
 
 const statusOptions = [
   ['DRAFT', '草稿'], ['PENDING', '待审批'], ['APPROVED', '已通过'],
-  ['REJECTED', '已驳回'], ['EXECUTING', '执行中'], ['SUCCESS', '执行成功'], ['FAILED', '执行失败'],
+  ['REJECTED', '已驳回'], ['PREPARING', '准备回滚'], ['EXECUTING', '执行中'], ['SUCCESS', '执行成功'], ['FAILED', '执行失败'],
 ];
 const statusLabel = Object.fromEntries(statusOptions);
 
@@ -63,7 +72,7 @@ function unbox(res: any) { return res?.data ?? res; }
 function typeForStatus(status?: string) {
   if (status === 'SUCCESS' || status === 'APPROVED') return 'success';
   if (status === 'FAILED' || status === 'REJECTED') return 'danger';
-  if (status === 'PENDING' || status === 'EXECUTING') return 'warning';
+  if (status === 'PENDING' || status === 'PREPARING' || status === 'EXECUTING') return 'warning';
   return 'info';
 }
 function typeForRisk(level?: string) {
@@ -87,6 +96,8 @@ async function load() {
 async function loadCapabilities() {
   const data = unbox(await workOrderCapabilities());
   dba.value = Boolean(data?.dba);
+  scope.value = dba.value ? 'review' : 'mine';
+  roleReady.value = true;
 }
 
 async function loadConnections() {
@@ -97,8 +108,15 @@ async function onConnectionChange() {
   form.instanceName = '';
   instances.value = [];
   if (!form.dbConfigId) return;
-  instances.value = unbox(await getInstances(form.dbConfigId)) || [];
-  if (instances.value.length === 1) form.instanceName = instances.value[0] || '';
+  instancesLoading.value = true;
+  try {
+    instances.value = normalizeInstanceNames(await getInstances(form.dbConfigId));
+    if (instances.value.length === 1) form.instanceName = instances.value[0] || '';
+  } catch (error: any) {
+    ElMessage.error(error?.message || '加载实例列表失败');
+  } finally {
+    instancesLoading.value = false;
+  }
 }
 
 function resetForm() {
@@ -106,7 +124,11 @@ function resetForm() {
   instances.value = [];
 }
 
-function createOrder() { resetForm(); editorVisible.value = true; }
+function createOrder() {
+  if (dba.value) return;
+  resetForm();
+  editorVisible.value = true;
+}
 
 async function editOrder(row: SqlWorkOrder) {
   const data = unbox(await workOrderDetail(row.id));
@@ -117,8 +139,10 @@ async function editOrder(row: SqlWorkOrder) {
     instanceName: order.instanceName, scriptText: order.scriptText,
     changeNote: `基于 v${order.currentVersion} 修改`,
   });
+  const savedInstance = order.instanceName;
   await onConnectionChange();
-  form.instanceName = order.instanceName;
+  if (instances.value.includes(savedInstance)) form.instanceName = savedInstance;
+  else ElMessage.warning(`原目标实例「${savedInstance}」已不可用，请重新选择`);
   editorVisible.value = true;
 }
 
@@ -158,7 +182,7 @@ async function openAudit(row?: SqlWorkOrder) {
   }
   auditForm.question = '检查危险操作、锁表和性能风险，并结合上线规范判断是否建议通过。';
   detail.value = detail.value || { order };
-  detail.value.order = order;
+  if (!detail.value.order?.scriptText) detail.value.order = order;
   auditVisible.value = true;
 }
 
@@ -186,7 +210,6 @@ async function review(row: SqlWorkOrder, approved: boolean) {
 }
 
 async function execute(row: SqlWorkOrder) {
-  let allowIncompleteRollback = false;
   try {
     await ElMessageBox.confirm('系统会先读取旧数据并生成回滚文件，成功后才执行 SQL。确认开始？', '执行已审批工单', { type: 'warning' });
     await executeWorkOrder(row.id, false);
@@ -194,8 +217,7 @@ async function execute(row: SqlWorkOrder) {
     const message = error?.message || String(error || '');
     if (!message.includes('人工回滚') && !message.includes('无法自动还原')) throw error;
     await ElMessageBox.confirm(`${message}\n\n确认由 DBA 人工处理无法自动还原的部分？`, '回滚不完整', { type: 'error', confirmButtonText: '接受风险并执行' });
-    allowIncompleteRollback = true;
-    await executeWorkOrder(row.id, allowIncompleteRollback);
+    await executeWorkOrder(row.id, true);
   }
   ElMessage.success('回滚文件已生成，工单进入执行队列'); await load();
 }
@@ -209,8 +231,19 @@ async function downloadRollback(row: SqlWorkOrder) {
   URL.revokeObjectURL(href);
 }
 
-watch(scope, () => { query.pageNum = 1; load(); });
-onMounted(async () => { await Promise.all([loadCapabilities(), loadConnections()]); await load(); });
+onMounted(async () => {
+  await loadCapabilities();
+  if (!dba.value) await loadConnections();
+  await load();
+  refreshTimer = setInterval(async () => {
+    if (!rows.value.some((item) => ['EXECUTING', 'PREPARING'].includes(item.status))) return;
+    await load();
+    if (detailVisible.value && ['EXECUTING', 'PREPARING'].includes(detail.value?.order?.status || '')) {
+      await openDetail(detail.value.order);
+    }
+  }, 3000);
+});
+onBeforeUnmount(() => { if (refreshTimer) clearInterval(refreshTimer); });
 </script>
 
 <template>
@@ -219,14 +252,16 @@ onMounted(async () => { await Promise.all([loadCapabilities(), loadConnections()
       <header class="toolbar">
         <ElButton :icon="ArrowLeft" circle title="返回数据库客户端" @click="router.back()" />
         <h2>SQL 上线工单</h2>
-        <ElSegmented v-if="dba" v-model="scope" :options="[{ label: '我的工单', value: 'mine' }, { label: 'DBA 审批', value: 'review' }]" />
+        <ElTag v-if="roleReady" :type="dba ? 'warning' : 'info'" effect="plain">
+          {{ dba ? 'DBA 审批台' : '开发提单台' }}
+        </ElTag>
         <div class="filters">
           <ElInput v-model="query.title" clearable placeholder="标题" :prefix-icon="Search" @keyup.enter="load" />
           <ElSelect v-model="query.status" clearable placeholder="全部状态">
             <ElOption v-for="item in statusOptions" :key="item[0]" :label="item[1]" :value="item[0]" />
           </ElSelect>
           <ElButton :icon="Refresh" circle title="刷新" @click="load" />
-          <ElButton type="primary" :icon="Plus" @click="createOrder">新建工单</ElButton>
+          <ElButton v-if="roleReady && !dba" type="primary" :icon="Plus" @click="createOrder">新建工单</ElButton>
         </div>
       </header>
 
@@ -246,10 +281,10 @@ onMounted(async () => { await Promise.all([loadCapabilities(), loadConnections()
         <ElTableColumn label="操作" fixed="right" min-width="330">
           <template #default="{ row }">
             <ElButton link type="primary" @click="openDetail(row)">详情</ElButton>
-            <ElButton v-if="scope === 'mine' && ['DRAFT','REJECTED'].includes(row.status)" link @click="editOrder(row)">编辑</ElButton>
-            <ElButton v-if="scope === 'mine' && ['DRAFT','REJECTED'].includes(row.status)" link type="primary" @click="submit(row)">提交</ElButton>
-            <template v-if="dba && scope === 'review'">
-              <ElButton v-if="['PENDING','APPROVED'].includes(row.status)" link type="primary" @click="openDetail(row).then(() => openAudit(row))">AI 审计</ElButton>
+            <ElButton v-if="!dba && ['DRAFT','REJECTED'].includes(row.status)" link @click="editOrder(row)">编辑</ElButton>
+            <ElButton v-if="!dba && ['DRAFT','REJECTED'].includes(row.status)" link type="primary" @click="submit(row)">提交</ElButton>
+            <template v-if="dba">
+              <ElButton v-if="['PENDING','APPROVED'].includes(row.status)" link type="primary" @click="openDetail(row).then(() => openAudit())">AI 审计</ElButton>
               <ElButton v-if="row.status === 'PENDING'" link type="success" @click="review(row, true)">通过</ElButton>
               <ElButton v-if="row.status === 'PENDING'" link type="danger" @click="review(row, false)">驳回</ElButton>
               <ElButton v-if="row.status === 'APPROVED'" link type="warning" @click="execute(row)">执行</ElButton>
@@ -265,8 +300,8 @@ onMounted(async () => { await Promise.all([loadCapabilities(), loadConnections()
       <ElForm label-position="top">
         <ElFormItem label="标题"><ElInput v-model="form.title" maxlength="160" show-word-limit /></ElFormItem>
         <div class="target-row">
-          <ElFormItem label="数据库连接"><ElSelect v-model="form.dbConfigId" filterable @change="onConnectionChange"><ElOption v-for="item in connections" :key="item.id" :label="item.dbName" :value="item.id" /></ElSelect></ElFormItem>
-          <ElFormItem label="目标实例"><ElSelect v-model="form.instanceName" filterable allow-create><ElOption v-for="item in instances" :key="item" :label="item" :value="item" /></ElSelect></ElFormItem>
+          <ElFormItem label="数据库连接"><ElSelect v-model="form.dbConfigId" filterable @change="onConnectionChange"><ElOption v-for="item in sqlConnections" :key="item.id" :label="item.dbName || item.dbHost || String(item.id)" :value="item.id" /></ElSelect></ElFormItem>
+          <ElFormItem label="目标实例"><ElSelect v-model="form.instanceName" filterable :loading="instancesLoading" placeholder="请选择实例"><ElOption v-for="item in instances" :key="item" :label="item" :value="item" /></ElSelect></ElFormItem>
         </div>
         <ElFormItem label="SQL 脚本"><ElInput v-model="form.scriptText" type="textarea" :rows="16" resize="vertical" class="sql-input" spellcheck="false" /></ElFormItem>
         <ElFormItem label="版本说明"><ElInput v-model="form.changeNote" maxlength="500" /></ElFormItem>
@@ -281,7 +316,7 @@ onMounted(async () => { await Promise.all([loadCapabilities(), loadConnections()
         <h4>SQL 脚本</h4><pre class="code">{{ detail.order.scriptText }}</pre>
         <template v-if="detail.order.aiAuditReport"><h4>审计报告</h4><div class="report">{{ detail.order.aiAuditReport }}</div></template>
         <template v-if="detail.order.executionMessage"><h4>执行状态</h4><ElAlert :title="detail.order.executionMessage" :type="detail.order.status === 'FAILED' ? 'error' : 'info'" :closable="false" /></template>
-        <h4>版本记录</h4><ElTable :data="detail.versions" size="small"><ElTableColumn prop="versionNo" label="版本" width="70"><template #default="{ row }">v{{ row.versionNo }}</template></ElTableColumn><ElTableColumn prop="createdByName" label="修改人" width="110"/><ElTableColumn prop="changeNote" label="说明"/><ElTableColumn label="时间" width="170"><template #default="{ row }">{{ dateText(row.createTime) }}</template></ElTableColumn></ElTable>
+        <h4>版本记录</h4><ElTable :data="detail.versions" size="small"><ElTableColumn prop="versionNo" label="版本" width="70"><template #default="{ row }">v{{ row.versionNo }}</template></ElTableColumn><ElTableColumn prop="createdByName" label="修改人" width="110" /><ElTableColumn prop="changeNote" label="说明" /><ElTableColumn label="时间" width="170"><template #default="{ row }">{{ dateText(row.createTime) }}</template></ElTableColumn></ElTable>
         <h4>审计轨迹</h4><ElTimeline><ElTimelineItem v-for="event in detail.events" :key="event.id" :timestamp="dateText(event.createTime)" placement="top"><strong>{{ event.action }}</strong> · {{ event.actorName }}<div>{{ event.commentText }}</div></ElTimelineItem></ElTimeline>
       </div>
     </ElDrawer>

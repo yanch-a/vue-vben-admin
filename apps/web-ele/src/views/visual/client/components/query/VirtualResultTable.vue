@@ -1,0 +1,473 @@
+<script lang="ts" setup>
+/**
+ * 查询结果虚拟表：只渲染可视区附近的行，单元格用原生 td（不是 Vue 组件）。
+ * ElTable 会对每个格子挂 TableCell 组件 + 滚动层，1000×40 列就会把页面打到 GB 级。
+ *
+ * @author yanch
+ */
+import {
+  computed,
+  nextTick,
+  onBeforeUnmount,
+  onMounted,
+  ref,
+  watch,
+} from 'vue';
+
+defineOptions({ name: 'VirtualResultTable' });
+
+const ROW_HEIGHT = 32;
+const CHECK_WIDTH = 42;
+const COL_MIN_WIDTH = 120;
+const OVERSCAN = 8;
+
+const props = defineProps<{
+  rows: Record<string, any>[];
+  columns: string[];
+  emptyText?: string;
+  editMode?: boolean;
+  editingCell?: { row: number; col: string } | null;
+  editDraft?: string;
+  dirtyIndexes?: Set<number>;
+  formatCell: (value: unknown) => string;
+  isNullCell: (value: unknown) => boolean;
+}>();
+
+const emit = defineEmits<{
+  'current-change': [row: Record<string, any> | undefined, index: number];
+  'selection-change': [rows: Record<string, any>[]];
+  'row-contextmenu': [row: Record<string, any>, event: MouseEvent];
+  'cell-click': [rowIndex: number, col: string];
+  'update:editDraft': [value: string];
+  'cell-blur': [rowIndex: number, col: string];
+  'cell-keydown': [event: KeyboardEvent];
+  /** 正在编辑的行滚出可视区时，通知父级提交 */
+  'edit-offscreen': [];
+}>();
+
+const scrollRef = ref<HTMLDivElement | null>(null);
+const inputRef = ref<HTMLInputElement | null>(null);
+const viewportHeight = ref(320);
+const viewportWidth = ref(640);
+const scrollTop = ref(0);
+const currentIndex = ref(-1);
+const selected = ref<Set<number>>(new Set());
+
+const rowCount = computed(() => props.rows?.length || 0);
+const colCount = computed(() => props.columns?.length || 0);
+
+const tableMinWidth = computed(
+  () => CHECK_WIDTH + colCount.value * COL_MIN_WIDTH,
+);
+const tableWidth = computed(() =>
+  Math.max(viewportWidth.value, tableMinWidth.value),
+);
+const dataColWidth = computed(() => {
+  if (colCount.value <= 0) return COL_MIN_WIDTH;
+  return Math.max(
+    COL_MIN_WIDTH,
+    Math.floor((tableWidth.value - CHECK_WIDTH) / colCount.value),
+  );
+});
+
+const bodyHeight = computed(() => rowCount.value * ROW_HEIGHT);
+
+const startIndex = computed(() => {
+  const i = Math.floor(scrollTop.value / ROW_HEIGHT) - OVERSCAN;
+  return Math.max(0, i);
+});
+
+const endIndex = computed(() => {
+  const visible = Math.ceil(viewportHeight.value / ROW_HEIGHT) + OVERSCAN * 2;
+  return Math.min(rowCount.value, startIndex.value + visible);
+});
+
+const padTop = computed(() => startIndex.value * ROW_HEIGHT);
+
+const visibleRows = computed(() => {
+  const list = props.rows || [];
+  const start = startIndex.value;
+  const end = endIndex.value;
+  const out: { row: Record<string, any>; index: number }[] = [];
+  for (let i = start; i < end; i++) {
+    const row = list[i];
+    if (row) out.push({ row, index: i });
+  }
+  return out;
+});
+
+const selectedCount = computed(() => selected.value.size);
+const allSelected = computed(
+  () => rowCount.value > 0 && selectedCount.value === rowCount.value,
+);
+const partialSelected = computed(
+  () => selectedCount.value > 0 && selectedCount.value < rowCount.value,
+);
+
+function emitSelection() {
+  const rows = props.rows || [];
+  const picked: Record<string, any>[] = [];
+  selected.value.forEach((i) => {
+    const row = rows[i];
+    if (row) picked.push(row);
+  });
+  emit('selection-change', picked);
+}
+
+function toggleAll() {
+  if (allSelected.value) {
+    selected.value = new Set();
+  } else {
+    selected.value = new Set(props.rows.map((_, i) => i));
+  }
+  emitSelection();
+}
+
+function toggleRow(index: number, checked: boolean) {
+  const next = new Set(selected.value);
+  if (checked) next.add(index);
+  else next.delete(index);
+  selected.value = next;
+  emitSelection();
+}
+
+function onRowClick(index: number) {
+  currentIndex.value = index;
+  emit('current-change', props.rows[index], index);
+}
+
+function onRowContextMenu(index: number, event: MouseEvent) {
+  event.preventDefault();
+  currentIndex.value = index;
+  const row = props.rows[index];
+  if (!row) return;
+  emit('current-change', row, index);
+  emit('row-contextmenu', row, event);
+}
+
+function onCellClick(index: number, col: string) {
+  onRowClick(index);
+  if (props.editMode) {
+    emit('cell-click', index, col);
+  }
+}
+
+function rowClass(index: number) {
+  const cls: string[] = [];
+  if (index % 2 === 1) cls.push('is-stripe');
+  if (index === currentIndex.value) cls.push('is-current');
+  if (props.editMode && props.dirtyIndexes?.has(index)) cls.push('is-dirty-row');
+  return cls.join(' ');
+}
+
+function isEditing(index: number, col: string) {
+  return (
+    !!props.editMode &&
+    props.editingCell?.row === index &&
+    props.editingCell?.col === col
+  );
+}
+
+function onScroll() {
+  const el = scrollRef.value;
+  if (!el) return;
+  scrollTop.value = el.scrollTop;
+  const cell = props.editingCell;
+  if (
+    cell &&
+    (cell.row < startIndex.value || cell.row >= endIndex.value)
+  ) {
+    emit('edit-offscreen');
+  }
+}
+
+function measure() {
+  const el = scrollRef.value;
+  if (!el) return;
+  viewportHeight.value = el.clientHeight || 320;
+  viewportWidth.value = el.clientWidth || 640;
+}
+
+function getSelectionRows() {
+  const rows = props.rows || [];
+  const picked: Record<string, any>[] = [];
+  selected.value.forEach((i) => {
+    const row = rows[i];
+    if (row) picked.push(row);
+  });
+  return picked;
+}
+
+function clearSelection() {
+  selected.value = new Set();
+  currentIndex.value = -1;
+}
+
+function setInputRef(el: Element | null) {
+  inputRef.value = el ? (el as HTMLInputElement) : null;
+}
+
+let ro: ResizeObserver | null = null;
+
+onMounted(() => {
+  measure();
+  if (scrollRef.value && typeof ResizeObserver !== 'undefined') {
+    ro = new ResizeObserver(() => measure());
+    ro.observe(scrollRef.value);
+  }
+});
+
+onBeforeUnmount(() => {
+  ro?.disconnect();
+  ro = null;
+});
+
+watch(
+  () => props.editingCell,
+  async (cell) => {
+    if (!cell) return;
+    await nextTick();
+    inputRef.value?.focus();
+    inputRef.value?.select();
+  },
+);
+
+defineExpose({
+  getSelectionRows,
+  clearSelection,
+});
+</script>
+
+<template>
+  <div
+    ref="scrollRef"
+    class="vrt-scroll"
+    @scroll="onScroll"
+  >
+    <div
+      v-if="!columns.length"
+      class="vrt-empty"
+    >
+      {{ emptyText || '暂无结果' }}
+    </div>
+    <template v-else>
+      <div class="vrt-header" :style="{ width: tableWidth + 'px' }">
+        <div class="vrt-th vrt-check" :style="{ width: CHECK_WIDTH + 'px' }">
+          <input
+            type="checkbox"
+            :checked="allSelected"
+            :indeterminate="partialSelected"
+            @change="toggleAll"
+          />
+        </div>
+        <div
+          v-for="col in columns"
+          :key="col"
+          class="vrt-th"
+          :style="{ width: dataColWidth + 'px' }"
+          :title="col"
+        >
+          {{ col }}
+        </div>
+      </div>
+      <div
+        class="vrt-space"
+        :style="{ height: bodyHeight + 'px', width: tableWidth + 'px' }"
+      >
+        <div
+          v-if="rowCount === 0"
+          class="vrt-empty"
+        >
+          {{ emptyText || '查询成功，无数据' }}
+        </div>
+        <div
+          v-else
+          class="vrt-body"
+          :style="{ top: padTop + 'px', width: tableWidth + 'px' }"
+        >
+          <div
+            v-for="item in visibleRows"
+            :key="item.index"
+            class="vrt-tr"
+            :class="rowClass(item.index)"
+            :style="{ height: ROW_HEIGHT + 'px' }"
+            @click="onRowClick(item.index)"
+            @contextmenu="onRowContextMenu(item.index, $event)"
+          >
+            <div
+              class="vrt-td vrt-check"
+              :style="{ width: CHECK_WIDTH + 'px' }"
+              @click.stop
+            >
+              <input
+                type="checkbox"
+                :checked="selected.has(item.index)"
+                @change="
+                  toggleRow(
+                    item.index,
+                    ($event.target as HTMLInputElement).checked,
+                  )
+                "
+              />
+            </div>
+            <div
+              v-for="col in columns"
+              :key="col"
+              class="vrt-td"
+              :class="{
+                'is-null': isNullCell(item.row[col]),
+                'is-editable': editMode,
+                'is-editing': isEditing(item.index, col),
+              }"
+              :style="{ width: dataColWidth + 'px' }"
+              :title="formatCell(item.row[col])"
+              @click.stop="onCellClick(item.index, col)"
+            >
+              <input
+                v-if="isEditing(item.index, col)"
+                :ref="setInputRef"
+                class="vrt-editor"
+                :value="editDraft"
+                @click.stop
+                @input="
+                  emit(
+                    'update:editDraft',
+                    ($event.target as HTMLInputElement).value,
+                  )
+                "
+                @blur="emit('cell-blur', item.index, col)"
+                @keydown="emit('cell-keydown', $event)"
+              />
+              <template v-else>{{ formatCell(item.row[col]) }}</template>
+            </div>
+          </div>
+        </div>
+      </div>
+    </template>
+  </div>
+</template>
+
+<style scoped>
+.vrt-scroll {
+  height: 100%;
+  overflow: auto;
+  background: var(--el-bg-color);
+  scrollbar-width: auto;
+  scrollbar-color: var(--el-text-color-regular) var(--el-fill-color-dark);
+}
+.vrt-scroll::-webkit-scrollbar {
+  width: 12px;
+  height: 14px;
+}
+.vrt-scroll::-webkit-scrollbar-track {
+  background: var(--el-fill-color-dark);
+}
+.vrt-scroll::-webkit-scrollbar-thumb {
+  background: var(--el-text-color-regular);
+  border-radius: 8px;
+  border: 2px solid var(--el-fill-color-dark);
+}
+.vrt-scroll::-webkit-scrollbar-thumb:hover {
+  background: var(--el-color-primary);
+}
+.vrt-header {
+  position: sticky;
+  top: 0;
+  z-index: 4;
+  display: flex;
+  background: var(--el-fill-color-light);
+  border-bottom: 1px solid var(--el-border-color);
+}
+.vrt-th,
+.vrt-td {
+  box-sizing: border-box;
+  flex: none;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  border-right: 1px solid var(--el-border-color-lighter);
+  font-size: 12px;
+  line-height: 30px;
+  padding: 0 8px;
+}
+.vrt-th {
+  font-weight: 600;
+  color: var(--el-text-color-primary);
+  height: 32px;
+  line-height: 32px;
+}
+.vrt-check {
+  position: sticky;
+  left: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  background: inherit;
+  border-right: 1px solid var(--el-border-color);
+}
+.vrt-header .vrt-check {
+  z-index: 5;
+  background: var(--el-fill-color-light);
+}
+.vrt-space {
+  position: relative;
+}
+.vrt-body {
+  position: absolute;
+  left: 0;
+}
+.vrt-tr {
+  display: flex;
+  background: var(--el-bg-color);
+  border-bottom: 1px solid var(--el-border-color-lighter);
+  cursor: default;
+}
+.vrt-tr.is-stripe {
+  background: var(--el-fill-color-lighter);
+}
+.vrt-tr.is-current {
+  background: var(--el-color-primary-light-9);
+}
+.vrt-tr.is-dirty-row {
+  background: color-mix(in srgb, var(--el-color-warning) 28%, transparent);
+}
+.vrt-tr .vrt-check {
+  background: inherit;
+}
+.vrt-td.is-null {
+  font-style: italic;
+  color: var(--el-text-color-secondary);
+}
+.vrt-td.is-editable {
+  cursor: text;
+}
+.vrt-td.is-editing {
+  position: relative;
+  z-index: 3;
+  overflow: visible;
+  padding: 0;
+}
+.vrt-editor {
+  position: absolute;
+  inset: -1px;
+  box-sizing: border-box;
+  width: auto;
+  height: auto;
+  margin: 0;
+  padding: 0 8px;
+  font: inherit;
+  line-height: inherit;
+  color: var(--el-text-color-primary);
+  background: var(--el-bg-color);
+  border: 1px solid var(--el-color-primary);
+  border-radius: 0;
+  outline: none;
+}
+.vrt-empty {
+  padding: 16px;
+  color: var(--el-text-color-secondary);
+  font-size: 13px;
+}
+</style>

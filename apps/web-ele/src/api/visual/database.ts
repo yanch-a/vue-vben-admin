@@ -288,6 +288,20 @@ export function exportSqlDump(data: {
   })
 }
 
+/** 在同一数据库事务中执行一组 DML（联表结果单行编辑） */
+export function executeDmlBatch(data: {
+  dbConfigId: number | string
+  instanceName?: string
+  sqls: string[]
+  source?: string
+}) {
+  return request({
+    url: databaseUrl + 'executeDmlBatch',
+    method: 'post',
+    data,
+  })
+}
+
 export function getViews(dbConfigId: any, instanceName: any) {
   return request({
     url: databaseUrl + 'getViews/' + dbConfigId + '/' + instanceName,

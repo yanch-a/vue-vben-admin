@@ -557,7 +557,17 @@
   <div class="db-config-container" v-loading="loading">
     <div class="db-config-toolbar">
       <div class="db-config-toolbar__left">
-        <h2 class="db-config-title">数据库连接</h2>
+        <div class="db-config-title-row">
+          <h2 class="db-config-title">数据库连接</h2>
+          <el-button
+            v-permissions="{ permission: ['DbConfig:add'] }"
+            type="primary"
+            @click="handleAdd"
+          >
+            <el-icon class="el-icon--left"><Plus /></el-icon>
+            新增连接
+          </el-button>
+        </div>
         <p class="db-config-desc">以卡片管理各数据源，支持测试、授权与画布。</p>
       </div>
       <div class="db-config-toolbar__right">
@@ -576,20 +586,12 @@
           <el-icon class="el-icon--left"><Search /></el-icon>
           查询
         </el-button>
-        <el-button
-          v-permissions="{ permission: ['DbConfig:add'] }"
-          type="primary"
-          @click="handleAdd"
-        >
-          <el-icon class="el-icon--left"><Plus /></el-icon>
-          新增连接
-        </el-button>
       </div>
     </div>
 
     <div v-if="!loading && tableData.length === 0" class="db-config-empty">
       <p>暂无数据库连接</p>
-      <p class="db-config-empty__hint">点击下方按钮或右上角「新增连接」创建第一条连接。</p>
+      <p class="db-config-empty__hint">点击下方按钮或标题旁「新增连接」创建第一条连接。</p>
       <el-button
         v-permissions="{ permission: ['DbConfig:add'] }"
         type="primary"
@@ -1020,6 +1022,13 @@
     justify-content: space-between;
     gap: 16px;
     margin-bottom: 20px;
+  }
+
+  .db-config-title-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 12px;
   }
 
   .db-config-title {
