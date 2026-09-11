@@ -47,6 +47,7 @@ export interface ClientTask {
   message?: string;
   createTime: number;
   updateTime?: number;
+  elapsedMs?: number;
   errors: string[];
   /** 后端错误总数（列表可能截断 errors） */
   errorTotal?: number;
@@ -141,7 +142,9 @@ function fromSqlScript(raw: SqlScriptTaskVO): ClientTask {
     source: 'sqlScript',
     kind: 'SQL_SCRIPT',
     title: `执行 ${file}`,
-    subtitle: inst,
+    subtitle: [raw.engine === 'NATIVE' ? '官方客户端' : '逐条校验', inst]
+      .filter(Boolean)
+      .join(' · '),
     status: normalizeStatus(raw.status),
     total: raw.total || 0,
     done: raw.done || 0,
@@ -149,6 +152,7 @@ function fromSqlScript(raw: SqlScriptTaskVO): ClientTask {
     message: raw.message,
     createTime: raw.createTime || 0,
     updateTime: raw.updateTime,
+    elapsedMs: raw.elapsedMs,
     errors: Array.isArray(raw.errors) ? raw.errors.map(String) : [],
     errorTotal: raw.errorTotal || (raw.errors || []).length,
   };

@@ -25,6 +25,26 @@ const routes: RouteRecordRaw[] = [
     },
   },
   {
+    name: 'SqlWorkOrder',
+    path: '/lSql/sqlWorkOrder',
+    component: () => import('#/views/visual/sqlWorkOrder/index.vue'),
+    meta: {
+      title: 'SQL 工单',
+      hideInMenu: true,
+      activePath: '/lSql/visualClient',
+    },
+  },
+  {
+    name: 'RedisConsole',
+    path: '/lSql/redisConsole',
+    component: () => import('#/views/visual/redisConsole/index.vue'),
+    meta: {
+      title: 'Redis 工作台',
+      hideInMenu: true,
+      activePath: '/lSql/visualClient',
+    },
+  },
+  {
     name: 'QueryConfig',
     path: '/visual/visualQuery/index',
     // 历史 Options SFC、无 lang=ts，vue-tsc 不生成模块声明

@@ -18,7 +18,7 @@ function clean(sql: string): string {
 
 export function mongoCommandKind(sql: string): MongoCommandKind {
   const s = clean(sql);
-  if (/^use\s*\(/i.test(s)) return 'session';
+  if (/^use(?:\s*\(|\s+\S)/i.test(s)) return 'session';
   if (
     /^db\.getCollection\s*\([^)]*\)\.(insertOne|insertMany|updateOne|updateMany|replaceOne|deleteOne|deleteMany)\s*\(/i.test(
       s,
@@ -31,6 +31,8 @@ export function mongoCommandKind(sql: string): MongoCommandKind {
   }
   if (
     /^db\.createCollection\s*\(/i.test(s) ||
+    /^db\.createView\s*\(/i.test(s) ||
+    /^db\.runCommand\s*\(\s*\{\s*["']?(?:collMod|createIndexes|dropIndexes)["']?\s*:/i.test(s) ||
     /^db\.(?:getCollection\s*\([^)]*\)|[\w$]+)\.(drop|createIndex|dropIndex)\s*\(/i.test(
       s,
     )
@@ -43,7 +45,7 @@ export function mongoCommandKind(sql: string): MongoCommandKind {
   )
     return 'manage';
   if (
-    /^db\.(?:getCollectionNames|stats|runCommand)\s*\(/i.test(s) ||
+    /^db\.(?:getCollectionNames|getCollectionInfos|stats|runCommand)\s*\(/i.test(s) ||
     /^db\.(?:getCollection\s*\([^)]*\)|[\w$]+)\.(find|findOne|aggregate|countDocuments|estimatedDocumentCount|distinct|getIndexes|stats)\s*\(/i.test(
       s,
     )
@@ -81,7 +83,10 @@ function collectionCall(ref: TableRef, method: string): string {
 }
 
 function rowFilter(row: Record<string, any>, whereColumns: string[]): Record<string, any> {
-  const keys = (whereColumns.length ? whereColumns : Object.keys(row)).filter(
+  if (!Object.prototype.hasOwnProperty.call(row, '_id') || row._id == null) {
+    throw new Error('MongoDB 结果缺少 _id；请保留 _id 投影后再编辑或删除文档');
+  }
+  const keys = (whereColumns.length ? whereColumns : ['_id']).filter(
     (key) => Object.prototype.hasOwnProperty.call(row, key),
   );
   if (!keys.length) throw new Error('无法构建 MongoDB 过滤条件：没有可用字段');
@@ -95,7 +100,12 @@ export function buildMongoInsertCommand(
 ): string {
   const doc = Object.fromEntries(
     columns
-      .filter((key) => Object.prototype.hasOwnProperty.call(row, key))
+      .filter(
+        (key) =>
+          key !== '_id' &&
+          row[key] !== undefined &&
+          Object.prototype.hasOwnProperty.call(row, key),
+      )
       .map((key) => [key, row[key]]),
   );
   return `${collectionCall(ref, 'insertOne')}(${mongoJson(doc)});`;
@@ -108,8 +118,13 @@ export function buildMongoUpdateCommand(
   changedColumns: string[],
   whereColumns: string[],
 ): string {
+  if (changedColumns.includes('_id') && edited._id !== original._id) {
+    throw new Error('MongoDB 的 _id 不可修改');
+  }
   const set = Object.fromEntries(
-    changedColumns.map((key) => [key, edited[key]]),
+    changedColumns
+      .filter((key) => key !== '_id')
+      .map((key) => [key, edited[key]]),
   );
   if (!Object.keys(set).length) throw new Error('没有可更新的字段');
   return `${collectionCall(ref, 'updateOne')}(${mongoJson(

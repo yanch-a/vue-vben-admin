@@ -41,6 +41,10 @@ const emit = defineEmits<{
   history: [];
   /** 管理服务端官方数据库客户端 */
   tools: [];
+  /** SQL 上线工单 */
+  workOrder: [];
+  /** Redis 管理工作台 */
+  redis: [];
 }>();
 
 function onSystemCommand(cmd: string | number) {
@@ -74,6 +78,12 @@ function onSystemCommand(cmd: string | number) {
     </ElButton>
     <ElButton size="small" @click="emit('savedQueries')">
       查询文件
+    </ElButton>
+    <ElButton size="small" @click="emit('workOrder')">
+      SQL 工单
+    </ElButton>
+    <ElButton size="small" @click="emit('redis')">
+      Redis
     </ElButton>
     <ElButton size="small" type="primary" :disabled="!hasConnection" @click="emit('ai')">
       AI 助手

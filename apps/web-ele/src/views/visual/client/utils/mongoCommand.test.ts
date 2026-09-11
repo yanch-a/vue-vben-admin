@@ -14,6 +14,8 @@ describe('MongoDB 命令适配', () => {
     expect(mongoCommandKind('db.users.find({ age: { $gte: 18 } }).limit(20)')).toBe('read');
     expect(mongoCommandKind('db.users.updateOne({"_id":"abc"},{"$set":{"name":"new"}})')).toBe('data');
     expect(mongoCommandKind('db.users.createIndex({"email":1},{"unique":true})')).toBe('schema');
+    expect(mongoCommandKind('db.createView("active_users", "users", [])')).toBe('schema');
+    expect(mongoCommandKind('db.getCollectionInfos({ name: "users" })')).toBe('read');
     expect(parseMongoCollection('db.getCollection("users").find({})')).toEqual({ table: 'users' });
   });
 
@@ -29,6 +31,14 @@ describe('MongoDB 命令适配', () => {
     expect(buildMongoDeleteCommand(ref, original, Object.keys(original), ['_id'])).toContain(
       'deleteOne({"_id":"507f1f77bcf86cd799439011"})',
     );
-    expect(buildMongoInsertCommand(ref, edited, Object.keys(edited))).toContain('insertOne');
+    expect(buildMongoInsertCommand(ref, edited, Object.keys(edited))).toBe(
+      'db.getCollection("users").insertOne({"name":"new","profile":{"level":1}});',
+    );
+    expect(() =>
+      buildMongoUpdateCommand(ref, original, { ...edited, _id: 'changed' }, ['_id'], ['_id']),
+    ).toThrow('_id 不可修改');
+    expect(() =>
+      buildMongoDeleteCommand(ref, { name: 'no id' }, ['name'], []),
+    ).toThrow('缺少 _id');
   });
 });

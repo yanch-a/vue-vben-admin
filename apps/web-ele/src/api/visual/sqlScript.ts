@@ -15,6 +15,9 @@ export interface SqlScriptTaskVO {
   dbConfigId?: number;
   instanceName?: string;
   fileName?: string;
+  engine?: 'MANAGED' | 'NATIVE';
+  startedAt?: number;
+  elapsedMs?: number;
   total: number;
   done: number;
   successCount?: number;

@@ -428,7 +428,7 @@ const MONGODB_LIKE: SqlDialectProfile = {
   appendLimit: (sql) => sql,
   literal: (value) => JSON.stringify(value),
   createDatabaseSql: (name) =>
-    `// MongoDB 按需创建数据库：先创建集合\ndb.createCollection(${JSON.stringify(name)});`,
+    `// MongoDB 按需创建数据库：在目标库创建初始化集合\ndb.getSiblingDB(${JSON.stringify(name)}).createCollection("_lemon_init");`,
   dropDatabaseSql: () => 'db.dropDatabase();',
   createTableStubSql: (_schema, table) =>
     `db.createCollection(${JSON.stringify(table)});`,
@@ -438,7 +438,7 @@ const MONGODB_LIKE: SqlDialectProfile = {
     `db.getCollection(${JSON.stringify(table)}).deleteMany({});`,
   truncateViaDml: true,
   alterTableStubSql: (_schema, table) =>
-    `// MongoDB 使用文档结构，无固定列式 ALTER\ndb.getCollection(${JSON.stringify(table)}).runCommand({collMod: ${JSON.stringify(table)}});`,
+    `// MongoDB 使用 collMod 调整验证规则等集合选项\ndb.runCommand({ collMod: ${JSON.stringify(table)}, validator: {} });`,
 };
 
 const FAMILY_PROFILE: Record<SqlDialectFamily, SqlDialectProfile> = {

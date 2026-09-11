@@ -551,6 +551,14 @@ function goSavedQueryManage() {
   router.push({ name: 'SavedQuerys' });
 }
 
+function goSqlWorkOrder() {
+  router.push({ name: 'SqlWorkOrder' });
+}
+
+function goRedisConsole() {
+  router.push({ name: 'RedisConsole' });
+}
+
 function onAddQueryTab() {
   const t = addTab({
     instanceName:
@@ -2512,6 +2520,8 @@ onBeforeUnmount(() => {
         @query-view="goQueryView"
         @relation="goRelation"
         @saved-queries="goSavedQueryManage"
+        @work-order="goSqlWorkOrder"
+        @redis="goRedisConsole"
         @progress="onOpenTaskPanel"
         @system="onOpenSystemFunctions"
         @tools="onOpenDatabaseTools"

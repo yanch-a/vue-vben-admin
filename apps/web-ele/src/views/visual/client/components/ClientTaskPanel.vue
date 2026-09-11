@@ -85,6 +85,14 @@ function timeText(ms?: number) {
   return `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
+function durationText(ms?: number) {
+  if (!ms || ms < 1000) return '';
+  const seconds = Math.floor(ms / 1000);
+  if (seconds < 60) return `${seconds} 秒`;
+  const minutes = Math.floor(seconds / 60);
+  return `${minutes} 分 ${seconds % 60} 秒`;
+}
+
 function canCancel(t: ClientTask) {
   return isRunningStatus(t.status);
 }
@@ -146,6 +154,7 @@ async function onCancel(t: ClientTask) {
         </div>
         <div class="meta">
           <span v-if="t.total">{{ t.done }} / {{ t.total }}</span>
+          <span v-if="durationText(t.elapsedMs)">耗时 {{ durationText(t.elapsedMs) }}</span>
           <span v-if="t.current && isRunning(t)">对象 {{ t.current }}</span>
           <span class="time">{{ timeText(t.updateTime || t.createTime) }}</span>
         </div>
