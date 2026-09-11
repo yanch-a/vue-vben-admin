@@ -23,6 +23,11 @@ export const visualClientConfig = {
   maxSqlEditorsPerConnection: 20,
 
   /**
+   * 自由 SQL 未写 LIMIT/TOP 时的默认返回行数（安全阀）
+   */
+  defaultQueryMaxRows: 200,
+
+  /**
    * 表数据导出 Excel / SQL 转储时的默认最大行数（安全阀）
    */
   exportMaxRows: 50_000,

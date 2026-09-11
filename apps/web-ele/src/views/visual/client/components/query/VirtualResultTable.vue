@@ -1,6 +1,6 @@
 <script lang="ts" setup>
 /**
- * 查询结果虚拟表：只渲染可视区附近的行，单元格用原生 td（不是 Vue 组件）。
+ * 查询结果虚拟表：只渲染可视区附近的行，格子是普通 div（不是 Vue 组件）。
  * ElTable 会对每个格子挂 TableCell 组件 + 滚动层，1000×40 列就会把页面打到 GB 级。
  *
  * @author yanch
@@ -103,6 +103,10 @@ const allSelected = computed(
 const partialSelected = computed(
   () => selectedCount.value > 0 && selectedCount.value < rowCount.value,
 );
+
+function isSelected(index: number) {
+  return selected.value.has(index);
+}
 
 function emitSelection() {
   const rows = props.rows || [];
@@ -301,7 +305,7 @@ defineExpose({
             >
               <input
                 type="checkbox"
-                :checked="selected.has(item.index)"
+                :checked="isSelected(item.index)"
                 @change="
                   toggleRow(
                     item.index,
@@ -349,7 +353,9 @@ defineExpose({
 
 <style scoped>
 .vrt-scroll {
+  box-sizing: border-box;
   height: 100%;
+  min-height: 0;
   overflow: auto;
   background: var(--el-bg-color);
   scrollbar-width: auto;
@@ -375,6 +381,7 @@ defineExpose({
   top: 0;
   z-index: 4;
   display: flex;
+  flex-shrink: 0;
   background: var(--el-fill-color-light);
   border-bottom: 1px solid var(--el-border-color);
 }

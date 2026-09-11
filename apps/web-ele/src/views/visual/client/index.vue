@@ -1386,7 +1386,7 @@ async function runSql(opts?: { sql?: string; source?: string }) {
         dbConfigId: activeConnection.value.id,
         instanceName: activeTab.value.instanceName,
         sql,
-        maxRows: 1000,
+        maxRows: visualClientConfig.defaultQueryMaxRows,
         requestId,
         source,
       },
@@ -2116,7 +2116,7 @@ async function refreshQueryResult(sql: string) {
       dbConfigId: activeConnection.value.id,
       instanceName: activeTab.value.instanceName,
       sql,
-      maxRows: 1000,
+      maxRows: visualClientConfig.defaultQueryMaxRows,
     });
     const clientElapsedMs = Math.round(performance.now() - t0);
     const data = res?.data || res;

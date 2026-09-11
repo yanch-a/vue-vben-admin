@@ -1275,9 +1275,14 @@ watch(
   border-bottom: 1px solid var(--el-border-color-lighter);
 }
 .table-fill {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+}
+.table-fill > * {
   flex: 1;
   min-height: 0;
-  height: 100%;
 }
 .empty {
   padding: 16px;
