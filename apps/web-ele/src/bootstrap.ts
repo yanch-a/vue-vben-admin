@@ -3,7 +3,7 @@ import { createApp, watchEffect } from 'vue';
 import { registerAccessDirective } from '@vben/access';
 import { registerLoadingDirective } from '@vben/common-ui';
 import { preferences } from '@vben/preferences';
-import { initStores } from '@vben/stores';
+import { initStores, useAccessStore } from '@vben/stores';
 import '@vben/styles';
 import '@vben/styles/ele';
 
@@ -19,6 +19,7 @@ import App from './app.vue';
 import { setupAdminPlusCompat } from './compat/admin-plus';
 import { registerPermissionsDirective } from './compat/permissions';
 import { registerVabComponents } from './compat/vab';
+import { setDesktopAuthenticated } from './desktop/runtime';
 import { router } from './router';
 import { branding } from './store/branding';
 
@@ -65,6 +66,9 @@ async function bootstrap(namespace: string) {
 
   // 配置 pinia-tore
   await initStores(app, { namespace });
+
+  // 用实际恢复出的令牌修正客户端登录标记，兼容升级前已有的登录缓存。
+  await setDesktopAuthenticated(Boolean(useAccessStore().accessToken));
 
   // 安装权限指令
   registerAccessDirective(app);

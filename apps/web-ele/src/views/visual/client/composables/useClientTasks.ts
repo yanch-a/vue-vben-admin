@@ -8,6 +8,7 @@
  */
 import { computed, ref, watch } from 'vue';
 
+import { getDesktopScopedStorageKey } from '#/desktop/runtime';
 import {
   cancelSchemaDocTask,
   schemaDocTask,
@@ -53,7 +54,8 @@ export interface ClientTask {
   errorTotal?: number;
 }
 
-const CACHE_KEY = 'vc:client-running-tasks';
+// 任务 ID 属于具体后台，Electron 切换服务端后不能继续轮询旧任务。
+const CACHE_KEY = getDesktopScopedStorageKey('vc:client-running-tasks');
 /** 面板可见时的轮询间隔 */
 const POLL_VISIBLE_MS = 5_000;
 /** 面板收起后后台继续刷，间隔放宽 */

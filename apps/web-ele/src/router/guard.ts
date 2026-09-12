@@ -130,8 +130,7 @@ function setupAccessGuard(router: Router) {
     } catch (error) {
       console.error('Access guard failed, redirect to login.', error);
       // token 失效或菜单加载失败：清登录态并回登录页，避免一直 loading
-      accessStore.setAccessToken(null);
-      accessStore.setIsAccessChecked(false);
+      await authStore.clearAuthState();
       return {
         path: LOGIN_PATH,
         query:

@@ -8,12 +8,15 @@
  */
 import { watch, type Ref, type WatchStopHandle } from 'vue';
 
+import { getDesktopScopedStorageKey } from '#/desktop/runtime';
+
 import { bindClientSessionChangeNotifier } from './clientSessionNotify';
 import type { DbConnection } from './useConnectionStore';
 import type { PersistedQueryTab, QueryTab } from './useQueryTabs';
 import { visualClientConfig } from '../config';
 
-const STORAGE_KEY = 'visual-client-session-v1';
+// Electron 按服务端隔离已打开连接和 SQL Tab；Web 端仍使用原有键。
+const STORAGE_KEY = getDesktopScopedStorageKey('visual-client-session-v1');
 /** v2：连接页签用 sessionId，同一 dbConfig 可多开 */
 const VERSION = 2;
 /** 单 Tab SQL 最大字符，防止异常大文本写爆 localStorage */

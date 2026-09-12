@@ -18,11 +18,17 @@ import {
   memberLoginApi,
   memberLogoutApi,
 } from '#/api';
+import {
+  getDesktopScopedStorageKey,
+  setDesktopAuthenticated,
+} from '#/desktop/runtime';
 import { $t } from '#/locales';
 
 export type LoginUserType = 'ADMIN' | 'MEMBER';
 
-const LOGIN_USER_TYPE_KEY = 'lemon_login_user_type';
+const LOGIN_USER_TYPE_KEY = getDesktopScopedStorageKey(
+  'lemon_login_user_type',
+);
 
 function readLoginUserType(): LoginUserType {
   try {
@@ -61,16 +67,15 @@ export const useAuthStore = defineStore('auth', () => {
     const userInfo = await fetchUserInfo();
     userStore.setUserInfo(userInfo);
     accessStore.setAccessCodes(extractAccessCodes(userInfo as any));
+    await setDesktopAuthenticated(true);
 
     if (accessStore.loginExpired) {
       accessStore.setLoginExpired(false);
+    } else if (onSuccess) {
+      await onSuccess();
     } else {
       // 先进入 defaultHomePath，由 access 守卫生成菜单后改写为角色第一个菜单
-      onSuccess
-        ? await onSuccess?.()
-        : await router.push(
-            userInfo.homePath || preferences.app.defaultHomePath,
-          );
+      await router.push(userInfo.homePath || preferences.app.defaultHomePath);
     }
 
     if (userInfo?.realName) {
@@ -137,6 +142,7 @@ export const useAuthStore = defineStore('auth', () => {
     saveLoginUserType('ADMIN');
     resetAllStores();
     accessStore.setLoginExpired(false);
+    await setDesktopAuthenticated(false);
   }
 
   async function logout(redirect: boolean = true) {

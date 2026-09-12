@@ -5,6 +5,8 @@
  *
  * @author yanch
  */
+import type { ComponentPublicInstance } from 'vue';
+
 import {
   computed,
   nextTick,
@@ -232,8 +234,9 @@ function clearSelection() {
   currentIndex.value = -1;
 }
 
-function setInputRef(el: Element | null) {
-  inputRef.value = el ? (el as HTMLInputElement) : null;
+/** 接收 Vue 模板 ref 的完整联合类型，仅保留原生输入框实例。 */
+function setInputRef(el: ComponentPublicInstance | Element | null) {
+  inputRef.value = el instanceof HTMLInputElement ? el : null;
 }
 
 let resizeStartX = 0;

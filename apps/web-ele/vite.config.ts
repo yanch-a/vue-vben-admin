@@ -11,11 +11,20 @@ const require = createRequire(import.meta.url);
 const logicflowCoreEntry = require.resolve('@logicflow/core');
 
 export default defineConfig(async ({ command }) => {
+  // 桌面端从自定义 lemon:// 协议加载静态文件，资源路径必须保持相对；
+  // Web 生产包继续部署在 /lmdb/view/，两套构建互不影响。
+  const isDesktopBuild = process.env.VITE_DESKTOP_BUILD === 'true';
+
   return {
     application: {},
     vite: {
       // 仅生产打包挂 /lmdb/view/；开发仍用 /
-      base: command === 'build' ? '/lmdb/view/' : '/',
+      base:
+        command === 'build'
+          ? isDesktopBuild
+            ? './'
+            : '/lmdb/view/'
+          : '/',
       plugins: [
         // 注意：不要使用 viteCssLayerPlugin 包装 element-plus。
         // 生产构建下异步 CSS chunk 会抢先声明 @layer el，层序变成 el < base，

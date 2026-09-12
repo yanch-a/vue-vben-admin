@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self'; form-action 'none'"
+    />
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1" />
+    <title>选择 Lemon 服务端</title>
+    <link rel="stylesheet" href="./style.css" />
+  </head>
+  <body>
+    <main class="page-shell">
+      <header class="hero">
+        <div class="hero__icon" aria-hidden="true">L</div>
+        <div>
+          <p class="eyebrow">LEMON DB CLIENT</p>
+          <h1>选择服务端</h1>
+          <p class="subtitle">选择已保存的环境，或配置一个新的 Lemon 服务。</p>
+        </div>
+      </header>
+
+      <form id="server-form" class="panel" novalidate>
+        <label for="saved-server">已保存的服务端</label>
+        <div class="row">
+          <select id="saved-server" aria-describedby="saved-server-help"></select>
+          <button id="delete-server" class="button button--danger" type="button">删除</button>
+        </div>
+        <p id="saved-server-help" class="help">可以保存多个开发、测试或生产环境。</p>
+
+        <label for="server-name">配置名称</label>
+        <input
+          id="server-name"
+          autocomplete="off"
+          maxlength="80"
+          placeholder="例如：生产环境"
+          type="text"
+        />
+
+        <label for="server-url">服务端 API 根地址</label>
+        <input
+          id="server-url"
+          autocomplete="url"
+          placeholder="http://localhost:7806/lmdb"
+          required
+          spellcheck="false"
+          type="url"
+        />
+        <p class="help">
+          请输入完整的 http(s) 地址，并包含后台 context-path，例如
+          <code>https://example.com/lmdb</code>。
+        </p>
+
+        <div id="status" class="status" role="status" aria-live="polite"></div>
+
+        <footer class="actions">
+          <button id="test-server" class="button button--secondary" type="button">检测连接</button>
+          <button id="close-window" class="button button--ghost" type="button">取消</button>
+          <button id="connect-server" class="button button--primary" type="submit">
+            保存并连接
+          </button>
+        </footer>
+      </form>
+
+      <p class="privacy-note">配置仅保存在本机，不会上传到其他服务。</p>
+    </main>
+    <script src="./renderer.js"></script>
+  </body>
+</html>

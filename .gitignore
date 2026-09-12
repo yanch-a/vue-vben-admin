@@ -5,6 +5,7 @@ dist-ssr
 dist.zip
 dist.tar
 dist.war
+apps/web-ele/release*/
 .nitro
 .output
 *-dist.zip

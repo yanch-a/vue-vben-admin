@@ -12,6 +12,7 @@ import { ElMessage } from 'element-plus';
 
 import { listConversations, deleteConversation, type AgentScene } from '#/api/ai/agent';
 import { listSelectableModels } from '#/api/ai/model';
+import { getDesktopScopedStorageKey } from '#/desktop/runtime';
 
 import { useAiChat } from '../../composables/useAiChat';
 import { useAiWindowState } from '../../composables/useAiWindowState';
@@ -44,7 +45,8 @@ const isMaskedMode = computed(
   () => Number(props.aiAllowSampleData) !== 1,
 );
 
-const MODEL_KEY = 'visual-client-ai-model-id';
+// 模型 ID 来自当前服务端，桌面端按服务端地址隔离。
+const MODEL_KEY = getDesktopScopedStorageKey('visual-client-ai-model-id');
 const dirs = ['n', 's', 'e', 'w', 'ne', 'nw', 'se', 'sw'] as const;
 const { rect, onDragStart, onResizeStart } = useFloatingWindow('visual-client-ai-win-rect', {
   x: 80,
