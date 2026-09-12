@@ -456,6 +456,18 @@ export function listDbConfigUsers(dbConfigId: number | string) {
   })
 }
 
+/** 检索可加入数据库授权的会员用户 */
+export function searchDbConfigUserCandidates(
+  dbConfigId: number | string,
+  params: { groupId?: number | string; keyword?: string },
+) {
+  return request({
+    url: dbConfigUserUrl + 'candidates/' + dbConfigId,
+    method: 'get',
+    params,
+  })
+}
+
 /** 全量替换授权 */
 export function replaceDbConfigUsers(data: {
   dbConfigId: number | string

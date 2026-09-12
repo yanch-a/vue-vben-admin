@@ -6,7 +6,7 @@
   import { defineComponent, inject, onMounted, reactive, ref } from 'vue'
   import { useRouter } from 'vue-router'
 
-  import { getMemberUser, searchMemberUser } from '@/api/member/memberUser'
+  import { getMemberUser } from '@/api/member/memberUser'
   import { testConnection } from '@/api/visual/database'
   import {
     deleteDbConfig,
@@ -16,15 +16,15 @@
     getVqDict,
     listDbConfigUsers,
     listMemberUserGroups,
-    listMemberUsersByGroup,
     replaceDbConfigUsers,
+    searchDbConfigUserCandidates,
   } from '@/api/visual/vq'
   import { Plus, Search } from '@element-plus/icons-vue'
   import { ElMessage, ElMessageBox } from 'element-plus'
 
-  import { visualClientConfig } from '../client/config'
-  import { setPendingSavedQueryOpen } from '../client/composables/usePendingSavedQuery'
   import { useConnectionStore } from '../client/composables/useConnectionStore'
+  import { setPendingSavedQueryOpen } from '../client/composables/usePendingSavedQuery'
+  import { visualClientConfig } from '../client/config'
   import { resolveDbType } from '../client/dialect/dbTypes'
 
   export default defineComponent({
@@ -109,7 +109,8 @@
       const authDbName = ref('')
       const memberGroups = ref([])
       const selectedGroupId = ref(null)
-      const groupUsers = ref([])
+      const candidateUsers = ref([])
+      const candidateLoading = ref(false)
       /** { memberUserId, userName, realName, canUse, canWriteData, canWriteSchema, canEditCanvas } */
       const grants = ref([])
       const searchKeyword = ref('')
@@ -318,7 +319,7 @@
         authDbName.value = row.dbName || ''
         authVisible.value = true
         selectedGroupId.value = null
-        groupUsers.value = []
+        candidateUsers.value = []
         searchKeyword.value = ''
         try {
           const [{ data: groups }, { data: existing }] = await Promise.all([
@@ -361,25 +362,40 @@
         )
       }
 
-      const onSelectGroup = async (groupId) => {
-        selectedGroupId.value = groupId
-        if (!groupId) {
-          groupUsers.value = []
-          return
-        }
+      const isGranted = (user) => {
+        const id = user?.id || user?.memberUserId
+        return Boolean(id) && grants.value.some(
+          (g) => String(g.memberUserId) === String(id),
+        )
+      }
+
+      const searchUsers = async () => {
+        candidateLoading.value = true
         try {
-          const { data } = await listMemberUsersByGroup(groupId)
-          groupUsers.value = data || []
+          const keyword = (searchKeyword.value || '').trim()
+          const res = await searchDbConfigUserCandidates(authDbConfigId.value, {
+            keyword: keyword || undefined,
+            groupId: selectedGroupId.value || undefined,
+          })
+          const list = res?.data || res?.list || []
+          candidateUsers.value = Array.isArray(list)
+            ? list.filter((user) => user?.id || user?.memberUserId)
+            : []
+          if (!candidateUsers.value.length) ElMessage.info('没有找到匹配的用户')
         } catch (e) {
           console.error(e)
-          groupUsers.value = []
+          candidateUsers.value = []
+          ElMessage.error('搜索用户失败')
+        } finally {
+          candidateLoading.value = false
         }
       }
 
-      const upsertGrant = (user, defaults = {}) => {
+      const onSelectGroup = () => searchUsers()
+
+      const addGrant = (user, defaults = {}) => {
         const id = user.id || user.memberUserId
-        if (!id) return
-        const idx = grants.value.findIndex((g) => String(g.memberUserId) === String(id))
+        if (!id || isGranted(user)) return false
         const row = {
           memberUserId: id,
           userName: user.userName || user.username || String(id),
@@ -389,49 +405,13 @@
           canWriteData: defaults.canWriteData != null ? defaults.canWriteData : 0,
           canWriteSchema: defaults.canWriteSchema != null ? defaults.canWriteSchema : 0,
         }
-        if (idx >= 0) {
-          grants.value[idx] = { ...grants.value[idx], ...row }
-        } else {
-          grants.value.push(row)
-        }
-      }
-
-      const addGroupAllUsers = () => {
-        if (!groupUsers.value.length) {
-          ElMessage.warning('该分组下没有会员，请先在会员管理中分配分组')
-          return
-        }
-        for (const u of groupUsers.value) {
-          upsertGrant(u)
-        }
-        ElMessage.success(`已勾选本组 ${groupUsers.value.length} 名用户`)
+        grants.value.push(row)
+        return true
       }
 
       const addSingleUser = (user) => {
-        upsertGrant(user)
-      }
-
-      const searchAndAddUser = async () => {
-        const kw = (searchKeyword.value || '').trim()
-        if (!kw) {
-          ElMessage.warning('请输入用户名 / 姓名 / 手机号')
-          return
-        }
-        try {
-          const res = await searchMemberUser({ userName: kw })
-          const list = res?.data || res?.list || []
-          if (!list.length) {
-            ElMessage.warning('未找到用户')
-            return
-          }
-          for (const u of list) {
-            upsertGrant(u)
-          }
-          ElMessage.success(`已加入 ${list.length} 名用户`)
-        } catch (e) {
-          console.error(e)
-          ElMessage.error('搜索用户失败')
-        }
+        if (!addGrant(user)) return ElMessage.info('该用户已在授权列表中')
+        ElMessage.success(`已加入 ${user.realName || user.userName || '用户'}`)
       }
 
       const removeGrant = (memberUserId) => {
@@ -451,9 +431,12 @@
         if (!authDbConfigId.value) return
         authSaving.value = true
         try {
+          const uniqueGrants = Array.from(
+            new Map(grants.value.map((g) => [String(g.memberUserId), g])).values(),
+          )
           await replaceDbConfigUsers({
             dbConfigId: authDbConfigId.value,
-            grants: grants.value.map((g) => ({
+            grants: uniqueGrants.map((g) => ({
               memberUserId: g.memberUserId,
               canUse: g.canUse ? 1 : 0,
               canEditCanvas: g.canEditCanvas ? 1 : 0,
@@ -533,13 +516,14 @@
         authDbName,
         memberGroups,
         selectedGroupId,
-        groupUsers,
+        candidateUsers,
+        candidateLoading,
         grants,
         searchKeyword,
         onSelectGroup,
-        addGroupAllUsers,
         addSingleUser,
-        searchAndAddUser,
+        isGranted,
+        searchUsers,
         removeGrant,
         onWriteFlagChange,
         saveAuth,
@@ -632,7 +616,7 @@
               class="db-card__status"
               :class="row.connectionStatus === 1 ? 'is-online' : 'is-offline'"
             >
-              <i class="db-card__dot" />
+              <i class="db-card__dot"></i>
               {{ row.connectionStatus === 1 ? '在线' : '离线' }}
             </span>
             <el-tag
@@ -886,64 +870,56 @@
     >
       <div class="auth-layout">
         <div class="auth-left">
-          <div class="auth-section-title">会员组</div>
-          <el-select
-            v-model="selectedGroupId"
-            placeholder="选择会员组"
-            filterable
-            clearable
-            style="width: 100%; margin-bottom: 8px"
-            @change="onSelectGroup"
-          >
-            <el-option
-              v-for="g in memberGroups"
-              :key="g.id"
-              :label="g.groupName"
-              :value="g.id"
+          <div class="auth-section-title">查找用户</div>
+          <div class="auth-user-tools">
+            <el-input
+              v-model="searchKeyword"
+              placeholder="用户名 / 姓名 / 手机号"
+              clearable
+              @clear="searchUsers"
+              @keyup.enter="searchUsers"
             />
-          </el-select>
-          <el-button
-            type="primary"
-            size="small"
-            :disabled="!groupUsers.length"
-            @click="addGroupAllUsers"
-          >
-            勾选本组全部用户（{{ groupUsers.length }}）
-          </el-button>
+            <el-select
+              v-model="selectedGroupId"
+              placeholder="全部部门"
+              filterable
+              clearable
+              @change="onSelectGroup"
+            >
+              <el-option
+                v-for="g in memberGroups"
+                :key="g.id"
+                :label="g.groupName"
+                :value="g.id"
+              />
+            </el-select>
+            <el-button type="primary" :icon="Search" :loading="candidateLoading" @click="searchUsers">
+              搜索
+            </el-button>
+          </div>
           <el-table
-            v-if="groupUsers.length"
-            :data="groupUsers"
+            v-loading="candidateLoading"
+            :data="candidateUsers"
             border
             size="small"
-            max-height="220"
-            style="margin-top: 8px"
+            height="330"
+            empty-text="输入条件搜索用户"
           >
             <el-table-column prop="userName" label="用户名" min-width="90" />
             <el-table-column prop="realName" label="姓名" min-width="80" />
-            <el-table-column label="" width="56" align="center">
+            <el-table-column label="操作" width="70" align="center">
               <template #default="{ row }">
-                <el-button link type="primary" @click="addSingleUser(row)">加入</el-button>
+                <el-button
+                  link
+                  type="primary"
+                  :disabled="isGranted(row)"
+                  @click="addSingleUser(row)"
+                >
+                  {{ isGranted(row) ? '已加入' : '加入' }}
+                </el-button>
               </template>
             </el-table-column>
           </el-table>
-          <el-empty
-            v-else-if="selectedGroupId"
-            description="该组暂无会员"
-            :image-size="48"
-          />
-          <el-divider />
-          <div class="auth-section-title">搜索用户加入</div>
-          <el-input
-            v-model="searchKeyword"
-            placeholder="用户名 / 姓名 / 手机号"
-            size="small"
-            clearable
-            @keyup.enter="searchAndAddUser"
-          >
-            <template #append>
-              <el-button @click="searchAndAddUser">搜索</el-button>
-            </template>
-          </el-input>
         </div>
         <div class="auth-right">
           <div class="auth-section-title">
@@ -1307,8 +1283,15 @@
   }
 
   .auth-left {
-    width: 280px;
+    width: 360px;
     flex-shrink: 0;
+  }
+
+  .auth-user-tools {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 120px auto;
+    gap: 8px;
+    margin-bottom: 10px;
   }
 
   .auth-right {
@@ -1326,5 +1309,15 @@
     font-size: 12px;
     font-weight: 400;
     color: var(--el-text-color-secondary);
+  }
+
+  @media (max-width: 900px) {
+    .auth-layout {
+      flex-direction: column;
+    }
+
+    .auth-left {
+      width: 100%;
+    }
   }
 </style>

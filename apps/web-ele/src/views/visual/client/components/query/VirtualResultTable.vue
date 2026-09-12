@@ -18,7 +18,8 @@ defineOptions({ name: 'VirtualResultTable' });
 
 const ROW_HEIGHT = 32;
 const CHECK_WIDTH = 42;
-const COL_MIN_WIDTH = 120;
+const COL_MIN_WIDTH = 80;
+const COL_DEFAULT_WIDTH = 120;
 const OVERSCAN = 8;
 
 const props = defineProps<{
@@ -56,18 +57,42 @@ const selected = ref<Set<number>>(new Set());
 const rowCount = computed(() => props.rows?.length || 0);
 const colCount = computed(() => props.columns?.length || 0);
 
-const tableMinWidth = computed(
-  () => CHECK_WIDTH + colCount.value * COL_MIN_WIDTH,
-);
-const tableWidth = computed(() =>
-  Math.max(viewportWidth.value, tableMinWidth.value),
-);
-const dataColWidth = computed(() => {
-  if (colCount.value <= 0) return COL_MIN_WIDTH;
-  return Math.max(
-    COL_MIN_WIDTH,
-    Math.floor((tableWidth.value - CHECK_WIDTH) / colCount.value),
+/**
+ * 每列宽度。拖动只改这一份数字，虚拟表只重绘可视行，
+ * 和结果总行数无关，所以不按 1000 行关掉调列宽。
+ */
+const colWidths = ref<number[]>([]);
+/** 用户拖过列后不再随容器均分 */
+const userResized = ref(false);
+const resizingIndex = ref(-1);
+
+function defaultColWidth() {
+  const n = colCount.value;
+  if (n <= 0) return COL_DEFAULT_WIDTH;
+  const available = Math.max(
+    viewportWidth.value - CHECK_WIDTH,
+    n * COL_DEFAULT_WIDTH,
   );
+  return Math.max(COL_DEFAULT_WIDTH, Math.floor(available / n));
+}
+
+function initColWidths() {
+  const n = colCount.value;
+  if (n <= 0) {
+    colWidths.value = [];
+    return;
+  }
+  const w = defaultColWidth();
+  colWidths.value = Array.from({ length: n }, () => w);
+}
+
+function widthAt(index: number) {
+  return colWidths.value[index] || COL_DEFAULT_WIDTH;
+}
+
+const tableWidth = computed(() => {
+  const sum = colWidths.value.reduce((s, w) => s + w, 0);
+  return CHECK_WIDTH + (sum || colCount.value * COL_DEFAULT_WIDTH);
 });
 
 const bodyHeight = computed(() => rowCount.value * ROW_HEIGHT);
@@ -211,20 +236,75 @@ function setInputRef(el: Element | null) {
   inputRef.value = el ? (el as HTMLInputElement) : null;
 }
 
+let resizeStartX = 0;
+let resizeStartW = 0;
+let resizeRaf = 0;
+
+function onResizeStart(index: number, event: MouseEvent) {
+  event.preventDefault();
+  event.stopPropagation();
+  resizingIndex.value = index;
+  resizeStartX = event.clientX;
+  resizeStartW = widthAt(index);
+  document.body.classList.add('vrt-col-resizing');
+  window.addEventListener('mousemove', onResizeMove);
+  window.addEventListener('mouseup', onResizeEnd);
+}
+
+function onResizeMove(event: MouseEvent) {
+  if (resizingIndex.value < 0) return;
+  const index = resizingIndex.value;
+  const next = Math.max(
+    COL_MIN_WIDTH,
+    resizeStartW + (event.clientX - resizeStartX),
+  );
+  if (resizeRaf) cancelAnimationFrame(resizeRaf);
+  resizeRaf = requestAnimationFrame(() => {
+    const list = colWidths.value.slice();
+    list[index] = next;
+    colWidths.value = list;
+    userResized.value = true;
+  });
+}
+
+function onResizeEnd() {
+  resizingIndex.value = -1;
+  document.body.classList.remove('vrt-col-resizing');
+  window.removeEventListener('mousemove', onResizeMove);
+  window.removeEventListener('mouseup', onResizeEnd);
+  if (resizeRaf) {
+    cancelAnimationFrame(resizeRaf);
+    resizeRaf = 0;
+  }
+}
+
 let ro: ResizeObserver | null = null;
 
 onMounted(() => {
   measure();
+  initColWidths();
   if (scrollRef.value && typeof ResizeObserver !== 'undefined') {
-    ro = new ResizeObserver(() => measure());
+    ro = new ResizeObserver(() => {
+      measure();
+      if (!userResized.value) initColWidths();
+    });
     ro.observe(scrollRef.value);
   }
 });
 
 onBeforeUnmount(() => {
+  onResizeEnd();
   ro?.disconnect();
   ro = null;
 });
+
+watch(
+  () => props.columns.join('\0'),
+  () => {
+    userResized.value = false;
+    initColWidths();
+  },
+);
 
 watch(
   () => props.editingCell,
@@ -265,13 +345,19 @@ defineExpose({
           />
         </div>
         <div
-          v-for="col in columns"
+          v-for="(col, i) in columns"
           :key="col"
           class="vrt-th"
-          :style="{ width: dataColWidth + 'px' }"
+          :class="{ 'is-resizing': resizingIndex === i }"
+          :style="{ width: widthAt(i) + 'px' }"
           :title="col"
         >
           {{ col }}
+          <span
+            class="vrt-resizer"
+            title="拖动调整列宽"
+            @mousedown="onResizeStart(i, $event)"
+          />
         </div>
       </div>
       <div
@@ -315,7 +401,7 @@ defineExpose({
               />
             </div>
             <div
-              v-for="col in columns"
+              v-for="(col, i) in columns"
               :key="col"
               class="vrt-td"
               :class="{
@@ -323,7 +409,7 @@ defineExpose({
                 'is-editable': editMode,
                 'is-editing': isEditing(item.index, col),
               }"
-              :style="{ width: dataColWidth + 'px' }"
+              :style="{ width: widthAt(i) + 'px' }"
               :title="formatCell(item.row[col])"
               @click.stop="onCellClick(item.index, col)"
             >
@@ -398,10 +484,27 @@ defineExpose({
   padding: 0 8px;
 }
 .vrt-th {
+  position: relative;
   font-weight: 600;
   color: var(--el-text-color-primary);
   height: 32px;
   line-height: 32px;
+}
+.vrt-th.is-resizing {
+  background: var(--el-color-primary-light-9);
+}
+.vrt-resizer {
+  position: absolute;
+  top: 0;
+  right: -4px;
+  z-index: 3;
+  width: 8px;
+  height: 100%;
+  cursor: col-resize;
+}
+.vrt-resizer:hover,
+.vrt-th.is-resizing .vrt-resizer {
+  background: var(--el-color-primary);
 }
 .vrt-check {
   position: sticky;
@@ -476,5 +579,17 @@ defineExpose({
   padding: 16px;
   color: var(--el-text-color-secondary);
   font-size: 13px;
+}
+</style>
+
+<style>
+/* 拖列宽时全局改光标，避免滑出表头后变成文本选择 */
+body.vrt-col-resizing {
+  cursor: col-resize !important;
+  user-select: none !important;
+}
+body.vrt-col-resizing * {
+  cursor: col-resize !important;
+  user-select: none !important;
 }
 </style>
