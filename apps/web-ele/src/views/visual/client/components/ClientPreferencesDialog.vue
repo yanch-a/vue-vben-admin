@@ -35,13 +35,13 @@ const {
 <template>
   <ElDialog
     v-model="visible"
-    title="偏好设置"
+    :title="$tr('偏好设置')"
     width="560px"
     destroy-on-close
     append-to-body
   >
     <ElForm label-width="130px">
-      <ElFormItem label="查询页签位置">
+      <ElFormItem :label="$tr('查询页签位置')">
         <ElRadioGroup
           :model-value="props.queryTabsPlacement"
           @update:model-value="
@@ -52,11 +52,11 @@ const {
               )
           "
         >
-          <ElRadio value="top">上方（默认）</ElRadio>
-          <ElRadio value="left">左侧竖排</ElRadio>
+          <ElRadio value="top">{{ $tr('上方（默认）') }}</ElRadio>
+          <ElRadio value="left">{{ $tr('左侧竖排') }}</ElRadio>
         </ElRadioGroup>
       </ElFormItem>
-      <ElFormItem label="SQL 编辑器字号">
+      <ElFormItem :label="$tr('SQL 编辑器字号')">
         <div class="font-size-row">
           <ElSlider
             v-model="sqlEditorFontSize"
@@ -75,9 +75,9 @@ const {
           />
           <span class="font-size-unit">px</span>
         </div>
-        <div class="font-size-hint">仅作用于查询区 Monaco SQL 编辑器</div>
+        <div class="font-size-hint">{{ $tr('仅作用于查询区 Monaco SQL 编辑器') }}</div>
       </ElFormItem>
-      <ElFormItem label="界面字号">
+      <ElFormItem :label="$tr('界面字号')">
         <div class="font-size-row">
           <ElSlider
             v-model="uiFontSize"
@@ -97,10 +97,10 @@ const {
           <span class="font-size-unit">px</span>
         </div>
         <div class="font-size-hint">
-          工具栏、对象树、页签、结果区、弹窗等；不含右上角框架「全局字号」
+          {{ $tr('工具栏、对象树、页签、结果区、弹窗等；不含右上角框架「全局字号」') }}
         </div>
       </ElFormItem>
-      <ElFormItem label="AI 对话字号">
+      <ElFormItem :label="$tr('AI 对话字号')">
         <div class="font-size-row">
           <ElSlider
             v-model="aiChatFontSize"
@@ -119,17 +119,17 @@ const {
           />
           <span class="font-size-unit">px</span>
         </div>
-        <div class="font-size-hint">AI 助手浮窗消息、输入区、SQL 卡片与任务栏</div>
+        <div class="font-size-hint">{{ $tr('AI 助手浮窗消息、输入区、SQL 卡片与任务栏') }}</div>
       </ElFormItem>
-      <ElFormItem label="对象树">
-        <ElCheckbox v-model="hideTableComments">隐藏表备注</ElCheckbox>
+      <ElFormItem :label="$tr('对象树')">
+        <ElCheckbox v-model="hideTableComments">{{ $tr('隐藏表备注') }}</ElCheckbox>
         <div class="font-size-hint">
-          默认显示「表名 (注释)」。勾选后左侧表列表只显示表名，不再带括号和备注
+          {{ $tr('默认显示「表名 (注释)」。勾选后左侧表列表只显示表名，不再带括号和备注') }}
         </div>
       </ElFormItem>
     </ElForm>
     <template #footer>
-      <ElButton type="primary" @click="visible = false">确定</ElButton>
+      <ElButton type="primary" @click="visible = false">{{ $tr('确定') }}</ElButton>
     </template>
   </ElDialog>
 </template>

@@ -113,19 +113,19 @@
     <el-form ref="formRef" label-width="80px" :model="form" :rules="rules">
       <el-row>
         <el-col :span="12">
-          <el-form-item label="登录名" prop="userName">
+          <el-form-item :label="$tr('登录名')" prop="userName">
             <el-input v-model.trim="form.userName" :disabled="isEdit" />
           </el-form-item>
         </el-col>
         <el-col v-if="!isEdit" :span="12">
-          <el-form-item label="密码" prop="password">
+          <el-form-item :label="$tr('密码')" prop="password">
             <el-input v-model.trim="form.password" type="password" />
           </el-form-item>
         </el-col>
       </el-row>
       <el-row>
         <el-col :span="12">
-          <el-form-item label="部门" prop="deptId">
+          <el-form-item :label="$tr('部门')" prop="deptId">
             <el-tree-select
               v-model="form.deptId"
               check-strictly
@@ -138,12 +138,12 @@
           </el-form-item>
         </el-col>
         <el-col :span="12">
-          <el-form-item label="角色" prop="roleIds">
+          <el-form-item :label="$tr('角色')" prop="roleIds">
             <el-select
               v-model="form.roleIds"
               filterable
               multiple
-              placeholder="请选择角色"
+              :placeholder="$tr('请选择角色')"
               style="width: 240px"
             >
               <el-option
@@ -158,12 +158,12 @@
       </el-row>
       <el-row>
         <el-col :span="12">
-          <el-form-item label="昵称" prop="nickName">
+          <el-form-item :label="$tr('昵称')" prop="nickName">
             <el-input v-model.trim="form.nickName" />
           </el-form-item>
         </el-col>
         <el-col :span="12">
-          <el-form-item label="用户类型" prop="userType">
+          <el-form-item :label="$tr('用户类型')" prop="userType">
             <el-select v-model="form.userType">
               <el-option
                 v-for="(key, value) in userTypes"
@@ -177,27 +177,27 @@
       </el-row>
       <el-row>
         <el-col :span="12">
-          <el-form-item label="手机号" prop="phonenumber">
+          <el-form-item :label="$tr('手机号')" prop="phonenumber">
             <el-input v-model.trim="form.phonenumber" />
           </el-form-item>
         </el-col>
         <el-col :span="12">
-          <el-form-item label="邮箱" prop="email">
+          <el-form-item :label="$tr('邮箱')" prop="email">
             <el-input v-model.trim="form.email" />
           </el-form-item>
         </el-col>
       </el-row>
       <el-row>
         <el-col :span="8">
-          <el-form-item label="用户状态" prop="status">
+          <el-form-item :label="$tr('用户状态')" prop="status">
             <el-switch v-model="form.status" :active-value="activeValue.active" :inactive-value="activeValue.inActive" />
           </el-form-item>
         </el-col>
       </el-row>
 </el-form>
     <template #footer>
-      <el-button @click="close">取 消</el-button>
-      <el-button type="primary" @click="save">确 定</el-button>
+      <el-button @click="close">{{ $tr('取 消') }}</el-button>
+      <el-button type="primary" @click="save">{{ $tr('确 定') }}</el-button>
     </template>
   </el-dialog>
 </template>

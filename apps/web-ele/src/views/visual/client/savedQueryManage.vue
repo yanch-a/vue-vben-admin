@@ -372,19 +372,19 @@ onBeforeUnmount(() => {
   <Page auto-content-height content-class="!p-0">
     <div class="sq-manage visual-client-scope">
       <div class="toolbar">
-        <ElButton size="small" @click="backToClient">返回客户端</ElButton>
+        <ElButton size="small" @click="backToClient">{{ $tr('返回客户端') }}</ElButton>
         <ElButton type="primary" size="small" @click="openCreateGroup(null)">
-          新建分组
+          {{ $tr('新建分组') }}
         </ElButton>
         <ElButton size="small" :loading="loading" @click="loadTree">
-          刷新
+          {{ $tr('刷新') }}
         </ElButton>
         <div class="search-box">
           <ElInput
             v-model="filterKeyword"
             clearable
             size="small"
-            placeholder="搜索查询名称 / 描述 / SQL 内容"
+            :placeholder="$tr('搜索查询名称 / 描述 / SQL 内容')"
             @keyup.enter="onSearch"
             @clear="clearSearch"
           />
@@ -394,7 +394,7 @@ onBeforeUnmount(() => {
             :loading="searching"
             @click="onSearch"
           >
-            搜索
+            {{ $tr('搜索') }}
           </ElButton>
         </div>
       </div>
@@ -402,14 +402,14 @@ onBeforeUnmount(() => {
       <!-- 搜索结果 -->
       <div v-if="searchMode" class="search-panel" v-loading="searching">
         <div class="panel-title">
-          搜索结果（{{ searchResults.length }}）
+          {{ $tr('搜索结果（') }}{{ searchResults.length }}）
           <ElButton link type="primary" size="small" @click="clearSearch">
-            返回树状管理
+            {{ $tr('返回树状管理') }}
           </ElButton>
         </div>
         <ElEmpty
           v-if="!searchResults.length && !searching"
-          description="无匹配查询"
+          :description="$tr('无匹配查询')"
         />
         <div
           v-for="row in searchResults"
@@ -448,7 +448,7 @@ onBeforeUnmount(() => {
                 })
               "
             >
-              打开编辑器
+              {{ $tr('打开编辑器') }}
             </ElButton>
             <ElButton
               type="danger"
@@ -456,7 +456,7 @@ onBeforeUnmount(() => {
               size="small"
               @click="onDeleteQuery(row.id, row.queryName)"
             >
-              删除
+              {{ $tr('删除') }}
             </ElButton>
           </div>
         </div>
@@ -466,7 +466,7 @@ onBeforeUnmount(() => {
       <div v-else class="tree-panel" v-loading="loading">
         <ElEmpty
           v-if="!treeData.length && !loading"
-          description="暂无已保存查询，可在 SQL 编辑器中 Ctrl+S 保存，或拖入 .sql/.txt"
+          :description="$tr('暂无已保存查询，可在 SQL 编辑器中 Ctrl+S 保存，或拖入 .sql/.txt')"
         />
         <ElTree
           v-else
@@ -482,7 +482,7 @@ onBeforeUnmount(() => {
                   class="tag"
                   :class="data.nodeType === 'group' ? 'tag-g' : 'tag-q'"
                 >
-                  {{ data.nodeType === 'group' ? '组' : 'SQL' }}
+                  {{ $tr(data.nodeType === 'group' ? '组' : 'SQL') }}
                 </span>
                 {{ data.label }}
                 <span
@@ -501,7 +501,7 @@ onBeforeUnmount(() => {
                     size="small"
                     @click="openCreateGroup(data.rawId)"
                   >
-                    子分组
+                    {{ $tr('子分组') }}
                   </ElButton>
                   <ElButton
                     v-if="String(data.rawId) !== '-1'"
@@ -509,7 +509,7 @@ onBeforeUnmount(() => {
                     size="small"
                     @click="openRenameGroup(data)"
                   >
-                    重命名
+                    {{ $tr('重命名') }}
                   </ElButton>
                   <ElButton
                     v-if="String(data.rawId) !== '-1'"
@@ -518,7 +518,7 @@ onBeforeUnmount(() => {
                     size="small"
                     @click="onDeleteGroup(data)"
                   >
-                    删除
+                    {{ $tr('删除') }}
                   </ElButton>
                 </template>
                 <template v-else>
@@ -536,10 +536,10 @@ onBeforeUnmount(() => {
                       })
                     "
                   >
-                    打开
+                    {{ $tr('打开') }}
                   </ElButton>
                   <ElButton link size="small" @click="openMoveQuery(data)">
-                    改分组
+                    {{ $tr('改分组') }}
                   </ElButton>
                   <ElButton
                     link
@@ -547,7 +547,7 @@ onBeforeUnmount(() => {
                     size="small"
                     @click="onDeleteQuery(data.rawId, data.label)"
                   >
-                    删除
+                    {{ $tr('删除') }}
                   </ElButton>
                 </template>
               </span>
@@ -564,37 +564,37 @@ onBeforeUnmount(() => {
       destroy-on-close
     >
       <ElForm label-width="80px" @submit.prevent>
-        <ElFormItem label="名称" required>
+        <ElFormItem :label="$tr('名称')" required>
           <ElInput
             v-model="groupDialog.groupName"
             maxlength="100"
             show-word-limit
-            placeholder="分组名称"
+            :placeholder="$tr('分组名称')"
             @keyup.enter="confirmGroupDialog"
           />
         </ElFormItem>
       </ElForm>
       <template #footer>
-        <ElButton @click="groupDialog.visible = false">取消</ElButton>
+        <ElButton @click="groupDialog.visible = false">{{ $tr('取消') }}</ElButton>
         <ElButton
           type="primary"
           :loading="groupDialog.saving"
           @click="confirmGroupDialog"
         >
-          确定
+          {{ $tr('确定') }}
         </ElButton>
       </template>
     </ElDialog>
 
     <ElDialog
       v-model="moveDialog.visible"
-      title="调整查询分组"
+      :title="$tr('调整查询分组')"
       width="420px"
       destroy-on-close
     >
-      <p class="move-tip">查询：{{ moveDialog.queryName }}</p>
+      <p class="move-tip">{{ $tr('查询：') }}{{ moveDialog.queryName }}</p>
       <ElForm label-width="80px">
-        <ElFormItem label="目标分组">
+        <ElFormItem :label="$tr('目标分组')">
           <ElSelect v-model="moveDialog.groupId" style="width: 100%">
             <ElOption
               v-for="g in moveDialog.groupOptions"
@@ -606,13 +606,13 @@ onBeforeUnmount(() => {
         </ElFormItem>
       </ElForm>
       <template #footer>
-        <ElButton @click="moveDialog.visible = false">取消</ElButton>
+        <ElButton @click="moveDialog.visible = false">{{ $tr('取消') }}</ElButton>
         <ElButton
           type="primary"
           :loading="moveDialog.saving"
           @click="confirmMoveQuery"
         >
-          确定
+          {{ $tr('确定') }}
         </ElButton>
       </template>
     </ElDialog>

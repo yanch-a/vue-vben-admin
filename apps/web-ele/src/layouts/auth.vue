@@ -52,15 +52,15 @@ const brandStyle = computed(() => {
         <ul class="lemon-auth__feats">
           <li>
             <span>01</span>
-            可视化拼查询，少写重复 SQL
+            {{ $tr('可视化拼查询，少写重复 SQL') }}
           </li>
           <li>
             <span>02</span>
-            AI 智能体读库、出数、写说明
+            {{ $tr('AI 智能体读库、出数、写说明') }}
           </li>
           <li>
             <span>03</span>
-            多数据源连接与权限一体管理
+            {{ $tr('多数据源连接与权限一体管理') }}
           </li>
         </ul>
       </div>

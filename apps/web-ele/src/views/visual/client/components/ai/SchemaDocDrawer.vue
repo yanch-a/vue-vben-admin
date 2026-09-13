@@ -546,10 +546,10 @@ const keyFields = computed(() => {
 </script>
 
 <template>
-  <ElDrawer v-model="visible" title="AI 结构文档" size="72%" class="schema-doc-drawer" append-to-body>
+  <ElDrawer v-model="visible" :title="$tr('AI 结构文档')" size="72%" class="schema-doc-drawer" append-to-body>
     <div class="scope">
-      <span class="scope-k">当前目标</span>
-      <strong>{{ connLabel || '未选连接' }}</strong>
+      <span class="scope-k">{{ $tr('当前目标') }}</span>
+      <strong>{{ $tr(connLabel || '未选连接') }}</strong>
       <span class="scope-sep">/</span>
       <ElSelect
         v-model="selectedInstance"
@@ -563,42 +563,42 @@ const keyFields = computed(() => {
       </ElSelect>
     </div>
     <div class="bar">
-      <ElSelect v-model="modelId" size="small" placeholder="模型" style="width: 180px">
+      <ElSelect v-model="modelId" size="small" :placeholder="$tr('模型')" style="width: 180px">
         <ElOptionGroup v-for="g in models" :key="g.providerName" :label="g.providerName">
           <ElOption v-for="m in g.models" :key="m.id" :label="m.displayName" :value="m.id" />
         </ElOptionGroup>
       </ElSelect>
-      <ElButton size="small" :loading="initLoading" @click="doInit">初始化表骨架</ElButton>
-      <ElButton size="small" type="primary" :loading="genLoading" @click="startGen('FULL')">AI 全量生成</ElButton>
-      <ElButton size="small" :loading="genLoading" @click="startGen('INCREMENTAL')">AI 增量更新</ElButton>
+      <ElButton size="small" :loading="initLoading" @click="doInit">{{ $tr('初始化表骨架') }}</ElButton>
+      <ElButton size="small" type="primary" :loading="genLoading" @click="startGen('FULL')">{{ $tr('AI 全量生成') }}</ElButton>
+      <ElButton size="small" :loading="genLoading" @click="startGen('INCREMENTAL')">{{ $tr('AI 增量更新') }}</ElButton>
       <ElButton
         size="small"
         :disabled="!current?.tableName"
         :loading="genLoading"
         @click="startGen('TABLES')"
       >
-        生成所选表
+        {{ $tr('生成所选表') }}
       </ElButton>
-      <ElButton size="small" @click="doDrift">检测结构变化</ElButton>
-      <ElButton size="small" type="success" @click="askAi()">问 AI</ElButton>
+      <ElButton size="small" @click="doDrift">{{ $tr('检测结构变化') }}</ElButton>
+      <ElButton size="small" type="success" @click="askAi()">{{ $tr('问 AI') }}</ElButton>
       <ElDropdown trigger="click" @command="onMoreCommand">
-        <ElButton size="small">更多</ElButton>
+        <ElButton size="small">{{ $tr('更多') }}</ElButton>
         <template #dropdown>
           <ElDropdownMenu>
-            <ElDropdownItem command="analyze">分析查询历史（规则抽 JOIN，不调模型）</ElDropdownItem>
-            <ElDropdownItem command="memory">智能体记忆</ElDropdownItem>
-            <ElDropdownItem command="digest">刷新记忆</ElDropdownItem>
-            <ElDropdownItem command="export">导出 Markdown</ElDropdownItem>
+            <ElDropdownItem command="analyze">{{ $tr('分析查询历史（规则抽 JOIN，不调模型）') }}</ElDropdownItem>
+            <ElDropdownItem command="memory">{{ $tr('智能体记忆') }}</ElDropdownItem>
+            <ElDropdownItem command="digest">{{ $tr('刷新记忆') }}</ElDropdownItem>
+            <ElDropdownItem command="export">{{ $tr('导出 Markdown') }}</ElDropdownItem>
           </ElDropdownMenu>
         </template>
       </ElDropdown>
     </div>
     <div class="body">
       <div class="left">
-        <ElInput v-model="tableKeyword" size="small" clearable placeholder="搜索表名" />
+        <ElInput v-model="tableKeyword" size="small" clearable :placeholder="$tr('搜索表名')" />
         <div v-if="drift && ((drift.newTables?.length || 0) + (drift.changedTables?.length || 0) + (drift.droppedTables?.length || 0) > 0)" class="drift-box">
           <div v-if="drift.newTables?.length" class="drift-row">
-            新表
+            {{ $tr('新表') }}
             <button
               v-for="n in drift.newTables"
               :key="'n-' + n"
@@ -610,7 +610,7 @@ const keyFields = computed(() => {
             </button>
           </div>
           <div v-if="drift.changedTables?.length" class="drift-row">
-            结构变化
+            {{ $tr('结构变化') }}
             <button
               v-for="n in drift.changedTables"
               :key="'c-' + n"
@@ -622,7 +622,7 @@ const keyFields = computed(() => {
             </button>
           </div>
           <div v-if="drift.droppedTables?.length" class="drift-row">
-            已删除
+            {{ $tr('已删除') }}
             <span v-for="n in drift.droppedTables" :key="'d-' + n" class="drift-dropped">{{ n }}</span>
           </div>
         </div>
@@ -636,16 +636,16 @@ const keyFields = computed(() => {
           @node-contextmenu="onTreeContext"
         />
         <div v-if="!(tree?.tables || []).length" class="left-empty">
-          该实例下没有表，或尚未打开连接
+          {{ $tr('该实例下没有表，或尚未打开连接') }}
         </div>
       </div>
       <div class="right">
         <template v-if="viewingMemory && memoryPair">
-          <h4>实例知识（所有用户共享，AI 自动维护）</h4>
+          <h4>{{ $tr('实例知识（所有用户共享，AI 自动维护）') }}</h4>
           <div class="md" v-html="instanceMemHtml" />
-          <h4>我的使用记忆（只属于你，越用越准）</h4>
+          <h4>{{ $tr('我的使用记忆（只属于你，越用越准）') }}</h4>
           <p class="hint">
-            常查表：{{ memoryPair.user?.focusTablesJson || '[]' }}
+            {{ $tr('常查表：') }}{{ memoryPair.user?.focusTablesJson || '[]' }}
           </p>
           <div class="md" v-html="userMemHtml" />
         </template>
@@ -656,44 +656,44 @@ const keyFields = computed(() => {
               size="small"
               @click="editing = !editing; editMd = current.contentMd || ''"
             >
-              {{ editing ? '预览' : '编辑' }}
+              {{ $tr(editing ? '预览' : '编辑') }}
             </ElButton>
-            <ElButton v-if="editing" size="small" type="primary" @click="doSave">保存</ElButton>
-            <ElButton v-if="current.userLocked === 1" size="small" @click="doUnlock">解锁</ElButton>
+            <ElButton v-if="editing" size="small" type="primary" @click="doSave">{{ $tr('保存') }}</ElButton>
+            <ElButton v-if="current.userLocked === 1" size="small" @click="doUnlock">{{ $tr('解锁') }}</ElButton>
             <ElButton size="small" type="primary" :loading="genLoading" @click="startGen('TABLES')">
-              生成此表
+              {{ $tr('生成此表') }}
             </ElButton>
-            <ElButton size="small" @click="askAi(current.tableName)">问 AI</ElButton>
+            <ElButton size="small" @click="askAi(current.tableName)">{{ $tr('问 AI') }}</ElButton>
           </div>
           <ElInput v-if="editing" v-model="editMd" type="textarea" :rows="18" />
           <div v-else class="md" v-html="previewHtml" />
           <template v-if="!current._uninitialized">
-          <h4>关键字段</h4>
+          <h4>{{ $tr('关键字段') }}</h4>
           <ElTable :data="keyFields" size="small">
-            <ElTableColumn prop="field" label="字段" />
-            <ElTableColumn prop="role" label="角色" />
-            <ElTableColumn prop="meaning" label="含义" />
+            <ElTableColumn prop="field" :label="$tr('字段')" />
+            <ElTableColumn prop="role" :label="$tr('角色')" />
+            <ElTableColumn prop="meaning" :label="$tr('含义')" />
           </ElTable>
-          <h4>关联</h4>
+          <h4>{{ $tr('关联') }}</h4>
           <ElTable :data="relations" size="small">
-            <ElTableColumn prop="table" label="表" />
+            <ElTableColumn prop="table" :label="$tr('表')" />
             <ElTableColumn prop="onSql" label="ON" />
-            <ElTableColumn prop="source" label="来源" />
+            <ElTableColumn prop="source" :label="$tr('来源')" />
           </ElTable>
-          <h4>版本</h4>
+          <h4>{{ $tr('版本') }}</h4>
           <div v-for="h in history" :key="h.id" class="hist">
             v{{ h.version }} {{ h.changeNote }} {{ h.createTime }}
-            <ElButton link size="small" @click="doRollback(h.version)">回滚</ElButton>
+            <ElButton link size="small" @click="doRollback(h.version)">{{ $tr('回滚') }}</ElButton>
           </div>
           </template>
         </template>
-        <ElEmpty v-else description="在左侧选择一张表，或查看智能体记忆" />
+        <ElEmpty v-else :description="$tr('在左侧选择一张表，或查看智能体记忆')" />
       </div>
     </div>
     <div v-if="tree" class="cov">
-      {{ currentScopeText }} · AI 已填写 {{ tree.aiFilledTables ?? 0 }}/{{ tree.totalTables || 0 }}
-      （{{ tree.coverage }}%）· 骨架 {{ tree.initializedTables ?? tree.documentedTables ?? 0 }}
-      · 结构变化 {{ tree.staleTables ?? 0 }}
+      {{ currentScopeText }} {{ $tr('· AI 已填写') }} {{ tree.aiFilledTables ?? 0 }}/{{ tree.totalTables || 0 }}
+      （{{ tree.coverage }}{{ $tr('%）· 骨架') }} {{ tree.initializedTables ?? tree.documentedTables ?? 0 }}
+      {{ $tr('· 结构变化') }} {{ tree.staleTables ?? 0 }}
     </div>
     <Teleport to="body">
       <div
@@ -702,11 +702,11 @@ const keyFields = computed(() => {
         :style="{ left: `${ctxMenu.x}px`, top: `${ctxMenu.y}px` }"
         @click.stop
       >
-        <div class="item" @click="ctxAction('view')">查看文档</div>
-        <div class="item" @click="ctxAction('gen')">AI 生成此表</div>
-        <div class="item" @click="ctxAction('ask')">问 AI</div>
-        <div class="item" @click="ctxAction('copy')">复制表名</div>
-        <div class="item" @click="ctxAction('sql')">在编辑器打开 SELECT</div>
+        <div class="item" @click="ctxAction('view')">{{ $tr('查看文档') }}</div>
+        <div class="item" @click="ctxAction('gen')">{{ $tr('AI 生成此表') }}</div>
+        <div class="item" @click="ctxAction('ask')">{{ $tr('问 AI') }}</div>
+        <div class="item" @click="ctxAction('copy')">{{ $tr('复制表名') }}</div>
+        <div class="item" @click="ctxAction('sql')">{{ $tr('在编辑器打开 SELECT') }}</div>
       </div>
     </Teleport>
   </ElDrawer>

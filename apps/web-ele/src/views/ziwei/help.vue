@@ -5,5 +5,5 @@ defineOptions({ name: 'HelpMe' });
 </script>
 
 <template>
-  <Fallback status="coming-soon" title="帮助" />
+  <Fallback status="coming-soon" :title="$tr('帮助')" />
 </template>

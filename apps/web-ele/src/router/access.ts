@@ -13,6 +13,7 @@ import { ElMessage } from 'element-plus';
 import { getAllMenusApi } from '#/api';
 import { BasicLayout, IFrameView } from '#/layouts';
 import { $t } from '#/locales';
+import { translateUiText } from '#/locales/ui-text';
 
 const forbiddenComponent = () => import('#/views/_core/fallback/forbidden.vue');
 const comingSoonComponent = '/_core/fallback/coming-soon';
@@ -257,6 +258,30 @@ function mergeHiddenPageRoutes(
 }
 
 /**
+ * 本地化动态菜单和隐藏路由标题。
+ *
+ * <p>新后台返回已翻译标题；该兼容层同时支持尚未升级的旧服务端，确保桌面端切换
+ * 服务地址后也不会因后台版本不同而退回中文。</p>
+ *
+ * @author yanch
+ */
+function localizeMenuTitles(
+  menus: RouteRecordStringComponent[],
+): RouteRecordStringComponent[] {
+  return mapTree(menus, (route) => {
+    const title = route.meta?.title;
+    if (typeof title !== 'string') return route;
+    return {
+      ...route,
+      meta: {
+        ...route.meta,
+        title: translateUiText(title),
+      },
+    };
+  });
+}
+
+/**
  * 可选：把旧菜单路径临时指到已有页面（渐进迁移）
  * key/value 均为 vben 风格：/xxx/yyy（无 .vue）
  */
@@ -379,11 +404,12 @@ async function generateAccess(options: GenerateMenuAndRoutesOptions) {
       const cleaned = sanitizeMenuTree(menus || []);
       const flattened = flattenPageDetailChildren(cleaned);
       const withHidden = mergeHiddenPageRoutes(flattened);
+      const localized = localizeMenuTitles(withHidden);
       // 再拷贝一层：convertRoutes / mapTree 不得污染本次构建结果之外的引用
       return applyMissingComponentFallback(
         structuredClone
-          ? structuredClone(withHidden)
-          : JSON.parse(JSON.stringify(withHidden)),
+          ? structuredClone(localized)
+          : JSON.parse(JSON.stringify(localized)),
         pageMap,
       );
     },

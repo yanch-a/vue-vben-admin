@@ -172,20 +172,20 @@ function setFormValues() {
 </script>
 <template>
   <Page
-    description="我们重新包装了CheckboxGroup、RadioGroup、Select，可以通过options属性传入选项属性数组以自动生成选项"
-    title="表单演示"
+    :description="$tr('我们重新包装了CheckboxGroup、RadioGroup、Select，可以通过options属性传入选项属性数组以自动生成选项')"
+    :title="$tr('表单演示')"
   >
-    <Drawer class="w-150" title="基础表单示例">
+    <Drawer class="w-150" :title="$tr('基础表单示例')">
       <Form />
     </Drawer>
     <ElCard>
       <template #header>
         <div class="flex items-center">
-          <span class="flex-auto">基础表单演示</span>
-          <ElButton type="primary" @click="setFormValues">设置表单值</ElButton>
+          <span class="flex-auto">{{ $tr('基础表单演示') }}</span>
+          <ElButton type="primary" @click="setFormValues">{{ $tr('设置表单值') }}</ElButton>
         </div>
       </template>
-      <ElButton type="primary" @click="drawerApi.open"> 打开抽屉 </ElButton>
+      <ElButton type="primary" @click="drawerApi.open"> {{ $tr('打开抽屉') }} </ElButton>
     </ElCard>
   </Page>
 </template>

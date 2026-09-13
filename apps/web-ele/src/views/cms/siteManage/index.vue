@@ -141,10 +141,10 @@ onMounted(fetchData);
 </script>
 
 <template>
-  <Page auto-content-height title="站点管理">
+  <Page auto-content-height :title="$tr('站点管理')">
     <template #extra>
-      <ElButton type="primary" @click="openEdit()">新增站点</ElButton>
-      <ElButton @click="fetchData">刷新</ElButton>
+      <ElButton type="primary" @click="openEdit()">{{ $tr('新增站点') }}</ElButton>
+      <ElButton @click="fetchData">{{ $tr('刷新') }}</ElButton>
     </template>
 
     <div class="mb-3 flex flex-wrap gap-2">
@@ -152,26 +152,26 @@ onMounted(fetchData);
         v-model="queryForm.siteName"
         clearable
         class="w-56"
-        placeholder="站点名称"
+        :placeholder="$tr('站点名称')"
         @keyup.enter="handleQuery"
       />
-      <ElButton type="primary" @click="handleQuery">查询</ElButton>
+      <ElButton type="primary" @click="handleQuery">{{ $tr('查询') }}</ElButton>
     </div>
 
     <ElTable v-loading="loading" :data="list" border>
-      <ElTableColumn type="index" label="序号" width="55" align="center" />
-      <ElTableColumn prop="id" label="站点ID" width="80" align="center" />
-      <ElTableColumn prop="siteName" label="站点名称" min-width="140" show-overflow-tooltip>
+      <ElTableColumn type="index" :label="$tr('序号')" width="55" align="center" />
+      <ElTableColumn prop="id" :label="$tr('站点ID')" width="80" align="center" />
+      <ElTableColumn prop="siteName" :label="$tr('站点名称')" min-width="140" show-overflow-tooltip>
         <template #default="{ row }">
           <ElButton link type="primary" @click="openEdit(row)">
             {{ row.siteName }}
           </ElButton>
         </template>
       </ElTableColumn>
-      <ElTableColumn prop="siteKey" label="站点标识" min-width="120" show-overflow-tooltip />
-      <ElTableColumn prop="sitePath" label="站点路径" min-width="120" show-overflow-tooltip />
-      <ElTableColumn prop="domain" label="域名" min-width="140" show-overflow-tooltip />
-      <ElTableColumn label="状态" width="100" align="center">
+      <ElTableColumn prop="siteKey" :label="$tr('站点标识')" min-width="120" show-overflow-tooltip />
+      <ElTableColumn prop="sitePath" :label="$tr('站点路径')" min-width="120" show-overflow-tooltip />
+      <ElTableColumn prop="domain" :label="$tr('域名')" min-width="140" show-overflow-tooltip />
+      <ElTableColumn :label="$tr('状态')" width="100" align="center">
         <template #default="{ row }">
           <ElSwitch
             v-model="row.siteStatus"
@@ -181,12 +181,12 @@ onMounted(fetchData);
           />
         </template>
       </ElTableColumn>
-      <ElTableColumn prop="description" label="描述" min-width="140" show-overflow-tooltip />
-      <ElTableColumn prop="createTime" label="创建时间" min-width="160" show-overflow-tooltip />
-      <ElTableColumn label="操作" width="140" fixed="right" align="center">
+      <ElTableColumn prop="description" :label="$tr('描述')" min-width="140" show-overflow-tooltip />
+      <ElTableColumn prop="createTime" :label="$tr('创建时间')" min-width="160" show-overflow-tooltip />
+      <ElTableColumn :label="$tr('操作')" width="140" fixed="right" align="center">
         <template #default="{ row }">
-          <ElButton link type="primary" @click="openEdit(row)">编辑</ElButton>
-          <ElButton link type="danger" @click="handleDelete(row)">删除</ElButton>
+          <ElButton link type="primary" @click="openEdit(row)">{{ $tr('编辑') }}</ElButton>
+          <ElButton link type="danger" @click="handleDelete(row)">{{ $tr('删除') }}</ElButton>
         </template>
       </ElTableColumn>
     </ElTable>
@@ -215,13 +215,13 @@ onMounted(fetchData);
       destroy-on-close
     >
       <ElForm label-width="100px">
-        <ElFormItem label="站点名称" required>
+        <ElFormItem :label="$tr('站点名称')" required>
           <ElInput v-model="form.siteName" maxlength="50" />
         </ElFormItem>
-        <ElFormItem label="站点编码">
+        <ElFormItem :label="$tr('站点编码')">
           <ElInput v-model="form.siteKey" maxlength="30" />
         </ElFormItem>
-        <ElFormItem label="域名">
+        <ElFormItem :label="$tr('域名')">
           <ElInput v-model="form.domain" maxlength="50">
             <template #prepend>
               <ElSelect v-model="form.protocol" style="width: 100px">
@@ -231,32 +231,32 @@ onMounted(fetchData);
             </template>
           </ElInput>
         </ElFormItem>
-        <ElFormItem label="站点路径">
+        <ElFormItem :label="$tr('站点路径')">
           <ElInput v-model="form.sitePath" maxlength="30" />
         </ElFormItem>
-        <ElFormItem label="域名别名">
+        <ElFormItem :label="$tr('域名别名')">
           <ElInput v-model="form.domainAlias" maxlength="150" />
         </ElFormItem>
-        <ElFormItem label="排序">
+        <ElFormItem :label="$tr('排序')">
           <ElInputNumber v-model="form.orderNum" :min="0" :max="999" />
         </ElFormItem>
-        <ElFormItem label="状态">
+        <ElFormItem :label="$tr('状态')">
           <ElSwitch v-model="form.siteStatus" :active-value="1" :inactive-value="0" />
         </ElFormItem>
-        <ElFormItem label="PC模板">
+        <ElFormItem :label="$tr('PC模板')">
           <ElInput v-model="form.pcTpl" maxlength="30" />
         </ElFormItem>
-        <ElFormItem label="移动模板">
+        <ElFormItem :label="$tr('移动模板')">
           <ElInput v-model="form.mobileTpl" maxlength="30" />
         </ElFormItem>
-        <ElFormItem label="描述">
+        <ElFormItem :label="$tr('描述')">
           <ElInput v-model="form.description" type="textarea" :rows="3" maxlength="500" />
         </ElFormItem>
       </ElForm>
       <template #footer>
-        <ElButton @click="dialogVisible = false">取消</ElButton>
+        <ElButton @click="dialogVisible = false">{{ $tr('取消') }}</ElButton>
         <ElButton type="primary" :loading="dialogLoading" @click="handleSave">
-          保存
+          {{ $tr('保存') }}
         </ElButton>
       </template>
     </ElDialog>

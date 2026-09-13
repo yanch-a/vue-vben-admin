@@ -109,14 +109,14 @@ function onSqlAction(
 
 <template>
   <div ref="box" class="msg-list" @scroll.passive="onListScroll">
-    <div v-if="!messages.length" class="empty">输入需求，让 AI 帮你写 SQL 或出图表</div>
+    <div v-if="!messages.length" class="empty">{{ $tr('输入需求，让 AI 帮你写 SQL 或出图表') }}</div>
     <div v-for="item in viewMessages" :key="item.msg.id" class="msg" :class="item.msg.role">
       <template v-if="item.msg.role === 'user'">
         <div class="bubble">{{ item.msg.text }}</div>
       </template>
       <template v-else>
         <ElCollapse v-if="item.msg.reasoning" class="reason">
-          <ElCollapseItem title="思考过程" name="r">
+          <ElCollapseItem :title="$tr('思考过程')" name="r">
             <pre>{{ item.msg.reasoning }}</pre>
           </ElCollapseItem>
         </ElCollapse>
@@ -162,14 +162,14 @@ function onSqlAction(
         />
         <div v-if="item.msg.error" class="err">{{ item.msg.error }}</div>
         <div v-if="item.msg.role === 'assistant'" class="msg-state">
-          <span v-if="!item.msg.done && running" class="st running">生成中</span>
-          <span v-else-if="item.msg.done && !item.msg.error" class="st done">已完成</span>
+          <span v-if="!item.msg.done && running" class="st running">{{ $tr('生成中') }}</span>
+          <span v-else-if="item.msg.done && !item.msg.error" class="st done">{{ $tr('已完成') }}</span>
         </div>
       </template>
     </div>
     <div v-if="running" class="typing">
       <span class="dot" />
-      正在生成，可上滚查看思考过程
+      {{ $tr('正在生成，可上滚查看思考过程') }}
     </div>
   </div>
 </template>

@@ -21,6 +21,17 @@ let activeServer = null;
 let mainWindow = null;
 let selectorWindow = null;
 let selectorAccepted = false;
+let desktopLocale = 'zh-CN';
+
+/** 将 Vue、Electron 或操作系统语言统一为桌面端支持的语言标识。 */
+function normalizeDesktopLocale(locale) {
+  return String(locale ?? '').toLowerCase().startsWith('en') ? 'en-US' : 'zh-CN';
+}
+
+/** 返回当前桌面语言对应的主进程文案。 */
+function desktopText(chinese, english) {
+  return desktopLocale === 'en-US' ? english : chinese;
+}
 
 /** 常用静态资源类型，确保自定义协议下脚本、样式和字体被正确识别。 */
 const MIME_TYPES = new Map([
@@ -67,7 +78,13 @@ function isApiPath(pathname) {
 async function proxyApiRequest(request) {
   if (!activeServer) {
     return Response.json(
-      { code: 503, msg: '尚未选择服务端，请从“服务端”菜单重新配置' },
+      {
+        code: 503,
+        msg: desktopText(
+          '尚未选择服务端，请从“服务端”菜单重新配置',
+          'No server is selected. Reconfigure it from the Server menu.',
+        ),
+      },
       { status: 503 },
     );
   }
@@ -90,7 +107,16 @@ async function proxyApiRequest(request) {
     });
   } catch (error) {
     console.error('[desktop] API 代理失败', error);
-    return Response.json({ code: 502, msg: `无法连接服务端：${error.message}` }, { status: 502 });
+    return Response.json(
+      {
+        code: 502,
+        msg: desktopText(
+          `无法连接服务端：${error.message}`,
+          `Unable to connect to the server: ${error.message}`,
+        ),
+      },
+      { status: 502 },
+    );
   }
 }
 
@@ -276,15 +302,29 @@ async function testServerConnection(rawUrl) {
       status: response.status,
       message:
         response.status < 500
-          ? `连接成功（HTTP ${response.status}）`
-          : `服务端返回 HTTP ${response.status}`,
+          ? desktopText(
+              `连接成功（HTTP ${response.status}）`,
+              `Connected successfully (HTTP ${response.status})`,
+            )
+          : desktopText(
+              `服务端返回 HTTP ${response.status}`,
+              `The server returned HTTP ${response.status}`,
+            ),
     };
   } catch (error) {
     return {
       ok: false,
       status: 0,
       message:
-        error.name === 'AbortError' ? '连接超时，请检查地址和网络' : `连接失败：${error.message}`,
+        error.name === 'AbortError'
+          ? desktopText(
+              '连接超时，请检查地址和网络',
+              'Connection timed out. Check the address and network.',
+            )
+          : desktopText(
+              `连接失败：${error.message}`,
+              `Connection failed: ${error.message}`,
+            ),
     };
   } finally {
     clearTimeout(timer);
@@ -318,7 +358,7 @@ async function showServerSelector() {
     parent: mainWindow ?? undefined,
     resizable: false,
     show: false,
-    title: '选择 Lemon 服务端',
+    title: desktopText('选择 Lemon 服务端', 'Select Lemon Server'),
     useContentSize: true,
     width: 720,
     webPreferences: {
@@ -346,7 +386,9 @@ async function showServerSelector() {
       }
     }
   });
-  await currentSelector.loadFile(configPage);
+  await currentSelector.loadFile(configPage, {
+    query: { locale: desktopLocale },
+  });
 
   // 自动化冒烟测试只验证页面和预加载桥接成功，不写入用户配置。
   if (isSmokeTest) {
@@ -380,6 +422,10 @@ function registerIpcHandlers() {
     );
     if (updated) activeServer = updated;
   });
+  ipcMain.handle('lemon-i18n:set-locale', (_event, locale) => {
+    desktopLocale = normalizeDesktopLocale(locale);
+    installApplicationMenu();
+  });
   ipcMain.handle('lemon-server:test', (_event, url) => testServerConnection(url));
   ipcMain.handle('lemon-server:remove', (_event, id) => configStore.remove(String(id ?? '')));
   ipcMain.handle('lemon-server:connect', async (_event, input) => {
@@ -399,19 +445,27 @@ function installApplicationMenu() {
   const template = [
     ...(process.platform === 'darwin'
       ? [{ role: 'appMenu' }]
-      : [{ label: '文件', submenu: [{ role: 'quit', label: '退出' }] }]),
+      : [
+          {
+            label: desktopText('文件', 'File'),
+            submenu: [{ role: 'quit', label: desktopText('退出', 'Quit') }],
+          },
+        ]),
     {
-      label: '服务端',
+      label: desktopText('服务端', 'Server'),
       submenu: [
         {
           accelerator: 'CmdOrCtrl+,',
           click: () => void showServerSelector(),
-          label: '选择或配置服务端…',
+          label: desktopText(
+            '选择或配置服务端…',
+            'Select or Configure Server…',
+          ),
         },
       ],
     },
-    { role: 'viewMenu', label: '视图' },
-    { role: 'windowMenu', label: '窗口' },
+    { role: 'viewMenu', label: desktopText('视图', 'View') },
+    { role: 'windowMenu', label: desktopText('窗口', 'Window') },
   ];
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
 }
@@ -438,6 +492,7 @@ if (!hasSingleInstanceLock) {
   });
 
   app.whenReady().then(async () => {
+    desktopLocale = normalizeDesktopLocale(app.getLocale());
     configStore = new ServerConfigStore(path.join(app.getPath('userData'), 'server-config.json'));
     registerApplicationProtocol();
     registerIpcHandlers();

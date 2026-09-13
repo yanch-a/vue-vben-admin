@@ -81,24 +81,24 @@ defineExpose({ setText });
     <div class="row">
       <ElRadioGroup v-model="scene" size="small">
         <ElRadioButton label="sql" value="sql">SQL</ElRadioButton>
-        <ElRadioButton label="chart" value="chart">图表</ElRadioButton>
-        <ElRadioButton label="free" value="free">自由</ElRadioButton>
-        <ElRadioButton label="schema_doc" value="schema_doc">文档</ElRadioButton>
+        <ElRadioButton label="chart" value="chart">{{ $tr('图表') }}</ElRadioButton>
+        <ElRadioButton label="free" value="free">{{ $tr('自由') }}</ElRadioButton>
+        <ElRadioButton label="schema_doc" value="schema_doc">{{ $tr('文档') }}</ElRadioButton>
       </ElRadioGroup>
-      <ElTag v-if="hasSelection" size="small" closable @close="emit('clearSelection')">已附带选中 SQL</ElTag>
-      <ElTag v-if="hasError" size="small" type="danger" closable @close="emit('clearError')">已附带报错</ElTag>
+      <ElTag v-if="hasSelection" size="small" closable @close="emit('clearSelection')">{{ $tr('已附带选中 SQL') }}</ElTag>
+      <ElTag v-if="hasError" size="small" type="danger" closable @close="emit('clearError')">{{ $tr('已附带报错') }}</ElTag>
     </div>
     <ElInput
       v-model="text"
       type="textarea"
       :rows="3"
-      placeholder="描述你的需求，Enter 发送，Shift+Enter 换行"
+      :placeholder="$tr('描述你的需求，Enter 发送，Shift+Enter 换行')"
       @keydown="onKey"
     />
     <div class="actions">
-      <span v-if="running" class="run-hint">运行中，可随时停止</span>
-      <ElButton v-if="running" size="small" type="danger" @click="emit('stop')">停止</ElButton>
-      <ElButton v-else size="small" type="primary" :disabled="!text.trim()" @click="doSend">发送</ElButton>
+      <span v-if="running" class="run-hint">{{ $tr('运行中，可随时停止') }}</span>
+      <ElButton v-if="running" size="small" type="danger" @click="emit('stop')">{{ $tr('停止') }}</ElButton>
+      <ElButton v-else size="small" type="primary" :disabled="!text.trim()" @click="doSend">{{ $tr('发送') }}</ElButton>
     </div>
   </div>
 </template>

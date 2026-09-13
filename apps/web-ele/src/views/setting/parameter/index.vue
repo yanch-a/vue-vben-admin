@@ -113,23 +113,23 @@
     <vab-query-form>
       <vab-query-form-left-panel :span="12">
         <el-button v-permissions="{ permission: ['Parameter:add'] }" :icon="Plus" type="primary" @click="handleEdit($event)">
-          新增
+          {{ $tr('新增') }}
         </el-button>
         <el-button v-permissions="{ permission: ['Parameter:batchDel'] }" :icon="Delete" type="danger" @click="handleDelete($event)">
-          批量删除
+          {{ $tr('批量删除') }}
         </el-button>
       </vab-query-form-left-panel>
       <vab-query-form-right-panel :span="12">
         <el-form inline :model="queryForm" @submit.prevent>
           <el-form-item>
-            <el-input v-model.trim="queryForm.title" clearable placeholder="请输入单行文本标题" />
+            <el-input v-model.trim="queryForm.title" clearable :placeholder="$tr('请输入单行文本标题')" />
           </el-form-item>
           <el-form-item>
-            <el-input v-model.trim="queryForm.code" clearable placeholder="请输入编码" />
+            <el-input v-model.trim="queryForm.code" clearable :placeholder="$tr('请输入编码')" />
           </el-form-item>
           <el-form-item>
             <el-button :icon="Search" type="primary" @click="queryData">
-              查询
+              {{ $tr('查询') }}
             </el-button>
           </el-form-item>
         </el-form>
@@ -137,33 +137,33 @@
     </vab-query-form>
     <el-table v-loading="listLoading" border :data="list" @selection-change="setSelectRows">
       <el-table-column align="center" type="selection" />
-      <el-table-column align="center" label="序号" width="55">
+      <el-table-column align="center" :label="$tr('序号')" width="55">
         <template #default="{ $index }">
           {{ $index + 1 }}
         </template>
       </el-table-column>
-      <el-table-column align="center" label="主键" prop="id" width="80" />
-      <el-table-column align="center" label="标题" prop="title" show-overflow-tooltip>
+      <el-table-column align="center" :label="$tr('主键')" prop="id" width="80" />
+      <el-table-column align="center" :label="$tr('标题')" prop="title" show-overflow-tooltip>
         <template #default="{ row }">
           <el-button key="primary" link type="primary" @click="handleEdit(row)">{{ row.title }}</el-button>
         </template>
       </el-table-column>
-      <el-table-column align="center" label="编码" prop="code" show-overflow-tooltip />
-      <el-table-column align="center" label="值1" prop="value1" show-overflow-tooltip />
-      <el-table-column align="center" label="排序" prop="orderNum" show-overflow-tooltip />
-      <el-table-column align="center" label="创建时间" prop="createTime" show-overflow-tooltip />
-      <el-table-column align="center" label="操作" width="200">
+      <el-table-column align="center" :label="$tr('编码')" prop="code" show-overflow-tooltip />
+      <el-table-column align="center" :label="$tr('值1')" prop="value1" show-overflow-tooltip />
+      <el-table-column align="center" :label="$tr('排序')" prop="orderNum" show-overflow-tooltip />
+      <el-table-column align="center" :label="$tr('创建时间')" prop="createTime" show-overflow-tooltip />
+      <el-table-column align="center" :label="$tr('操作')" width="200">
         <template #default="{ row }">
           <el-button v-permissions="{ permission: ['Parameter:edit'] }" circle :icon="EditIcon" text type="primary" @click="handleEdit(row)">
-            编辑
+            {{ $tr('编辑') }}
           </el-button>
           <el-button v-permissions="{ permission: ['Parameter:delete'] }" circle :icon="Delete" text type="danger" @click="handleDelete(row)">
-            删除
+            {{ $tr('删除') }}
           </el-button>
         </template>
       </el-table-column>
       <template #empty>
-        <el-empty class="vab-data-empty" description="暂无数据" />
+        <el-empty class="vab-data-empty" :description="$tr('暂无数据')" />
       </template>
     </el-table>
     <el-pagination

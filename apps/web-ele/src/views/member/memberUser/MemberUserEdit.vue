@@ -169,7 +169,7 @@
     <el-page-header :content="pageTitle" @back="goBack">
       <template #extra>
         <div class="flex items-center">
-          <el-button class="ml-2" type="primary" @click="save">保存</el-button>
+          <el-button class="ml-2" type="primary" @click="save">{{ $tr('保存') }}</el-button>
         </div>
       </template>
     </el-page-header>
@@ -183,51 +183,51 @@
     >
       <el-row :gutter="16">
         <el-col :span="12">
-          <el-form-item label="用户名" prop="userName">
+          <el-form-item :label="$tr('用户名')" prop="userName">
             <el-input
               v-model="form.userName"
               maxlength="30"
-              placeholder="请输入用户名"
+              :placeholder="$tr('请输入用户名')"
             />
           </el-form-item>
         </el-col>
         <el-col :span="12">
-          <el-form-item label="真实名称" prop="realName">
+          <el-form-item :label="$tr('真实名称')" prop="realName">
             <el-input
               v-model="form.realName"
               maxlength="30"
-              placeholder="请输入真实名称"
+              :placeholder="$tr('请输入真实名称')"
             />
           </el-form-item>
         </el-col>
         <el-col :span="12">
-          <el-form-item label="密码" prop="password">
+          <el-form-item :label="$tr('密码')" prop="password">
             <el-input
               v-model="form.password"
               type="password"
               maxlength="50"
-              placeholder="请输入密码"
+              :placeholder="$tr('请输入密码')"
               show-password
             />
           </el-form-item>
         </el-col>
         <el-col :span="12">
-          <el-form-item label="重复密码" prop="repassword">
+          <el-form-item :label="$tr('重复密码')" prop="repassword">
             <el-input
               v-model="form.repassword"
               type="password"
               maxlength="50"
-              placeholder="请再次输入密码"
+              :placeholder="$tr('请再次输入密码')"
               show-password
             />
           </el-form-item>
         </el-col>
         <el-col :span="12">
-          <el-form-item label="会员分组" prop="userGroup">
+          <el-form-item :label="$tr('会员分组')" prop="userGroup">
             <el-select
               v-model="form.userGroup"
               clearable
-              placeholder="请选择会员分组"
+              :placeholder="$tr('请选择会员分组')"
               style="width: 100%"
             >
               <el-option
@@ -240,11 +240,11 @@
           </el-form-item>
         </el-col>
         <el-col :span="12">
-          <el-form-item label="角色" prop="roleId">
+          <el-form-item :label="$tr('角色')" prop="roleId">
             <el-select
               v-model="form.roleId"
               filterable
-              placeholder="请选择角色（决定登录后菜单权限）"
+              :placeholder="$tr('请选择角色（决定登录后菜单权限）')"
               style="width: 100%"
             >
               <el-option
@@ -257,7 +257,7 @@
           </el-form-item>
         </el-col>
         <el-col :span="12">
-          <el-form-item label="状态" prop="userStatus">
+          <el-form-item :label="$tr('状态')" prop="userStatus">
             <el-radio-group v-model="form.userStatus">
               <el-radio
                 border

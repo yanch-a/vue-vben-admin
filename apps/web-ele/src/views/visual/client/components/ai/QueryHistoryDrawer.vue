@@ -115,29 +115,29 @@ function preview(sql: string) {
 </script>
 
 <template>
-  <ElDrawer v-model="visible" title="查询历史" size="60%">
+  <ElDrawer v-model="visible" :title="$tr('查询历史')" size="60%">
     <div class="bar">
-      <ElInput v-model="query.keyword" size="small" placeholder="关键字" clearable style="width: 180px" @change="load" />
-      <ElSelect v-model="query.status" size="small" clearable placeholder="状态" style="width: 100px" @change="load">
-        <ElOption :value="1" label="成功" />
-        <ElOption :value="0" label="失败" />
+      <ElInput v-model="query.keyword" size="small" :placeholder="$tr('关键字')" clearable style="width: 180px" @change="load" />
+      <ElSelect v-model="query.status" size="small" clearable :placeholder="$tr('状态')" style="width: 100px" @change="load">
+        <ElOption :value="1" :label="$tr('成功')" />
+        <ElOption :value="0" :label="$tr('失败')" />
       </ElSelect>
-      <ElSelect v-model="query.source" size="small" clearable placeholder="来源" style="width: 120px" @change="load">
-        <ElOption value="manual" label="手工" />
+      <ElSelect v-model="query.source" size="small" clearable :placeholder="$tr('来源')" style="width: 120px" @change="load">
+        <ElOption value="manual" :label="$tr('手工')" />
         <ElOption value="ai" label="AI" />
         <ElOption value="agent_tool" label="Agent" />
       </ElSelect>
-      <ElSelect v-model="modelId" size="small" placeholder="分析模型" style="width: 180px">
+      <ElSelect v-model="modelId" size="small" :placeholder="$tr('分析模型')" style="width: 180px">
         <ElOptionGroup v-for="g in models" :key="g.providerName" :label="g.providerName">
           <ElOption v-for="m in g.models" :key="m.id" :label="m.displayName" :value="m.id" />
         </ElOptionGroup>
       </ElSelect>
-      <ElButton size="small" :disabled="!selected.length" @click="onAnalyze">AI 分析关联关系</ElButton>
-      <ElButton size="small" type="danger" @click="onClear">清空</ElButton>
+      <ElButton size="small" :disabled="!selected.length" @click="onAnalyze">{{ $tr('AI 分析关联关系') }}</ElButton>
+      <ElButton size="small" type="danger" @click="onClear">{{ $tr('清空') }}</ElButton>
     </div>
     <ElTable :data="list" size="small" @selection-change="selected = $event">
       <ElTableColumn type="selection" width="42" />
-      <ElTableColumn label="时间" width="170">
+      <ElTableColumn :label="$tr('时间')" width="170">
         <template #default="{ row }">{{ row.executedAt }}</template>
       </ElTableColumn>
       <ElTableColumn label="SQL">
@@ -147,21 +147,21 @@ function preview(sql: string) {
           </ElTooltip>
         </template>
       </ElTableColumn>
-      <ElTableColumn prop="status" label="状态" width="70">
+      <ElTableColumn prop="status" :label="$tr('状态')" width="70">
         <template #default="{ row }">
           <ElTag :type="row.status === 1 ? 'success' : 'danger'" size="small">
-            {{ row.status === 1 ? '成功' : '失败' }}
+            {{ $tr(row.status === 1 ? '成功' : '失败') }}
           </ElTag>
         </template>
       </ElTableColumn>
-      <ElTableColumn prop="rowCount" label="行数" width="70" />
-      <ElTableColumn prop="elapsedMs" label="耗时" width="80" />
-      <ElTableColumn prop="source" label="来源" width="90" />
-      <ElTableColumn label="操作" width="160">
+      <ElTableColumn prop="rowCount" :label="$tr('行数')" width="70" />
+      <ElTableColumn prop="elapsedMs" :label="$tr('耗时')" width="80" />
+      <ElTableColumn prop="source" :label="$tr('来源')" width="90" />
+      <ElTableColumn :label="$tr('操作')" width="160">
         <template #default="{ row }">
-          <ElButton link size="small" @click="emit('openSql', row.sqlText)">打开</ElButton>
-          <ElButton link size="small" @click="copySql(row.sqlText)">复制</ElButton>
-          <ElButton link size="small" type="danger" @click="onDel(row)">删除</ElButton>
+          <ElButton link size="small" @click="emit('openSql', row.sqlText)">{{ $tr('打开') }}</ElButton>
+          <ElButton link size="small" @click="copySql(row.sqlText)">{{ $tr('复制') }}</ElButton>
+          <ElButton link size="small" type="danger" @click="onDel(row)">{{ $tr('删除') }}</ElButton>
         </template>
       </ElTableColumn>
     </ElTable>

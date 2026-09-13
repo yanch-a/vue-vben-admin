@@ -31,6 +31,8 @@
     "desktop:start": "electron .",
     "desktop:test": "node --test electron/tests/*.test.mjs",
     "dev": "pnpm vite --mode development",
+    "i18n:audit": "node scripts/i18n-audit.mjs",
+    "i18n:migrate-templates": "node scripts/i18n-migrate-templates.mjs",
     "preview": "vite preview",
     "typecheck": "vue-tsc --noEmit --skipLibCheck"
   },

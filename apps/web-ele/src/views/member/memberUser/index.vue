@@ -152,7 +152,7 @@
           type="primary"
           @click="handleEdit($event)"
         >
-          新增
+          {{ $tr('新增') }}
         </el-button>
         <el-button
           v-permissions="{ permission: ['MemberUser:batchDel'] }"
@@ -160,7 +160,7 @@
           type="danger"
           @click="handleDelete($event)"
         >
-          批量删除
+          {{ $tr('批量删除') }}
         </el-button>
       </vab-query-form-left-panel>
       <vab-query-form-right-panel :span="16">
@@ -169,21 +169,21 @@
             <el-input
               v-model.trim="queryForm.userName"
               clearable
-              placeholder="请输入用户名"
+              :placeholder="$tr('请输入用户名')"
             />
           </el-form-item>
           <el-form-item>
             <el-input
               v-model.trim="queryForm.realName"
               clearable
-              placeholder="请输入真实名称"
+              :placeholder="$tr('请输入真实名称')"
             />
           </el-form-item>
           <el-form-item>
             <el-select
               v-model="queryForm.userGroup"
               clearable
-              placeholder="请选择会员分组"
+              :placeholder="$tr('请选择会员分组')"
               style="width: 160px"
             >
               <el-option
@@ -196,7 +196,7 @@
           </el-form-item>
           <el-form-item>
             <el-button :icon="Search" type="primary" @click="queryData">
-              查询
+              {{ $tr('查询') }}
             </el-button>
           </el-form-item>
         </el-form>
@@ -209,10 +209,10 @@
       @selection-change="setSelectRows"
     >
       <el-table-column align="center" type="selection" />
-      <el-table-column align="center" label="用户ID" prop="id" width="80" />
+      <el-table-column align="center" :label="$tr('用户ID')" prop="id" width="80" />
       <el-table-column
         align="center"
-        label="用户名"
+        :label="$tr('用户名')"
         prop="userName"
         show-overflow-tooltip
       >
@@ -222,24 +222,24 @@
           </el-button>
         </template>
       </el-table-column>
-      <el-table-column align="center" label="真实名称" prop="realName" />
-      <el-table-column align="center" label="会员分组" min-width="120">
+      <el-table-column align="center" :label="$tr('真实名称')" prop="realName" />
+      <el-table-column align="center" :label="$tr('会员分组')" min-width="120">
         <template #default="{ row }">
           {{ groupNameOf(row.userGroup) }}
         </template>
       </el-table-column>
-      <el-table-column align="center" label="状态" width="100">
+      <el-table-column align="center" :label="$tr('状态')" width="100">
         <template #default="{ row }">
           {{ statusLabelOf(row.userStatus) }}
         </template>
       </el-table-column>
       <el-table-column
         align="center"
-        label="创建时间"
+        :label="$tr('创建时间')"
         prop="createTime"
         show-overflow-tooltip
       />
-      <el-table-column align="center" label="操作" width="200">
+      <el-table-column align="center" :label="$tr('操作')" width="200">
         <template #default="{ row }">
           <el-button
             v-permissions="{ permission: ['MemberUser:edit'] }"
@@ -260,7 +260,7 @@
         </template>
       </el-table-column>
       <template #empty>
-        <el-empty class="vab-data-empty" description="暂无数据" />
+        <el-empty class="vab-data-empty" :description="$tr('暂无数据')" />
       </template>
     </el-table>
     <el-pagination

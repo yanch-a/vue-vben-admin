@@ -17,6 +17,7 @@
   import { Page } from '@vben/common-ui'
 
   import { usePreferences } from '@vben/preferences'
+  import { translateUiText } from '@/locales/ui-text'
 
   import { deleteQueryConfig, editQueryConfig, executeQueryByDraft, exportQueryExcelByDraft, getDbConfigList, getGroupTablesWithColumns, getQueryConfigById, getQueryConfigItems, getQueryConfigList, getTableGroupList, getVqDict, listRelationCanvasGroups, previewSqlBySelection, saveQueryItems } from '@/api/visual/vq'
   import { exportQueryResultExcel, getLatestQueryResultByConfig, saveQueryResultFile, shareQueryResultFile } from '@/api/visual/queryResultFile'
@@ -31,24 +32,33 @@
   // Univer 0.25+
   import { LocaleType, mergeLocales, Univer } from "@univerjs/core";
   import { FUniver } from "@univerjs/core/facade";
+  import DesignEnUS from '@univerjs/design/locale/en-US';
   import DesignZhCN from '@univerjs/design/locale/zh-CN';
   import { UniverDocsPlugin } from "@univerjs/docs";
   import { UniverDocsUIPlugin } from "@univerjs/docs-ui";
+  import DocsUIEnUS from '@univerjs/docs-ui/locale/en-US';
   import DocsUIZhCN from '@univerjs/docs-ui/locale/zh-CN';
   import { UniverFormulaEnginePlugin } from "@univerjs/engine-formula";
   import { UniverRenderEnginePlugin } from "@univerjs/engine-render";
   import { UniverSheetsPlugin } from "@univerjs/sheets";
   import { UniverSheetsFormulaPlugin } from "@univerjs/sheets-formula";
+  import SheetsFormulaEnUS from '@univerjs/sheets-formula/locale/en-US';
+  import SheetsFormulaZhCN from '@univerjs/sheets-formula/locale/zh-CN';
   import { UniverSheetsFormulaUIPlugin } from "@univerjs/sheets-formula-ui";
+  import SheetsFormulaUIEnUS from '@univerjs/sheets-formula-ui/locale/en-US';
   import SheetsFormulaUIZhCN from '@univerjs/sheets-formula-ui/locale/zh-CN';
   import { UniverSheetsNumfmtPlugin } from "@univerjs/sheets-numfmt";
   import { UniverSheetsNumfmtUIPlugin } from "@univerjs/sheets-numfmt-ui";
+  import SheetsNumfmtUIEnUS from '@univerjs/sheets-numfmt-ui/locale/en-US';
   import SheetsNumfmtUIZhCN from '@univerjs/sheets-numfmt-ui/locale/zh-CN';
   import { UniverSheetsUIPlugin } from "@univerjs/sheets-ui";
+  import SheetsUIEnUS from '@univerjs/sheets-ui/locale/en-US';
   import SheetsUIZhCN from '@univerjs/sheets-ui/locale/zh-CN';
+  import SheetsEnUS from '@univerjs/sheets/locale/en-US';
   import SheetsZhCN from '@univerjs/sheets/locale/zh-CN';
   import { UniverUIPlugin } from "@univerjs/ui";
   import { UniverVue3AdapterPlugin } from "@univerjs/ui-adapter-vue3";
+  import UIEnUS from '@univerjs/ui/locale/en-US';
   import UIZhCN from '@univerjs/ui/locale/zh-CN';
 
   import '@univerjs/engine-formula/facade';
@@ -74,7 +84,7 @@
       const $baseMessage = inject('$baseMessage')
       const route = useRoute()
       const router = useRouter()
-      const { isDark } = usePreferences()
+      const { isDark, locale } = usePreferences()
       const univerContainer = ref(null)
       const dbTree = ref(null);
       const configFormRef = ref(null);
@@ -1173,19 +1183,35 @@
             univerInstance = null;
           }
 
-          univerInstance = new Univer({
-            darkMode: !!isDark.value,
-            locale: LocaleType.ZH_CN,
-            locales: {
-              [LocaleType.ZH_CN]: mergeLocales(
+          const useEnglish = locale.value === 'en-US'
+          const univerLocale = useEnglish ? LocaleType.EN_US : LocaleType.ZH_CN
+          const univerMessages = useEnglish
+            ? mergeLocales(
+                DesignEnUS,
+                UIEnUS,
+                DocsUIEnUS,
+                SheetsEnUS,
+                SheetsUIEnUS,
+                SheetsFormulaEnUS,
+                SheetsFormulaUIEnUS,
+                SheetsNumfmtUIEnUS,
+              )
+            : mergeLocales(
                 DesignZhCN,
                 UIZhCN,
                 DocsUIZhCN,
                 SheetsZhCN,
                 SheetsUIZhCN,
+                SheetsFormulaZhCN,
                 SheetsFormulaUIZhCN,
                 SheetsNumfmtUIZhCN,
-              ),
+              )
+
+          univerInstance = new Univer({
+            darkMode: !!isDark.value,
+            locale: univerLocale,
+            locales: {
+              [univerLocale]: univerMessages,
             },
           });
           
@@ -1207,7 +1233,7 @@
           univerInstance.registerPlugin(UniverSheetsNumfmtUIPlugin);
           
           univerAPI = FUniver.newAPI(univerInstance);
-          univerAPI.createWorkbook({ name: '查询结果' });
+          univerAPI.createWorkbook({ name: translateUiText('查询结果') });
         } catch (error) {
           console.error('初始化Univer时出错:', error);
           $baseMessage('初始化表格组件失败，请刷新页面重试', 'error');
@@ -2590,10 +2616,10 @@
     <!-- 左侧配置区域 -->
     <div class="left-panel" :style="{ width: leftPanelWidth }">
       <div class="panel-header">
-        <h3>查询视图</h3>
+        <h3>{{ $tr('查询视图') }}</h3>
         <div>
           <el-button size="small" @click="openAiAssistant()">
-            AI 助手
+            {{ $tr('AI 助手') }}
           </el-button>
           <el-button
             v-if="!isSqlMode"
@@ -2601,7 +2627,7 @@
             v-permissions="{ permission: ['QueryExecute:preview'] }"
             @click="previewSql"
           >
-            对比上次
+            {{ $tr('对比上次') }}
           </el-button>
           <el-button
             v-if="!executing"
@@ -2610,7 +2636,7 @@
             v-permissions="{ permission: ['QueryExecute:execute'] }"
             @click="executeQuery"
           >
-            执行查询
+            {{ $tr('执行查询') }}
           </el-button>
           <el-button
             v-else
@@ -2618,21 +2644,21 @@
             size="small"
             @click="stopQuery"
           >
-            停止
+            {{ $tr('停止') }}
           </el-button>
         </div>
       </div>
 
       <el-tabs v-model="workMode" class="work-mode-tabs">
-        <el-tab-pane label="配置查询" name="visual" />
-        <el-tab-pane label="直接写 SQL" name="sql" />
+        <el-tab-pane :label="$tr('配置查询')" name="visual" />
+        <el-tab-pane :label="$tr('直接写 SQL')" name="sql" />
       </el-tabs>
       
       <!-- 数据库 / 分组 / 实例 -->
       <div class="db-selector">
         <el-form :inline="true" size="small">
-          <el-form-item label="数据库">
-            <el-select :model-value="currentDbConfig" placeholder="选择数据库" @change="onDbSelect">
+          <el-form-item :label="$tr('数据库')">
+            <el-select :model-value="currentDbConfig" :placeholder="$tr('选择数据库')" @change="onDbSelect">
               <el-option
                 v-for="item in dbConfigList"
                 :key="item.id"
@@ -2642,7 +2668,7 @@
             </el-select>
           </el-form-item>
           <el-form-item v-if="!isSqlMode">
-            <el-select :model-value="currentTableGroup" placeholder="选择分组" @change="onGroupSelect">
+            <el-select :model-value="currentTableGroup" :placeholder="$tr('选择分组')" @change="onGroupSelect">
               <el-option
                 v-for="item in tableGroupList"
                 :key="item.id"
@@ -2652,7 +2678,7 @@
             </el-select>
           </el-form-item>
           <el-form-item v-else>
-            <el-select v-model="currentInstance" placeholder="选择实例" clearable>
+            <el-select v-model="currentInstance" :placeholder="$tr('选择实例')" clearable>
               <el-option
                 v-for="item in instanceList"
                 :key="item.instanceName || item"
@@ -2663,26 +2689,26 @@
           </el-form-item>
           <el-form-item>
             <el-button size="small" type="primary" link @click="goTableGroup">
-              维护表分组
+              {{ $tr('维护表分组') }}
             </el-button>
           </el-form-item>
         </el-form>
         <p v-if="!isSqlMode && hasTableGroups" class="mode-hint">
-          配置查询依赖表分组里的表和字段；没有分组或字段不够时，请先去维护表分组。
+          {{ $tr('配置查询依赖表分组里的表和字段；没有分组或字段不够时，请先去维护表分组。') }}
         </p>
         <p v-else-if="!isSqlMode && currentDbConfig" class="mode-hint">
-          这个库还没有表分组，配置查询需要先建分组并勾选表字段。
-          <el-button type="primary" link size="small" @click="goTableGroup">去建分组</el-button>
+          {{ $tr('这个库还没有表分组，配置查询需要先建分组并勾选表字段。') }}
+          <el-button type="primary" link size="small" @click="goTableGroup">{{ $tr('去建分组') }}</el-button>
         </p>
         <p v-else class="mode-hint">
-          直接写 SQL 无需保存配置，执行后右侧可导出、保存结果、分享。
+          {{ $tr('直接写 SQL 无需保存配置，执行后右侧可导出、保存结果、分享。') }}
         </p>
       </div>
       
       <!-- 我的视图：点名称即打开 -->
       <div class="query-config-section">
         <div class="config-header" @click="toggleConfigVisible">
-          <span>我的视图</span>
+          <span>{{ $tr('我的视图') }}</span>
           <vab-icon :icon="configVisible ? 'arrow-up-s-line' : 'arrow-down-s-line'" />
         </div>
         <el-collapse-transition>
@@ -2696,7 +2722,7 @@
                 @click="showConfigDialog('add')"
               >
                 <vab-icon icon="add-line" />
-                新建视图
+                {{ $tr('新建视图') }}
               </el-button>
               <el-button
                 v-if="!isSqlMode"
@@ -2707,7 +2733,7 @@
                 :disabled="!hasSelectedFields"
               >
                 <vab-icon icon="save-line" />
-                保存视图定义
+                {{ $tr('保存视图定义') }}
               </el-button>
               <el-button
                 v-if="isSqlMode"
@@ -2718,7 +2744,7 @@
                 :disabled="!rawSql"
               >
                 <vab-icon icon="save-line" />
-                {{ isSqlView ? '更新视图定义' : '另存为视图' }}
+                {{ $tr(isSqlView ? '更新视图定义' : '另存为视图') }}
               </el-button>
               <el-checkbox
                 v-if="!isSqlMode"
@@ -2739,47 +2765,47 @@
                 :row-class-name="viewRowClassName"
                 @row-click="onViewRowClick"
               >
-                <el-table-column label="视图名称" min-width="140">
+                <el-table-column :label="$tr('视图名称')" min-width="140">
                   <template #default="{ row }">
                     <el-button link type="primary" @click.stop="selectQueryConfig(row)">
                       {{ row.configName }}
                     </el-button>
                   </template>
                 </el-table-column>
-                <el-table-column label="类型" width="72">
+                <el-table-column :label="$tr('类型')" width="72">
                   <template #default="{ row }">
                     <el-tag :type="row.queryMode === 'sql' ? 'warning' : 'success'" size="small">
-                      {{ row.queryMode === 'sql' ? 'SQL' : '配置' }}
+                      {{ $tr(row.queryMode === 'sql' ? 'SQL' : '配置') }}
                     </el-tag>
                   </template>
                 </el-table-column>
-                <el-table-column label="公开" prop="isPublic" width="60">
+                <el-table-column :label="$tr('公开')" prop="isPublic" width="60">
                   <template #default="{ row }">
                     <el-tag :type="row.isPublic ? 'success' : 'info'" size="small">
-                      {{ row.isPublic ? '公开' : '私有' }}
+                      {{ $tr(row.isPublic ? '公开' : '私有') }}
                     </el-tag>
                   </template>
                 </el-table-column>
-                <el-table-column label="操作" width="90">
+                <el-table-column :label="$tr('操作')" width="90">
                   <template #default="{ row }">
                     <el-button-group>
                       <el-button
                         v-if="row.queryMode !== 'sql'"
                         link
                         size="small"
-                        title="编辑"
+                        :title="$tr('编辑')"
                         @click.stop="showConfigDialog('edit', row)"
                       >
                         <vab-icon icon="edit-line" />
                       </el-button>
-                      <el-button link size="small" title="删除" @click.stop="deleteQueryConfigMethod(row)">
+                      <el-button link size="small" :title="$tr('删除')" @click.stop="deleteQueryConfigMethod(row)">
                         <vab-icon icon="delete-bin-line" />
                       </el-button>
                     </el-button-group>
                   </template>
                 </el-table-column>
               </el-table>
-              <el-empty v-if="queryConfigList.length === 0" description="暂无视图，执行后可保存方便下次打开" />
+              <el-empty v-if="queryConfigList.length === 0" :description="$tr('暂无视图，执行后可保存方便下次打开')" />
             </div>
           </div>
         </el-collapse-transition>
@@ -2798,17 +2824,17 @@
       </div>
       <el-tabs v-else v-model="activeName" class="config-tabs">
         <!-- 表和字段配置 -->
-        <el-tab-pane label="表和字段" name="tables">
+        <el-tab-pane :label="$tr('表和字段')" name="tables">
           <el-empty
             v-if="!hasTableGroups"
-            description="请先维护表分组，再勾选要查询的字段"
+            :description="$tr('请先维护表分组，再勾选要查询的字段')"
           >
-            <el-button type="primary" size="small" @click="goTableGroup">去建分组</el-button>
+            <el-button type="primary" size="small" @click="goTableGroup">{{ $tr('去建分组') }}</el-button>
           </el-empty>
           <el-input
             v-else
             v-model="filterText"
-            placeholder="输入关键字过滤"
+            :placeholder="$tr('输入关键字过滤')"
             clearable
             prefix-icon="search-line"
           />
@@ -2836,7 +2862,7 @@
                 </span>
                 <span v-else>{{ `${data.fieldName }  (${ data.displayName })` }}</span>
                 <span class="node-actions" v-if="data.sourceFieldId != null">
-                  <el-tooltip content="自定义设置" placement="top">
+                  <el-tooltip :content="$tr('自定义设置')" placement="top">
                     <el-button link size="small" @click.stop="customizeField(data)">
                       <vab-icon icon="settings-line" />
                     </el-button>
@@ -2848,17 +2874,17 @@
         </el-tab-pane>
         
         <!-- 排序和条件配置 -->
-        <el-tab-pane label="排序和条件" name="conditions">
+        <el-tab-pane :label="$tr('排序和条件')" name="conditions">
           <div class="condition-group">
-            <h4>已选字段</h4>
-            <p class="hint-text">「排序」列可直接输入目标序号；字段顺序即 SELECT 输出顺序，可跨表自由调整。</p>
+            <h4>{{ $tr('已选字段') }}</h4>
+            <p class="hint-text">{{ $tr('「排序」列可直接输入目标序号；字段顺序即 SELECT 输出顺序，可跨表自由调整。') }}</p>
             <el-table
               :data="columnList"
               size="small"
               row-key="id"
               class="selected-fields-table"
             >
-              <el-table-column label="排序" width="96" align="center">
+              <el-table-column :label="$tr('排序')" width="96" align="center">
                 <template #default="{ $index }">
                   <el-input-number
                     :model-value="$index + 1"
@@ -2872,14 +2898,14 @@
                   />
                 </template>
               </el-table-column>
-              <el-table-column label="表" min-width="120" show-overflow-tooltip>
+              <el-table-column :label="$tr('表')" min-width="120" show-overflow-tooltip>
                 <template #default="{ row }">
                   <span :style="getTableTagStyle(row.tableId)">{{ formatSelectedFieldTable(row) }}</span>
                 </template>
               </el-table-column>
-              <el-table-column label="字段" prop="fieldName" min-width="100" show-overflow-tooltip />
-              <el-table-column label="名称" prop="displayName" min-width="120" show-overflow-tooltip />
-              <el-table-column label="操作" width="140">
+              <el-table-column :label="$tr('字段')" prop="fieldName" min-width="100" show-overflow-tooltip />
+              <el-table-column :label="$tr('名称')" prop="displayName" min-width="120" show-overflow-tooltip />
+              <el-table-column :label="$tr('操作')" width="140">
                 <template #default="{ row, $index }">
                   <el-button-group>
                     <el-button link size="small" @click="moveFieldUp($index)" :disabled="$index === 0">
@@ -2899,11 +2925,11 @@
           
           <div class="condition-group">
             <div class="group-header condition-title-row">
-              <h4>查询条件</h4>
-              <el-button type="primary" size="small" @click="addCondition">添加条件</el-button>
+              <h4>{{ $tr('查询条件') }}</h4>
+              <el-button type="primary" size="small" @click="addCondition">{{ $tr('添加条件') }}</el-button>
             </div>
             <div v-for="(condition, index) in whereList" :key="index" class="condition-item">
-              <el-select v-model="condition.field" placeholder="选择字段" filterable @change="updateWhereItem(index, 'fieldId', condition.field)">
+              <el-select v-model="condition.field" :placeholder="$tr('选择字段')" filterable @change="updateWhereItem(index, 'fieldId', condition.field)">
                 <el-option 
                   v-for="field in selectedFieldOptions" 
                   :key="field.id" 
@@ -2911,7 +2937,7 @@
                   :value="field.id" 
                 />
               </el-select>
-              <el-select v-model="condition.operator" placeholder="条件" @change="updateWhereItem(index, 'conditionOperator', condition.operator)">
+              <el-select v-model="condition.operator" :placeholder="$tr('条件')" @change="updateWhereItem(index, 'conditionOperator', condition.operator)">
                 <el-option
                   v-for="item in conditionOperator"
                   :key="item.code"
@@ -2931,12 +2957,12 @@
 
           <div class="condition-group">
             <div class="group-header condition-title-row">
-              <h4>HAVING 条件</h4>
-              <el-button type="primary" size="small" @click="addHaving">添加 HAVING</el-button>
+              <h4>{{ $tr('HAVING 条件') }}</h4>
+              <el-button type="primary" size="small" @click="addHaving">{{ $tr('添加 HAVING') }}</el-button>
             </div>
-            <p class="hint-text">用于聚合后过滤；通常需先配置分组字段。IN/BETWEEN 多个值用英文逗号分隔。</p>
+            <p class="hint-text">{{ $tr('用于聚合后过滤；通常需先配置分组字段。IN/BETWEEN 多个值用英文逗号分隔。') }}</p>
             <div v-for="(condition, index) in havingList" :key="'h'+index" class="condition-item">
-              <el-select v-model="condition.field" placeholder="选择字段" filterable @change="updateHavingItem(index, 'fieldId', condition.field)">
+              <el-select v-model="condition.field" :placeholder="$tr('选择字段')" filterable @change="updateHavingItem(index, 'fieldId', condition.field)">
                 <el-option
                   v-for="field in selectedFieldOptions"
                   :key="field.id"
@@ -2944,7 +2970,7 @@
                   :value="field.id"
                 />
               </el-select>
-              <el-select v-model="condition.operator" placeholder="条件" @change="updateHavingItem(index, 'conditionOperator', condition.operator)">
+              <el-select v-model="condition.operator" :placeholder="$tr('条件')" @change="updateHavingItem(index, 'conditionOperator', condition.operator)">
                 <el-option
                   v-for="item in conditionOperator"
                   :key="item.code"
@@ -2963,16 +2989,16 @@
           </div>
           
           <div class="condition-group">
-            <h4>分组设置</h4>
+            <h4>{{ $tr('分组设置') }}</h4>
             <div class="group-section">
               <div class="group-header">
-                <span>分组字段</span>
-                <el-button type="primary" size="small" @click="addGroup">添加分组</el-button>
+                <span>{{ $tr('分组字段') }}</span>
+                <el-button type="primary" size="small" @click="addGroup">{{ $tr('添加分组') }}</el-button>
               </div>
               <el-table :data="groupList" size="small" v-if="groupList.length > 0">
-                <el-table-column label="字段">
+                <el-table-column :label="$tr('字段')">
                   <template #default="{ row, $index }">
-                    <el-select v-model="row.fieldId" placeholder="选择字段" filterable @change="updateGroupItem($index, 'fieldId', row.fieldId)">
+                    <el-select v-model="row.fieldId" :placeholder="$tr('选择字段')" filterable @change="updateGroupItem($index, 'fieldId', row.fieldId)">
                       <el-option 
                         v-for="field in selectedFieldOptions" 
                         :key="field.id" 
@@ -2982,29 +3008,29 @@
                     </el-select>
                   </template>
                 </el-table-column>
-                <el-table-column label="操作" width="80">
+                <el-table-column :label="$tr('操作')" width="80">
                   <template #default="{ $index }">
                     <el-button type="danger" icon="delete-bin-line" circle size="small" @click="removeGroup($index)" />
                   </template>
                 </el-table-column>
               </el-table>
               <div v-else class="empty-tip">
-                尚未添加分组字段
+                {{ $tr('尚未添加分组字段') }}
               </div>
             </div>
           </div>
           
           <div class="condition-group">
-            <h4>排序设置</h4>
+            <h4>{{ $tr('排序设置') }}</h4>
             <div class="group-section">
               <div class="group-header">
-                <span>排序字段</span>
-                <el-button type="primary" size="small" @click="addOrder">添加排序</el-button>
+                <span>{{ $tr('排序字段') }}</span>
+                <el-button type="primary" size="small" @click="addOrder">{{ $tr('添加排序') }}</el-button>
               </div>
               <el-table :data="orderList" size="small" v-if="orderList.length > 0">
-                <el-table-column label="字段">
+                <el-table-column :label="$tr('字段')">
                   <template #default="{ row, $index }">
-                    <el-select v-model="row.fieldId" placeholder="选择字段" filterable @change="updateOrderItem($index, 'fieldId', row.fieldId)">
+                    <el-select v-model="row.fieldId" :placeholder="$tr('选择字段')" filterable @change="updateOrderItem($index, 'fieldId', row.fieldId)">
                       <el-option 
                         v-for="field in selectedFieldOptions" 
                         :key="field.id" 
@@ -3014,9 +3040,9 @@
                     </el-select>
                   </template>
                 </el-table-column>
-                <el-table-column label="排序方式">
+                <el-table-column :label="$tr('排序方式')">
                   <template #default="{ row, $index }">
-                    <el-select v-model="row.orderType" placeholder="选择排序方式" @change="updateOrderItem($index, 'sortDirection', row.orderType)">
+                    <el-select v-model="row.orderType" :placeholder="$tr('选择排序方式')" @change="updateOrderItem($index, 'sortDirection', row.orderType)">
                       <el-option
                         v-for="item in orderType"
                         :key="item.code"
@@ -3026,23 +3052,23 @@
                     </el-select>
                   </template>
                 </el-table-column>
-                <el-table-column label="操作" width="80">
+                <el-table-column :label="$tr('操作')" width="80">
                   <template #default="{ $index }">
                     <el-button type="danger" icon="delete-bin-line" circle size="small" @click="removeOrder($index)" />
                   </template>
                 </el-table-column>
               </el-table>
               <div v-else class="empty-tip">
-                尚未添加排序字段
+                {{ $tr('尚未添加排序字段') }}
               </div>
             </div>
           </div>
           
           <div class="condition-group">
-            <h4>自定义SQL</h4>
+            <h4>{{ $tr('自定义SQL') }}</h4>
             <div class="sql-helper">
-              <p>提示: 可以使用SQL表达式，如CASE WHEN, CONCAT, SUBSTR等</p>
-              <p>字段原名将自动替换为实际字段名</p>
+              <p>{{ $tr('提示: 可以使用SQL表达式，如CASE WHEN, CONCAT, SUBSTR等') }}</p>
+              <p>{{ $tr('字段原名将自动替换为实际字段名') }}</p>
             </div>
           </div>
         </el-tab-pane>
@@ -3050,8 +3076,8 @@
 
       <div v-if="!isSqlMode" class="live-sql-preview">
         <div class="live-sql-head">
-          <span>将要执行的 SQL</span>
-          <span v-if="livePreviewLoading" class="live-sql-status">生成中…</span>
+          <span>{{ $tr('将要执行的 SQL') }}</span>
+          <span v-if="livePreviewLoading" class="live-sql-status">{{ $tr('生成中…') }}</span>
           <el-button
             link
             type="primary"
@@ -3059,7 +3085,7 @@
             :disabled="!livePreviewSql"
             @click="openSqlFromLivePreview"
           >
-            打开编辑器
+            {{ $tr('打开编辑器') }}
           </el-button>
         </div>
         <div v-if="livePreviewError" class="live-sql-error">
@@ -3071,11 +3097,11 @@
             size="small"
             @click="goRelationCanvas"
           >
-            去补关系画布
+            {{ $tr('去补关系画布') }}
           </el-button>
         </div>
         <pre v-else-if="livePreviewSql" class="live-sql-body">{{ livePreviewSql }}</pre>
-        <p v-else class="live-sql-empty">勾选字段后，这里会即时显示即将执行的语句</p>
+        <p v-else class="live-sql-empty">{{ $tr('勾选字段后，这里会即时显示即将执行的语句') }}</p>
       </div>
       
       <!-- 拖动调整大小的边界线 -->
@@ -3086,13 +3112,13 @@
     <div class="right-panel" :style="{ width: rightPanelWidth }">
       <div class="panel-header">
         <h3>
-          查询结果
+          {{ $tr('查询结果') }}
           <span v-if="lastQueryResult" class="result-count">
-            （{{ lastQueryResult.rowCount }} 行<span v-if="lastQueryResult.limit">，上限 {{ lastQueryResult.limit }}</span>）
+            （{{ lastQueryResult.rowCount }} {{ $tr('行') }}<span v-if="lastQueryResult.limit">{{ $tr('，上限') }} {{ lastQueryResult.limit }}</span>）
           </span>
         </h3>
         <div class="result-toolbar">
-          <span class="limit-label">最多</span>
+          <span class="limit-label">{{ $tr('最多') }}</span>
           <el-input-number
             v-model="queryLimit"
             :min="1"
@@ -3101,7 +3127,7 @@
             size="small"
             controls-position="right"
           />
-          <span class="limit-label">行</span>
+          <span class="limit-label">{{ $tr('行') }}</span>
         <el-button-group>
           <el-button
             size="small"
@@ -3109,7 +3135,7 @@
             :disabled="!currentConfig?.id"
             @click="openLatestSavedResult"
           >
-            打开最近保存结果
+            {{ $tr('打开最近保存结果') }}
           </el-button>
           <el-button
             size="small"
@@ -3117,10 +3143,10 @@
             :disabled="isSqlMode ? !hasSessionResult && !rawSql : !hasSessionResult && !hasSelectedFields"
             @click="exportExcel"
           >
-            导出Excel
+            {{ $tr('导出Excel') }}
           </el-button>
           <el-button size="small" :loading="savingResult" :disabled="!hasSessionResult" @click="saveQuery">
-            保存这次结果
+            {{ $tr('保存这次结果') }}
           </el-button>
           <el-button
             size="small"
@@ -3129,7 +3155,7 @@
             :disabled="!hasSessionResult && !lastResultFileId"
             @click="openShareForm"
           >
-            分享
+            {{ $tr('分享') }}
           </el-button>
         </el-button-group>
         </div>
@@ -3154,7 +3180,7 @@
     />
 
     <!-- SQL 预览对话框（含与上次执行对比） -->
-    <el-dialog v-model="sqlPreviewVisible" title="SQL 预览" width="900px">
+    <el-dialog v-model="sqlPreviewVisible" :title="$tr('SQL 预览')" width="900px">
       <template v-if="sqlPreview">
         <el-alert
           v-if="sqlPreview.path && sqlPreview.path.intermediateTableIds && sqlPreview.path.intermediateTableIds.length"
@@ -3170,7 +3196,7 @@
           :closable="false"
           show-icon
           style="margin-bottom: 10px"
-          title="当前预览 SQL 与上次执行不一致"
+          :title="$tr('当前预览 SQL 与上次执行不一致')"
           :description="sqlPreview.lastExecutedTime ? `上次执行时间：${sqlPreview.lastExecutedTime}` : ''"
         />
         <el-alert
@@ -3179,94 +3205,94 @@
           :closable="false"
           show-icon
           style="margin-bottom: 10px"
-          title="与上次执行 SQL 一致"
+          :title="$tr('与上次执行 SQL 一致')"
         />
         <el-row :gutter="12">
           <el-col :span="sqlPreview.lastExecutedSql ? 12 : 24">
-            <div class="sql-pane-title">当前预览</div>
+            <div class="sql-pane-title">{{ $tr('当前预览') }}</div>
             <pre class="sql-preview">{{ sqlPreview.previewSql }}</pre>
           </el-col>
           <el-col v-if="sqlPreview.lastExecutedSql" :span="12">
-            <div class="sql-pane-title">上次执行</div>
+            <div class="sql-pane-title">{{ $tr('上次执行') }}</div>
             <pre class="sql-preview">{{ sqlPreview.lastExecutedSql }}</pre>
           </el-col>
         </el-row>
       </template>
       <template #footer>
-        <el-button @click="sqlPreviewVisible = false">关闭</el-button>
+        <el-button @click="sqlPreviewVisible = false">{{ $tr('关闭') }}</el-button>
         <el-button type="primary" :disabled="!sqlPreview?.previewSql" @click="openSqlFromPreview">
-          用这段 SQL 打开编辑器
+          {{ $tr('用这段 SQL 打开编辑器') }}
         </el-button>
       </template>
     </el-dialog>
 
     <!-- 分享选项 -->
-    <el-dialog v-model="shareFormVisible" title="分享设置" width="480px">
+    <el-dialog v-model="shareFormVisible" :title="$tr('分享设置')" width="480px">
       <el-form label-width="100px">
-        <el-form-item label="权限模式">
+        <el-form-item :label="$tr('权限模式')">
           <el-radio-group v-model="shareForm.shareMode">
-            <el-radio label="READ">只读</el-radio>
-            <el-radio label="WRITE">可编辑</el-radio>
+            <el-radio label="READ">{{ $tr('只读') }}</el-radio>
+            <el-radio label="WRITE">{{ $tr('可编辑') }}</el-radio>
           </el-radio-group>
         </el-form-item>
-        <el-form-item label="过期时间">
+        <el-form-item :label="$tr('过期时间')">
           <el-date-picker
             v-model="shareForm.shareExpireTime"
             type="datetime"
             value-format="YYYY-MM-DD HH:mm:ss"
-            placeholder="不选则不过期"
+            :placeholder="$tr('不选则不过期')"
             clearable
             style="width: 100%"
           />
         </el-form-item>
       </el-form>
       <template #footer>
-        <el-button @click="shareFormVisible = false">取消</el-button>
-        <el-button type="primary" :loading="sharingResult" @click="shareQueryResult">生成链接</el-button>
+        <el-button @click="shareFormVisible = false">{{ $tr('取消') }}</el-button>
+        <el-button type="primary" :loading="sharingResult" @click="shareQueryResult">{{ $tr('生成链接') }}</el-button>
       </template>
     </el-dialog>
 
     <!-- 分享链接对话框 -->
-    <el-dialog v-model="shareLinkDialogVisible" title="分享链接" width="560px">
+    <el-dialog v-model="shareLinkDialogVisible" :title="$tr('分享链接')" width="560px">
       <p style="margin-bottom: 8px; color: var(--el-text-color-secondary); font-size: 13px;">
-        对方需登录后打开。只读分享不可改内容；可编辑分享允许协同修改（乐观锁）。
+        {{ $tr('对方需登录后打开。只读分享不可改内容；可编辑分享允许协同修改（乐观锁）。') }}
       </p>
       <el-input v-model="shareLink" readonly>
         <template #append>
-          <el-button @click="copyShareLink">复制</el-button>
+          <el-button @click="copyShareLink">{{ $tr('复制') }}</el-button>
         </template>
       </el-input>
     </el-dialog>
     
     <!-- 设置别名对话框 -->
-    <el-dialog v-model="aliasDialogVisible" title="设置别名" width="30%">
+    <el-dialog v-model="aliasDialogVisible" :title="$tr('设置别名')" width="30%">
       <el-form :model="currentField" label-width="80px">
-        <el-form-item label="字段名">
+        <el-form-item :label="$tr('字段名')">
           <span>{{ currentField.name }}</span>
         </el-form-item>
-        <el-form-item label="别名">
-          <el-input v-model="currentField.alias" placeholder="请输入别名" />
+        <el-form-item :label="$tr('别名')">
+          <el-input v-model="currentField.alias" :placeholder="$tr('请输入别名')" />
         </el-form-item>
       </el-form>
       <template #footer>
-        <el-button @click="aliasDialogVisible = false">取消</el-button>
-        <el-button type="primary" @click="saveAlias">确定</el-button>
+        <el-button @click="aliasDialogVisible = false">{{ $tr('取消') }}</el-button>
+        <el-button type="primary" @click="saveAlias">{{ $tr('确定') }}</el-button>
       </template>
     </el-dialog>
     
     <!-- 自定义字段设置对话框 -->
-    <el-dialog v-model="customizeDialogVisible" title="字段设置" width="50%">
+    <el-dialog v-model="customizeDialogVisible" :title="$tr('字段设置')" width="50%">
       <el-form :model="currentField" label-width="130px">
-        <el-form-item label="字段名">
+        <el-form-item :label="$tr('字段名')">
           <span>{{ currentField.fieldName }}</span>
         </el-form-item>
-        <el-form-item label="字段别名">
+        <el-form-item :label="$tr('字段别名')">
           <el-input v-model="currentField.alias" :placeholder="currentField.displayName" />
         </el-form-item>
 
-        <el-form-item label="聚合函数">
-          <el-select v-model="currentField.functionType" placeholder="请选择聚合函数">
-            <el-option label="无" value="" />
+        <el-form-item :label="$tr('聚合函数')">
+          <el-select v-model="currentField.functionType" :placeholder="$tr('请选择聚合函数')">
+            <el-option :label="$tr('无')" value="" />
             <el-option
               v-for="item in dbFunctionType"
               :key="item.code"
@@ -3275,30 +3301,30 @@
             />
           </el-select>
         </el-form-item>
-        <el-form-item label="自定义表达式">
+        <el-form-item :label="$tr('自定义表达式')">
           <el-input 
             v-model="currentField.customSql" 
             type="textarea" 
             :rows="5" 
-            placeholder="输入自定义SQL表达式，例如: CASE WHEN age > 18 THEN '成年' ELSE '未成年' END"
+            :placeholder="$tr('输入自定义SQL表达式，例如: CASE WHEN age > 18 THEN \'成年\' ELSE \'未成年\' END')"
           />
         </el-form-item>
       </el-form>
       <template #footer>
-        <el-button @click="customizeDialogVisible = false">取消</el-button>
-        <el-button type="primary" @click="saveCustomize">保存设置</el-button>
+        <el-button @click="customizeDialogVisible = false">{{ $tr('取消') }}</el-button>
+        <el-button type="primary" @click="saveCustomize">{{ $tr('保存设置') }}</el-button>
       </template>
     </el-dialog>
     
     <!-- 查询配置编辑对话框 -->
     <el-dialog v-model="configDialogVisible" :title="configDialogMode === 'add' ? '新建视图' : '编辑视图'" width="50%">
       <el-form :model="currentConfig" :rules="configRules" ref="configFormRef" label-width="100px">
-        <el-form-item label="配置名称" prop="configName">
-          <el-input v-model="currentConfig.configName" placeholder="请输入配置名称" maxlength="100" />
+        <el-form-item :label="$tr('配置名称')" prop="configName">
+          <el-input v-model="currentConfig.configName" :placeholder="$tr('请输入配置名称')" maxlength="100" />
         </el-form-item>
         
-        <el-form-item label="所属分组" prop="groupId">
-          <el-select v-model="currentConfig.groupId" placeholder="选择分组" style="width: 100%">
+        <el-form-item :label="$tr('所属分组')" prop="groupId">
+          <el-select v-model="currentConfig.groupId" :placeholder="$tr('选择分组')" style="width: 100%">
             <el-option
               v-for="item in tableGroupList"
               :key="item.id"
@@ -3308,24 +3334,24 @@
           </el-select>
         </el-form-item>
         
-        <el-form-item label="配置描述" prop="description">
+        <el-form-item :label="$tr('配置描述')" prop="description">
           <el-input 
             v-model="currentConfig.description" 
             type="textarea" 
             :rows="3" 
-            placeholder="请输入配置描述" 
+            :placeholder="$tr('请输入配置描述')"
             maxlength="500"
             show-word-limit
           />
         </el-form-item>
         
-        <el-form-item label="寻路画布">
+        <el-form-item :label="$tr('寻路画布')">
           <el-select
             v-model="currentConfig.canvasGroupIds"
             multiple
             clearable
             filterable
-            placeholder="不选则使用该库全部画布"
+            :placeholder="$tr('不选则使用该库全部画布')"
             style="width: 100%"
           >
             <el-option
@@ -3335,18 +3361,18 @@
               :value="item.id"
             />
           </el-select>
-          <div class="form-tip">可多选；空=全库画布并集寻路</div>
+          <div class="form-tip">{{ $tr('可多选；空=全库画布并集寻路') }}</div>
         </el-form-item>
 
-        <el-form-item label="是否公开" prop="isPublic">
+        <el-form-item :label="$tr('是否公开')" prop="isPublic">
           <el-radio-group v-model="currentConfig.isPublic">
-            <el-radio :label="1">公开</el-radio>
-            <el-radio :label="0">私有</el-radio>
+            <el-radio :label="1">{{ $tr('公开') }}</el-radio>
+            <el-radio :label="0">{{ $tr('私有') }}</el-radio>
           </el-radio-group>
-          <div class="form-tip">公开的配置其他用户也可以查看和使用</div>
+          <div class="form-tip">{{ $tr('公开的配置其他用户也可以查看和使用') }}</div>
         </el-form-item>
 
-        <el-form-item label="去重">
+        <el-form-item :label="$tr('去重')">
           <el-switch
             v-model="currentConfig.selectDistinct"
             :active-value="1"
@@ -3355,13 +3381,13 @@
           />
         </el-form-item>
         
-        <el-form-item label="排序" prop="orderNum">
+        <el-form-item :label="$tr('排序')" prop="orderNum">
           <el-input-number v-model="currentConfig.orderNum" :min="0" :max="9999" />
         </el-form-item>
       </el-form>
       <template #footer>
-        <el-button @click="configDialogVisible = false">取消</el-button>
-        <el-button type="primary" @click="saveQueryConfig">保存</el-button>
+        <el-button @click="configDialogVisible = false">{{ $tr('取消') }}</el-button>
+        <el-button type="primary" @click="saveQueryConfig">{{ $tr('保存') }}</el-button>
       </template>
     </el-dialog>
   </div>

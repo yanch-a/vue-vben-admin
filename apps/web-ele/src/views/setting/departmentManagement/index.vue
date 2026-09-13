@@ -97,13 +97,13 @@
     <vab-query-form>
       <vab-query-form-left-panel :span="12">
         <el-button v-permissions="{ permission: ['DepartmentManagement:aou'] }" :icon="Plus" type="primary" @click="handleEdit($event)">
-          添加
+          {{ $tr('添加') }}
         </el-button>
         <!-- <el-button :icon="Delete" type="danger" @click="handleDelete($event)">
-          批量删除
+          {{ $tr('批量删除') }}
         </el-button> -->
         <el-button :icon="Sort" type="info" @click="handleExpand($event)">
-          展开/折叠
+          {{ $tr('展开/折叠') }}
         </el-button>
       </vab-query-form-left-panel>
       <vab-query-form-right-panel :span="12">
@@ -112,12 +112,12 @@
             <el-input
               v-model.trim="queryForm.deptName"
               clearable
-              placeholder="请输入名称"
+              :placeholder="$tr('请输入名称')"
             />
           </el-form-item>
           <el-form-item>
             <el-button :icon="Search" type="primary" @click="queryData">
-              查询
+              {{ $tr('查询') }}
             </el-button>
           </el-form-item>
         </el-form>
@@ -133,13 +133,13 @@
       row-key="id"
       :tree-props="{ children: 'children', hasChildren: 'hasChildren' }"
     >
-      <el-table-column label="名称" prop="label" show-overflow-tooltip />
-      <el-table-column label="节点Id" prop="id" show-overflow-tooltip />
-      <el-table-column label="排序" prop="weight" show-overflow-tooltip />
-      <el-table-column label="操作" width="200">
+      <el-table-column :label="$tr('名称')" prop="label" show-overflow-tooltip />
+      <el-table-column :label="$tr('节点Id')" prop="id" show-overflow-tooltip />
+      <el-table-column :label="$tr('排序')" prop="weight" show-overflow-tooltip />
+      <el-table-column :label="$tr('操作')" width="200">
         <template #default="{ row }">
           <el-button v-permissions="{ permission: ['DepartmentManagement:aou'] }" text type="primary" @click="handleEdit(row)">
-            编辑
+            {{ $tr('编辑') }}
           </el-button>
           <el-button
             v-permissions="{ permission: ['DepartmentManagement:delete'] }"
@@ -148,7 +148,7 @@
             type="primary"
             @click="handleDelete(row)"
           >
-            删除
+            {{ $tr('删除') }}
           </el-button>
         </template>
       </el-table-column>
@@ -157,7 +157,7 @@
           class="vab-data-empty"
           :src="require('@/assets/empty_images/data_empty.png')"
         /> -->
-        <el-empty class="vab-data-empty" description="暂无数据" />
+        <el-empty class="vab-data-empty" :description="$tr('暂无数据')" />
       </template>
     </el-table>
     <Edit ref="editRef" @fetch-data="fetchData" />

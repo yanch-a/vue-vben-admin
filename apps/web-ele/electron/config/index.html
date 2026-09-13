@@ -7,7 +7,7 @@
       content="default-src 'self'; script-src 'self'; style-src 'self'; form-action 'none'"
     />
     <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1" />
-    <title>选择 Lemon 服务端</title>
+    <title data-i18n="page-title">选择 Lemon 服务端</title>
     <link rel="stylesheet" href="./style.css" />
   </head>
   <body>
@@ -16,29 +16,30 @@
         <div class="hero__icon" aria-hidden="true">L</div>
         <div>
           <p class="eyebrow">LEMON DB CLIENT</p>
-          <h1>选择服务端</h1>
-          <p class="subtitle">选择已保存的环境，或配置一个新的 Lemon 服务。</p>
+          <h1 data-i18n="heading">选择服务端</h1>
+          <p class="subtitle" data-i18n="subtitle">选择已保存的环境，或配置一个新的 Lemon 服务。</p>
         </div>
       </header>
 
       <form id="server-form" class="panel" novalidate>
-        <label for="saved-server">已保存的服务端</label>
+        <label for="saved-server" data-i18n="saved-servers">已保存的服务端</label>
         <div class="row">
           <select id="saved-server" aria-describedby="saved-server-help"></select>
-          <button id="delete-server" class="button button--danger" type="button">删除</button>
+          <button id="delete-server" class="button button--danger" data-i18n="delete" type="button">删除</button>
         </div>
-        <p id="saved-server-help" class="help">可以保存多个开发、测试或生产环境。</p>
+        <p id="saved-server-help" class="help" data-i18n="saved-help">可以保存多个开发、测试或生产环境。</p>
 
-        <label for="server-name">配置名称</label>
+        <label for="server-name" data-i18n="config-name">配置名称</label>
         <input
           id="server-name"
           autocomplete="off"
           maxlength="80"
+          data-i18n-placeholder="name-placeholder"
           placeholder="例如：生产环境"
           type="text"
         />
 
-        <label for="server-url">服务端 API 根地址</label>
+        <label for="server-url" data-i18n="server-url">服务端 API 根地址</label>
         <input
           id="server-url"
           autocomplete="url"
@@ -48,22 +49,22 @@
           type="url"
         />
         <p class="help">
-          请输入完整的 http(s) 地址，并包含后台 context-path，例如
+          <span data-i18n="url-help">请输入完整的 http(s) 地址，并包含后台 context-path，例如</span>
           <code>https://example.com/lmdb</code>。
         </p>
 
         <div id="status" class="status" role="status" aria-live="polite"></div>
 
         <footer class="actions">
-          <button id="test-server" class="button button--secondary" type="button">检测连接</button>
-          <button id="close-window" class="button button--ghost" type="button">取消</button>
-          <button id="connect-server" class="button button--primary" type="submit">
+          <button id="test-server" class="button button--secondary" data-i18n="test" type="button">检测连接</button>
+          <button id="close-window" class="button button--ghost" data-i18n="cancel" type="button">取消</button>
+          <button id="connect-server" class="button button--primary" data-i18n="save-connect" type="submit">
             保存并连接
           </button>
         </footer>
       </form>
 
-      <p class="privacy-note">配置仅保存在本机，不会上传到其他服务。</p>
+      <p class="privacy-note" data-i18n="privacy">配置仅保存在本机，不会上传到其他服务。</p>
     </main>
     <script src="./renderer.js"></script>
   </body>

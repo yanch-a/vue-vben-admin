@@ -5,5 +5,5 @@ defineOptions({ name: 'TaskManagement' });
 </script>
 
 <template>
-  <Fallback status="coming-soon" title="任务管理" />
+  <Fallback status="coming-soon" :title="$tr('任务管理')" />
 </template>

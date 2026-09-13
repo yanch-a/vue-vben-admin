@@ -305,7 +305,7 @@
   >
     <el-form ref="formRef1" label-width="80px" :model="form" :rules="rules" v-loading="saving">
       <div class="hint">
-        点击菜单名称仅查看按钮；勾选复选框会授予该节点及全部子菜单，并自动勾选其全部按钮权限；取消勾选则一并撤销。
+        {{ $tr('点击菜单名称仅查看按钮；勾选复选框会授予该节点及全部子菜单，并自动勾选其全部按钮权限；取消勾选则一并撤销。') }}
       </div>
       <div class="vab-tree-border">
         <div class="tree-pane">
@@ -332,14 +332,14 @@
         </div>
         <div class="ops-pane">
           <div v-if="!currentMenuId" class="ops-empty">
-            请点击左侧菜单名称，查看并配置该菜单下的按钮权限。
+            {{ $tr('请点击左侧菜单名称，查看并配置该菜单下的按钮权限。') }}
           </div>
           <div v-else-if="!btnRoleGroups.length" class="ops-empty">
-            当前菜单尚未挂载接口权限，请到「菜单管理」中为该菜单挂载模块操作。
+            {{ $tr('当前菜单尚未挂载接口权限，请到「菜单管理」中为该菜单挂载模块操作。') }}
           </div>
           <template v-else>
             <div v-if="!menuChecked" class="ops-warn">
-              该菜单尚未勾选，右侧按钮不可改。请先勾选左侧复选框。
+              {{ $tr('该菜单尚未勾选，右侧按钮不可改。请先勾选左侧复选框。') }}
             </div>
             <div
               v-for="group in btnRoleGroups"
@@ -367,7 +367,7 @@
       </div>
     </el-form>
     <template #footer>
-      <el-button type="primary" :disabled="saving" @click="close">关 闭</el-button>
+      <el-button type="primary" :disabled="saving" @click="close">{{ $tr('关 闭') }}</el-button>
     </template>
   </el-dialog>
 </template>

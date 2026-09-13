@@ -178,7 +178,7 @@
     <el-row :gutter="20">
       <el-col :lg="4" :md="8" :sm="24" :xl="4" :xs="24">
         <vab-card shadow="hover">
-          <el-input v-model="channelName" placeholder="请输入栏目名称" />
+          <el-input v-model="channelName" :placeholder="$tr('请输入栏目名称')" />
           <el-divider style="margin: 8px 0;" />
           <el-tree
             ref="treeRef"
@@ -197,27 +197,27 @@
           <vab-query-form>
             <vab-query-form-left-panel :span="12">
               <el-button v-permissions="{ permission: ['CmsContent:add'] }" :icon="Plus" type="primary" @click="handleEdit($event)">
-                新增
+                {{ $tr('新增') }}
               </el-button>
               <el-button v-permissions="{ permission: ['CmsContent:batchDel'] }" :icon="Delete" type="danger" @click="handleDelete($event)">
-                批量删除
+                {{ $tr('批量删除') }}
               </el-button>
             </vab-query-form-left-panel>
             <vab-query-form-right-panel :span="12">
               <el-form inline :model="queryForm" @submit.prevent>
                 <el-form-item>
-                  <el-input v-model.trim="queryForm.title" clearable placeholder="请输入标题" />
+                  <el-input v-model.trim="queryForm.title" clearable :placeholder="$tr('请输入标题')" />
                 </el-form-item>
                 <el-form-item>
                   <el-button :icon="Search" type="primary" @click="queryData">
-                    查询
+                    {{ $tr('查询') }}
                   </el-button>
                 </el-form-item>
               </el-form>
             </vab-query-form-right-panel>
           </vab-query-form>
           <el-col v-if="emptyShow" :span="24">
-            <el-empty class="vab-data-empty" description="暂无数据" />
+            <el-empty class="vab-data-empty" :description="$tr('暂无数据')" />
           </el-col>
           <el-col :span="24">
             <ul v-loading="listLoading">
@@ -232,20 +232,20 @@
                     </div>
                     <div class="list-item-meta-item lm-list-item">
                       <div>
-                        <p>来源：{{ item.origin }}</p>
+                        <p>{{ $tr('来源：') }}{{ item.origin }}</p>
                       </div>
                       <div>
-                        <p>内容类型：{{ item.contentType }}</p>
+                        <p>{{ $tr('内容类型：') }}{{ item.contentType }}</p>
                       </div>
                     </div>
                   </div>
                   <div class="list-item-meta-content" style="width: 30%;text-align: right;">
                     <div class="list-item-meta-title lm-list-item">
                       <div>
-                        <p>发布人：{{ item.createBy }}</p>
+                        <p>{{ $tr('发布人：') }}{{ item.createBy }}</p>
                       </div>
                       <div>
-                        <p>发布时间：{{ item.releaseTime }}</p>
+                        <p>{{ $tr('发布时间：') }}{{ item.releaseTime }}</p>
                       </div>
                       <div>
                         <p>ID：{{ item.id }}</p>

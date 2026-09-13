@@ -5,5 +5,5 @@ defineOptions({ name: 'ZiWeiPerson' });
 </script>
 
 <template>
-  <Fallback status="coming-soon" title="紫微排盘" />
+  <Fallback status="coming-soon" :title="$tr('紫微排盘')" />
 </template>

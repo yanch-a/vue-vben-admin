@@ -390,8 +390,8 @@ onBeforeUnmount(() => {
   <Page auto-content-height content-class="!p-0">
     <div class="redis-page">
       <header class="topbar">
-        <ElButton :icon="ArrowLeft" circle title="返回数据库客户端" @click="router.back()" />
-        <h2>Redis 工作台</h2>
+        <ElButton :icon="ArrowLeft" circle :title="$tr('返回数据库客户端')" @click="router.back()" />
+        <h2>{{ $tr('Redis 工作台') }}</h2>
         <ElButton :icon="connectionPaneVisible ? Fold : Expand" circle :title="connectionPaneVisible ? '隐藏连接区' : '显示连接区'" @click="toggleConnectionPane" />
         <template v-if="active">
           <ElSelect v-model="database" class="db-select" :loading="databaseStatsLoading" @visible-change="refreshStatsOnOpen">
@@ -403,7 +403,15 @@ onBeforeUnmount(() => {
             >
               <span>DB {{ item.database }}</span>
               <span class="db-key-count">
-                {{ item.keyCount >= 0 ? `${item.keyCount} keys` : databaseStatsLoading ? '统计中' : databaseStatsError ? '统计失败' : '待统计' }}
+                {{
+                  item.keyCount >= 0
+                    ? `${item.keyCount} keys`
+                    : databaseStatsLoading
+                      ? $tr('统计中')
+                      : databaseStatsError
+                        ? $tr('统计失败')
+                        : $tr('待统计')
+                }}
               </span>
             </ElOption>
           </ElSelect>
@@ -416,7 +424,7 @@ onBeforeUnmount(() => {
 
       <div class="workspace" :style="workspaceStyle">
         <aside v-if="connectionPaneVisible" class="connections" :class="{ compact: connectionWidth < 110 }">
-          <div class="pane-head"><strong>连接</strong><ElButton :icon="Plus" circle size="small" title="新建连接" @click="createConnection" /></div>
+          <div class="pane-head"><strong>{{ $tr('连接') }}</strong><ElButton :icon="Plus" circle size="small" :title="$tr('新建连接')" @click="createConnection" /></div>
           <ElScrollbar>
             <button
               v-for="item in connections"
@@ -426,30 +434,30 @@ onBeforeUnmount(() => {
               @click="activateConnection(item)"
               @contextmenu.prevent.stop="openConnectionMenu($event, item)"
             >
-              <span class="redis-mark">R</span><span class="connection-name">{{ item.connectionName }}</span><ElTag v-if="item.mode === 'CLUSTER'" size="small" effect="plain">集群</ElTag>
+              <span class="redis-mark">R</span><span class="connection-name">{{ item.connectionName }}</span><ElTag v-if="item.mode === 'CLUSTER'" size="small" effect="plain">{{ $tr('集群') }}</ElTag>
             </button>
-            <ElEmpty v-if="!connections.length" description="还没有 Redis 连接" :image-size="64" />
+            <ElEmpty v-if="!connections.length" :description="$tr('还没有 Redis 连接')" :image-size="64" />
           </ElScrollbar>
         </aside>
-        <div v-if="connectionPaneVisible" class="resize-handle" title="拖动调整连接区宽度" @pointerdown="startResize('connections', $event)"></div>
+        <div v-if="connectionPaneVisible" class="resize-handle" :title="$tr('拖动调整连接区宽度')" @pointerdown="startResize('connections', $event)"></div>
 
         <template v-if="active && mode === 'browser'">
           <section class="key-list">
             <div class="search-row">
-              <ElInput v-model="keyPattern" placeholder="匹配模式，如 user:*" :prefix-icon="Search" @keyup.enter="loadKeys" />
+              <ElInput v-model="keyPattern" :placeholder="$tr('匹配模式，如 user:*')" :prefix-icon="Search" @keyup.enter="loadKeys" />
               <div class="key-actions">
-                <ElButton :icon="Refresh" circle title="刷新键与数量" @click="refreshConnection(active)" />
-                <ElButton v-if="writable" :icon="Plus" circle type="primary" title="新建键" @click="newKey" />
+                <ElButton :icon="Refresh" circle :title="$tr('刷新键与数量')" @click="refreshConnection(active)" />
+                <ElButton v-if="writable" :icon="Plus" circle type="primary" :title="$tr('新建键')" @click="newKey" />
               </div>
             </div>
-            <ElScrollbar v-loading="loadingKeys"><button v-for="item in keys" :key="item.key" class="key-item" :class="{ active: item.key === selectedKey }" @click="selectKey(item)"><ElTag size="small" effect="plain">{{ item.type }}</ElTag><span>{{ item.key }}</span><small>{{ item.ttlSeconds < 0 ? '永久' : `${item.ttlSeconds}s` }}</small></button><ElEmpty v-if="!loadingKeys && !keys.length" description="没有匹配的键" :image-size="64" /></ElScrollbar>
+            <ElScrollbar v-loading="loadingKeys"><button v-for="item in keys" :key="item.key" class="key-item" :class="{ active: item.key === selectedKey }" @click="selectKey(item)"><ElTag size="small" effect="plain">{{ item.type }}</ElTag><span>{{ item.key }}</span><small>{{ item.ttlSeconds < 0 ? '永久' : `${item.ttlSeconds}s` }}</small></button><ElEmpty v-if="!loadingKeys && !keys.length" :description="$tr('没有匹配的键')" :image-size="64" /></ElScrollbar>
           </section>
-          <div class="resize-handle" title="拖动调整键列表宽度" @pointerdown="startResize('keys', $event)"></div>
+          <div class="resize-handle" :title="$tr('拖动调整键列表宽度')" @pointerdown="startResize('keys', $event)"></div>
 
           <main class="editor" v-loading="keyLoading">
-            <div class="pane-head"><strong>{{ originalKey ? '编辑键' : '新建键' }}</strong><span v-if="!writable" class="readonly">只读连接</span><ElButton v-if="originalKey && writable" type="danger" plain :icon="Delete" @click="removeKey">删除</ElButton><ElButton v-if="writable" type="primary" :loading="savingKey" @click="persistKey">保存</ElButton></div>
+            <div class="pane-head"><strong>{{ $tr(originalKey ? '编辑键' : '新建键') }}</strong><span v-if="!writable" class="readonly">{{ $tr('只读连接') }}</span><ElButton v-if="originalKey && writable" type="danger" plain :icon="Delete" @click="removeKey">{{ $tr('删除') }}</ElButton><ElButton v-if="writable" type="primary" :loading="savingKey" @click="persistKey">{{ $tr('保存') }}</ElButton></div>
             <ElForm label-position="top" class="key-form">
-              <div class="key-meta"><ElFormItem label="键名"><ElInput v-model="keyForm.key" /></ElFormItem><ElFormItem label="类型"><ElSelect v-model="keyForm.type" :disabled="Boolean(originalKey)"><ElOption v-for="type in ['STRING','HASH','LIST','SET','ZSET']" :key="type" :label="type" :value="type" /></ElSelect></ElFormItem><ElFormItem label="TTL 秒（-1 永久）"><ElInputNumber v-model="keyForm.ttlSeconds" :min="-1" controls-position="right" /></ElFormItem></div>
+              <div class="key-meta"><ElFormItem :label="$tr('键名')"><ElInput v-model="keyForm.key" /></ElFormItem><ElFormItem :label="$tr('类型')"><ElSelect v-model="keyForm.type" :disabled="Boolean(originalKey)"><ElOption v-for="type in ['STRING','HASH','LIST','SET','ZSET']" :key="type" :label="type" :value="type" /></ElSelect></ElFormItem><ElFormItem :label="$tr('TTL 秒（-1 永久）')"><ElInputNumber v-model="keyForm.ttlSeconds" :min="-1" controls-position="right" /></ElFormItem></div>
               <ElFormItem :label="keyForm.type === 'STRING' ? '值' : keyForm.type === 'HASH' ? '字段 JSON 对象' : keyForm.type === 'ZSET' ? '成员与分数 JSON 对象' : '成员 JSON 数组'">
                 <ElInput v-model="keyForm.content" type="textarea" :rows="20" resize="none" class="value-editor" spellcheck="false" :readonly="!writable" />
               </ElFormItem>
@@ -459,35 +467,35 @@ onBeforeUnmount(() => {
 
         <main v-else-if="active" class="cli">
           <div ref="terminalOutput" class="terminal-output">
-            <div class="welcome">已连接 {{ active.connectionName }} / DB {{ database }}</div>
+            <div class="welcome">{{ $tr('已连接') }} {{ active.connectionName }} / DB {{ database }}</div>
             <div v-for="(line, i) in cliLines" :key="i" class="cli-block"><div class="prompt">redis[{{ line.database }}]&gt; {{ line.command }}</div><pre :class="{ error: line.error }">{{ line.output }}</pre></div>
           </div>
-          <div class="command-row"><span>{{ cliPrompt }}</span><ElInput ref="commandInput" v-model="command" autofocus :disabled="commandLoading" @keydown="onCommandKeydown" /><ElButton :icon="Promotion" circle type="primary" title="执行命令" :loading="commandLoading" @click="runCommand()" /><ElButton :icon="Delete" circle title="清空终端" @click="cliLines = []" /></div>
+          <div class="command-row"><span>{{ cliPrompt }}</span><ElInput ref="commandInput" v-model="command" autofocus :disabled="commandLoading" @keydown="onCommandKeydown" /><ElButton :icon="Promotion" circle type="primary" :title="$tr('执行命令')" :loading="commandLoading" @click="runCommand()" /><ElButton :icon="Delete" circle :title="$tr('清空终端')" @click="cliLines = []" /></div>
         </main>
-        <ElEmpty v-else class="no-connection" description="新建或选择一个 Redis 连接" />
+        <ElEmpty v-else class="no-connection" :description="$tr('新建或选择一个 Redis 连接')" />
       </div>
 
       <div v-if="contextMenu.visible" class="connection-menu" :style="{ left: `${contextMenu.x}px`, top: `${contextMenu.y}px` }" @click.stop>
-        <button v-if="contextMenu.item?.writable" @click="editConnection(contextMenu.item); closeContextMenu()"><Edit />编辑</button>
+        <button v-if="contextMenu.item?.writable" @click="editConnection(contextMenu.item); closeContextMenu()"><Edit />{{ $tr('编辑') }}</button>
         <button @click="testConnection(contextMenu.item); closeContextMenu()"><SwitchButton />PING</button>
-        <button @click="refreshConnection(contextMenu.item)"><Refresh />刷新</button>
-        <button @click="closeConnection(contextMenu.item)"><Close />关闭连接</button>
-        <button @click="showRedisInfo(contextMenu.item)"><DataAnalysis />查看 Redis 信息</button>
-        <button @click="openCli(contextMenu.item)"><Monitor />命令行模式</button>
-        <button v-if="contextMenu.item?.writable" class="danger" @click="removeConnection(contextMenu.item); closeContextMenu()"><Delete />删除</button>
+        <button @click="refreshConnection(contextMenu.item)"><Refresh />{{ $tr('刷新') }}</button>
+        <button @click="closeConnection(contextMenu.item)"><Close />{{ $tr('关闭连接') }}</button>
+        <button @click="showRedisInfo(contextMenu.item)"><DataAnalysis />{{ $tr('查看 Redis 信息') }}</button>
+        <button @click="openCli(contextMenu.item)"><Monitor />{{ $tr('命令行模式') }}</button>
+        <button v-if="contextMenu.item?.writable" class="danger" @click="removeConnection(contextMenu.item); closeContextMenu()"><Delete />{{ $tr('删除') }}</button>
       </div>
     </div>
 
     <ElDialog v-model="connectionVisible" :title="connectionForm.id ? '编辑 Redis 连接' : '新建 Redis 连接'" width="620px">
       <ElForm label-position="top">
-        <ElFormItem label="连接名称"><ElInput v-model="connectionForm.connectionName" maxlength="120" /></ElFormItem>
-        <ElFormItem label="连接模式"><ElSegmented v-model="connectionForm.mode" :options="[{ label: '单机', value: 'STANDALONE' }, { label: 'Cluster', value: 'CLUSTER' }]" /></ElFormItem>
-        <div v-if="connectionForm.mode === 'STANDALONE'" class="form-grid"><ElFormItem label="主机"><ElInput v-model="connectionForm.hostName" /></ElFormItem><ElFormItem label="端口"><ElInputNumber v-model="connectionForm.port" :min="1" :max="65535" controls-position="right" /></ElFormItem></div>
-        <ElFormItem v-else label="集群节点"><ElInput v-model="connectionForm.clusterNodes" type="textarea" :rows="4" placeholder="redis-1:6379, redis-2:6379, redis-3:6379" /></ElFormItem>
-        <div class="form-grid"><ElFormItem label="ACL 用户名"><ElInput v-model="connectionForm.username" placeholder="可选" /></ElFormItem><ElFormItem :label="connectionForm.id ? '密码（留空保持不变）' : '密码'"><ElInput v-model="connectionForm.password" type="password" show-password /></ElFormItem><ElFormItem label="命令超时 ms"><ElInputNumber v-model="connectionForm.timeoutMs" :min="500" :max="120000" controls-position="right" /></ElFormItem><ElFormItem v-if="connectionForm.mode === 'STANDALONE'" label="DB 数量"><ElInputNumber v-model="connectionForm.databaseCount" :min="1" :max="256" controls-position="right" /></ElFormItem></div>
-        <div class="switches"><ElCheckbox v-model="connectionForm.tlsEnabled" :true-value="1" :false-value="0">TLS</ElCheckbox><ElCheckbox v-model="connectionForm.isPublic" :true-value="1" :false-value="0">公开为只读连接</ElCheckbox></div>
+        <ElFormItem :label="$tr('连接名称')"><ElInput v-model="connectionForm.connectionName" maxlength="120" /></ElFormItem>
+        <ElFormItem :label="$tr('连接模式')"><ElSegmented v-model="connectionForm.mode" :options="[{ label: '单机', value: 'STANDALONE' }, { label: 'Cluster', value: 'CLUSTER' }]" /></ElFormItem>
+        <div v-if="connectionForm.mode === 'STANDALONE'" class="form-grid"><ElFormItem :label="$tr('主机')"><ElInput v-model="connectionForm.hostName" /></ElFormItem><ElFormItem :label="$tr('端口')"><ElInputNumber v-model="connectionForm.port" :min="1" :max="65535" controls-position="right" /></ElFormItem></div>
+        <ElFormItem v-else :label="$tr('集群节点')"><ElInput v-model="connectionForm.clusterNodes" type="textarea" :rows="4" placeholder="redis-1:6379, redis-2:6379, redis-3:6379" /></ElFormItem>
+        <div class="form-grid"><ElFormItem :label="$tr('ACL 用户名')"><ElInput v-model="connectionForm.username" :placeholder="$tr('可选')" /></ElFormItem><ElFormItem :label="connectionForm.id ? '密码（留空保持不变）' : '密码'"><ElInput v-model="connectionForm.password" type="password" show-password /></ElFormItem><ElFormItem :label="$tr('命令超时 ms')"><ElInputNumber v-model="connectionForm.timeoutMs" :min="500" :max="120000" controls-position="right" /></ElFormItem><ElFormItem v-if="connectionForm.mode === 'STANDALONE'" :label="$tr('DB 数量')"><ElInputNumber v-model="connectionForm.databaseCount" :min="1" :max="256" controls-position="right" /></ElFormItem></div>
+        <div class="switches"><ElCheckbox v-model="connectionForm.tlsEnabled" :true-value="1" :false-value="0">TLS</ElCheckbox><ElCheckbox v-model="connectionForm.isPublic" :true-value="1" :false-value="0">{{ $tr('公开为只读连接') }}</ElCheckbox></div>
       </ElForm>
-      <template #footer><ElButton @click="connectionVisible = false">取消</ElButton><ElButton type="primary" :loading="connectionSaving" @click="persistConnection">保存</ElButton></template>
+      <template #footer><ElButton @click="connectionVisible = false">{{ $tr('取消') }}</ElButton><ElButton type="primary" :loading="connectionSaving" @click="persistConnection">{{ $tr('保存') }}</ElButton></template>
     </ElDialog>
 
     <ElDialog v-model="infoVisible" :title="infoTitle" width="min(820px, 92vw)">

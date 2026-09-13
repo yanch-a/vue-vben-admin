@@ -57,64 +57,64 @@ function onSystemCommand(cmd: string | number) {
 <template>
   <!-- 整栏禁浏览器右键，避免工具按钮弹出系统菜单 -->
   <div class="client-toolbar" @contextmenu.prevent>
-    <ElButton type="primary" size="small" @click="emit('create')">新建连接</ElButton>
-    <ElButton size="small" @click="emit('open')">打开连接</ElButton>
+    <ElButton type="primary" size="small" @click="emit('create')">{{ $tr('新建连接') }}</ElButton>
+    <ElButton size="small" @click="emit('open')">{{ $tr('打开连接') }}</ElButton>
     <ElDivider direction="vertical" />
     <ElButton
       size="small"
       :icon="Refresh"
-      title="刷新当前浏览对象"
+      :title="$tr('刷新当前浏览对象')"
       :disabled="!hasConnection"
       @click="emit('refresh')"
     />
     <ElButton size="small" :disabled="!hasConnection" @click="emit('group')">
-      表分组
+      {{ $tr('表分组') }}
     </ElButton>
     <ElButton size="small" :disabled="!hasConnection" @click="emit('queryView')">
-      查询视图
+      {{ $tr('查询视图') }}
     </ElButton>
     <ElButton size="small" :disabled="!hasConnection" @click="emit('relation')">
-      关系画布
+      {{ $tr('关系画布') }}
     </ElButton>
     <ElButton size="small" @click="emit('savedQueries')">
-      查询文件
+      {{ $tr('查询文件') }}
     </ElButton>
     <ElButton size="small" @click="emit('workOrder')">
-      SQL 工单
+      {{ $tr('SQL 工单') }}
     </ElButton>
     <ElButton size="small" @click="emit('redis')">
       Redis
     </ElButton>
     <ElButton size="small" type="primary" :disabled="!hasConnection" @click="emit('ai')">
-      AI 助手
+      {{ $tr('AI 助手') }}
     </ElButton>
     <ElButton size="small" :disabled="!hasConnection" @click="emit('schemaDoc')">
-      结构文档
+      {{ $tr('结构文档') }}
     </ElButton>
     <ElButton size="small" :disabled="!hasConnection" @click="emit('history')">
-      查询历史
+      {{ $tr('查询历史') }}
     </ElButton>
     <ElDivider direction="vertical" />
     <ElButton size="small" @click="emit('tools')">
-      客户端工具
+      {{ $tr('客户端工具') }}
     </ElButton>
     <ElDropdown trigger="click" @command="onSystemCommand">
       <ElButton size="small">
-        系统功能
+        {{ $tr('系统功能') }}
         <ElIcon class="el-icon--right"><ArrowDown /></ElIcon>
       </ElButton>
       <template #dropdown>
         <ElDropdownMenu>
-          <ElDropdownItem command="export">导出配置</ElDropdownItem>
-          <ElDropdownItem command="import">导入配置</ElDropdownItem>
+          <ElDropdownItem command="export">{{ $tr('导出配置') }}</ElDropdownItem>
+          <ElDropdownItem command="import">{{ $tr('导入配置') }}</ElDropdownItem>
         </ElDropdownMenu>
       </template>
     </ElDropdown>
     <ElButton size="small" @click="emit('preferences')">
-      偏好设置
+      {{ $tr('偏好设置') }}
     </ElButton>
     <ElButton size="small" @click="emit('license')">
-      授权
+      {{ $tr('授权') }}
       <span v-if="licenseHint" class="lic-hint">（{{ licenseHint }}）</span>
     </ElButton>
     <ElBadge
@@ -127,7 +127,7 @@ function onSystemCommand(cmd: string | number) {
         :type="taskCount ? 'warning' : 'default'"
         @click="emit('progress')"
       >
-        进度
+        {{ $tr('进度') }}
       </ElButton>
     </ElBadge>
   </div>
@@ -136,11 +136,25 @@ function onSystemCommand(cmd: string | number) {
 <style scoped>
 .client-toolbar {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 4px;
+  /* 行间距 / 列间距：窄屏自动换行时仍保持可读 */
+  gap: 6px 4px;
   padding: 6px 10px;
   border-bottom: 1px solid var(--el-border-color);
   background: var(--el-bg-color);
+}
+.client-toolbar :deep(.el-button + .el-button),
+.client-toolbar :deep(.el-dropdown + .el-button),
+.client-toolbar :deep(.el-button + .el-dropdown),
+.client-toolbar :deep(.el-badge + .el-button),
+.client-toolbar :deep(.el-button + .el-badge) {
+  /* 用 gap 统一间距，去掉 Element Plus 相邻按钮默认 margin，换行后间距才一致 */
+  margin-left: 0;
+}
+.client-toolbar :deep(.el-divider--vertical) {
+  height: 1.2em;
+  margin: 0 2px;
 }
 .task-badge {
   margin-left: 4px;

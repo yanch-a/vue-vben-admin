@@ -17,10 +17,10 @@
 <template>
   <div class="system-log-management-container system-log-tabs">
     <el-tabs v-model="activeTab">
-      <el-tab-pane label="操作日志" name="oper" lazy>
+      <el-tab-pane :label="$tr('操作日志')" name="oper" lazy>
         <OperLog />
       </el-tab-pane>
-      <el-tab-pane label="登录日志" name="login" lazy>
+      <el-tab-pane :label="$tr('登录日志')" name="login" lazy>
         <LoginLog />
       </el-tab-pane>
     </el-tabs>

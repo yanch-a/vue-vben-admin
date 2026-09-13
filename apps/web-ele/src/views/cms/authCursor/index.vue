@@ -160,11 +160,11 @@ onMounted(fetchData);
 </script>
 
 <template>
-  <Page auto-content-height title="认证码管理">
+  <Page auto-content-height :title="$tr('认证码管理')">
     <template #extra>
-      <ElButton type="primary" @click="openEdit()">新增</ElButton>
-      <ElButton type="danger" @click="handleDelete()">批量删除</ElButton>
-      <ElButton @click="fetchData">刷新</ElButton>
+      <ElButton type="primary" @click="openEdit()">{{ $tr('新增') }}</ElButton>
+      <ElButton type="danger" @click="handleDelete()">{{ $tr('批量删除') }}</ElButton>
+      <ElButton @click="fetchData">{{ $tr('刷新') }}</ElButton>
     </template>
 
     <div class="mb-3 flex flex-wrap gap-2">
@@ -172,17 +172,17 @@ onMounted(fetchData);
         v-model="queryForm.name"
         class="w-40"
         clearable
-        placeholder="购买人名称"
+        :placeholder="$tr('购买人名称')"
         @keyup.enter="handleQuery"
       />
       <ElInput
         v-model="queryForm.code"
         class="w-40"
         clearable
-        placeholder="认证码"
+        :placeholder="$tr('认证码')"
         @keyup.enter="handleQuery"
       />
-      <ElButton type="primary" @click="handleQuery">查询</ElButton>
+      <ElButton type="primary" @click="handleQuery">{{ $tr('查询') }}</ElButton>
     </div>
 
     <ElTable
@@ -192,26 +192,26 @@ onMounted(fetchData);
       @selection-change="onSelectionChange"
     >
       <ElTableColumn type="selection" width="48" align="center" />
-      <ElTableColumn type="index" label="序号" width="55" align="center" />
-      <ElTableColumn prop="name" label="购买人名称" min-width="120" show-overflow-tooltip>
+      <ElTableColumn type="index" :label="$tr('序号')" width="55" align="center" />
+      <ElTableColumn prop="name" :label="$tr('购买人名称')" min-width="120" show-overflow-tooltip>
         <template #default="{ row }">
           <ElButton link type="primary" @click="openEdit(row)">
             {{ row.name }}
           </ElButton>
         </template>
       </ElTableColumn>
-      <ElTableColumn prop="code" label="认证码" min-width="140" show-overflow-tooltip />
-      <ElTableColumn prop="deviceId" label="设备码" min-width="120" show-overflow-tooltip />
-      <ElTableColumn prop="dayNum" label="有效天数" width="90" align="center" />
-      <ElTableColumn prop="deviceNum" label="设备数量" width="90" align="center" />
-      <ElTableColumn prop="useNum" label="已用设备" width="90" align="center" />
-      <ElTableColumn prop="startTime" label="生效日期" min-width="160" show-overflow-tooltip />
-      <ElTableColumn prop="osType" label="系统类别" width="100" align="center" />
-      <ElTableColumn prop="createTime" label="创建时间" min-width="160" show-overflow-tooltip />
-      <ElTableColumn label="操作" width="140" fixed="right" align="center">
+      <ElTableColumn prop="code" :label="$tr('认证码')" min-width="140" show-overflow-tooltip />
+      <ElTableColumn prop="deviceId" :label="$tr('设备码')" min-width="120" show-overflow-tooltip />
+      <ElTableColumn prop="dayNum" :label="$tr('有效天数')" width="90" align="center" />
+      <ElTableColumn prop="deviceNum" :label="$tr('设备数量')" width="90" align="center" />
+      <ElTableColumn prop="useNum" :label="$tr('已用设备')" width="90" align="center" />
+      <ElTableColumn prop="startTime" :label="$tr('生效日期')" min-width="160" show-overflow-tooltip />
+      <ElTableColumn prop="osType" :label="$tr('系统类别')" width="100" align="center" />
+      <ElTableColumn prop="createTime" :label="$tr('创建时间')" min-width="160" show-overflow-tooltip />
+      <ElTableColumn :label="$tr('操作')" width="140" fixed="right" align="center">
         <template #default="{ row }">
-          <ElButton link type="primary" @click="openEdit(row)">编辑</ElButton>
-          <ElButton link type="danger" @click="handleDelete(row)">删除</ElButton>
+          <ElButton link type="primary" @click="openEdit(row)">{{ $tr('编辑') }}</ElButton>
+          <ElButton link type="danger" @click="handleDelete(row)">{{ $tr('删除') }}</ElButton>
         </template>
       </ElTableColumn>
     </ElTable>
@@ -240,48 +240,48 @@ onMounted(fetchData);
       destroy-on-close
     >
       <ElForm label-width="120px">
-        <ElFormItem label="购买人名称" required>
+        <ElFormItem :label="$tr('购买人名称')" required>
           <ElInput v-model="form.name" maxlength="50" />
         </ElFormItem>
         <ElRow :gutter="12">
           <ElCol :span="12">
-            <ElFormItem label="认证码" required>
+            <ElFormItem :label="$tr('认证码')" required>
               <ElInput v-model="form.code" maxlength="50" />
             </ElFormItem>
           </ElCol>
           <ElCol :span="12">
-            <ElFormItem label="设备码">
+            <ElFormItem :label="$tr('设备码')">
               <ElInput v-model="form.deviceId" maxlength="50" />
             </ElFormItem>
           </ElCol>
           <ElCol :span="12">
-            <ElFormItem label="有效天数" required>
+            <ElFormItem :label="$tr('有效天数')" required>
               <ElInputNumber v-model="form.dayNum" :min="1" class="w-full" />
             </ElFormItem>
           </ElCol>
           <ElCol :span="12">
-            <ElFormItem label="生效日期" required>
+            <ElFormItem :label="$tr('生效日期')" required>
               <ElDatePicker
                 v-model="form.startTime"
                 class="w-full"
                 type="datetime"
                 value-format="YYYY-MM-DD HH:mm:ss"
-                placeholder="选择生效日期"
+                :placeholder="$tr('选择生效日期')"
               />
             </ElFormItem>
           </ElCol>
           <ElCol :span="8">
-            <ElFormItem label="设备数量" required>
+            <ElFormItem :label="$tr('设备数量')" required>
               <ElInputNumber v-model="form.deviceNum" :min="1" :max="10" class="w-full" />
             </ElFormItem>
           </ElCol>
           <ElCol :span="8">
-            <ElFormItem label="已用设备">
+            <ElFormItem :label="$tr('已用设备')">
               <ElInputNumber v-model="form.useNum" :min="0" :max="10" class="w-full" />
             </ElFormItem>
           </ElCol>
           <ElCol :span="8">
-            <ElFormItem label="系统类别" required>
+            <ElFormItem :label="$tr('系统类别')" required>
               <ElSelect v-model="form.osType" class="w-full">
                 <ElOption
                   v-for="item in osTypeOptions"
@@ -293,17 +293,17 @@ onMounted(fetchData);
             </ElFormItem>
           </ElCol>
         </ElRow>
-        <ElFormItem label="扩展字段">
+        <ElFormItem :label="$tr('扩展字段')">
           <ElInput v-model="form.ext" maxlength="100" />
         </ElFormItem>
-        <ElFormItem label="结果">
+        <ElFormItem :label="$tr('结果')">
           <ElInput v-model="form.description" type="textarea" :rows="6" />
         </ElFormItem>
       </ElForm>
       <template #footer>
-        <ElButton @click="dialogVisible = false">取消</ElButton>
+        <ElButton @click="dialogVisible = false">{{ $tr('取消') }}</ElButton>
         <ElButton type="primary" :loading="dialogLoading" @click="handleSave">
-          确定
+          {{ $tr('确定') }}
         </ElButton>
       </template>
     </ElDialog>

@@ -280,29 +280,29 @@ getList()
 <template>
   <div class="app-container">
     <el-form :model="queryParams" ref="queryFormRef" :inline="true" v-show="showSearch" label-width="68px">
-      <el-form-item label="邀请码" prop="inviteCode">
+      <el-form-item :label="$tr('邀请码')" prop="inviteCode">
         <el-input
           v-model="queryParams.inviteCode"
-          placeholder="请输入邀请码"
+          :placeholder="$tr('请输入邀请码')"
           clearable
           @keyup.enter="handleQuery"
         />
       </el-form-item>
-      <el-form-item label="状态" prop="status">
-        <el-select v-model="queryParams.status" placeholder="邀请码状态" clearable>
-          <el-option label="正常" value="0" />
-          <el-option label="停用" value="1" />
+      <el-form-item :label="$tr('状态')" prop="status">
+        <el-select v-model="queryParams.status" :placeholder="$tr('邀请码状态')" clearable>
+          <el-option :label="$tr('正常')" value="0" />
+          <el-option :label="$tr('停用')" value="1" />
         </el-select>
       </el-form-item>
-      <el-form-item label="使用状态" prop="used">
-        <el-select v-model="queryParams.used" placeholder="使用状态" clearable>
-          <el-option label="未使用" value="0" />
-          <el-option label="已使用" value="1" />
+      <el-form-item :label="$tr('使用状态')" prop="used">
+        <el-select v-model="queryParams.used" :placeholder="$tr('使用状态')" clearable>
+          <el-option :label="$tr('未使用')" value="0" />
+          <el-option :label="$tr('已使用')" value="1" />
         </el-select>
       </el-form-item>
       <el-form-item>
-        <el-button type="primary" :icon="Search" @click="handleQuery">搜索</el-button>
-        <el-button :icon="Refresh" @click="resetQuery">重置</el-button>
+        <el-button type="primary" :icon="Search" @click="handleQuery">{{ $tr('搜索') }}</el-button>
+        <el-button :icon="Refresh" @click="resetQuery">{{ $tr('重置') }}</el-button>
       </el-form-item>
     </el-form>
 
@@ -314,7 +314,7 @@ getList()
           :icon="Plus"
           @click="handleAdd"
         >
-新增
+{{ $tr('新增') }}
 </el-button>
       </el-col>
       <el-col :span="1.5">
@@ -325,7 +325,7 @@ getList()
           :disabled="single"
           @click="handleUpdate"
         >
-修改
+{{ $tr('修改') }}
 </el-button>
       </el-col>
       <el-col :span="1.5">
@@ -336,7 +336,7 @@ getList()
           :disabled="multiple"
           @click="handleDelete"
         >
-删除
+{{ $tr('删除') }}
 </el-button>
       </el-col>
       <el-col :span="1.5">
@@ -346,58 +346,58 @@ getList()
           :icon="Download"
           @click="handleBatchGenerate"
         >
-批量生成
+{{ $tr('批量生成') }}
 </el-button>
       </el-col>
     </el-row>
 
     <el-table v-loading="loading" :data="inviteCodeList" @selection-change="handleSelectionChange">
       <el-table-column type="selection" width="55" align="center" />
-      <el-table-column label="邀请码" align="center" prop="inviteCode" width="120" />
-      <el-table-column label="所属会员" align="center" prop="memberUserId" width="150">
+      <el-table-column :label="$tr('邀请码')" align="center" prop="inviteCode" width="120" />
+      <el-table-column :label="$tr('所属会员')" align="center" prop="memberUserId" width="150">
         <template #default="scope">
           <span>{{ getMemberUserDisplayName(scope.row.memberUserId) }}</span>
         </template>
       </el-table-column>
-      <el-table-column label="父邀请码" align="center" prop="parentInviteCode" width="120" />
-      <el-table-column label="福利API次数" align="center" prop="giftApiCount" width="120">
+      <el-table-column :label="$tr('父邀请码')" align="center" prop="parentInviteCode" width="120" />
+      <el-table-column :label="$tr('福利API次数')" align="center" prop="giftApiCount" width="120">
         <template #default="scope">
-          <el-tag type="success">{{ scope.row.giftApiCount || 0 }}次</el-tag>
+          <el-tag type="success">{{ scope.row.giftApiCount || 0 }}{{ $tr('次') }}</el-tag>
         </template>
       </el-table-column>
-      <el-table-column label="状态" align="center" prop="status" width="80">
+      <el-table-column :label="$tr('状态')" align="center" prop="status" width="80">
         <template #default="scope">
           <el-tag :type="scope.row.status === 0 ? 'success' : 'danger'">
-            {{ scope.row.status === 0 ? '正常' : '停用' }}
+            {{ $tr(scope.row.status === 0 ? '正常' : '停用') }}
           </el-tag>
         </template>
       </el-table-column>
-      <el-table-column label="使用状态" align="center" prop="used" width="100">
+      <el-table-column :label="$tr('使用状态')" align="center" prop="used" width="100">
         <template #default="scope">
           <el-tag :type="scope.row.used === 0 ? 'info' : 'success'">
-            {{ scope.row.used === 0 ? '未使用' : '已使用' }}
+            {{ $tr(scope.row.used === 0 ? '未使用' : '已使用') }}
           </el-tag>
         </template>
       </el-table-column>
-      <el-table-column label="使用时间" align="center" prop="usedTime" width="180">
+      <el-table-column :label="$tr('使用时间')" align="center" prop="usedTime" width="180">
         <template #default="scope">
           <span>{{ scope.row.usedTime ? parseTime(scope.row.usedTime, '{y}-{m}-{d} {h}:{i}:{s}') : '-' }}</span>
         </template>
       </el-table-column>
-      <el-table-column label="过期时间" align="center" prop="expireTime" width="180">
+      <el-table-column :label="$tr('过期时间')" align="center" prop="expireTime" width="180">
         <template #default="scope">
           <span>{{ scope.row.expireTime ? parseTime(scope.row.expireTime, '{y}-{m}-{d}') : '-' }}</span>
         </template>
       </el-table-column>
-      <el-table-column label="创建时间" align="center" prop="createTime" width="180">
+      <el-table-column :label="$tr('创建时间')" align="center" prop="createTime" width="180">
         <template #default="scope">
           <span>{{ parseTime(scope.row.createTime, '{y}-{m}-{d} {h}:{i}:{s}') }}</span>
         </template>
       </el-table-column>
-      <el-table-column label="操作" align="center" class-name="small-padding fixed-width" width="180" fixed="right">
+      <el-table-column :label="$tr('操作')" align="center" class-name="small-padding fixed-width" width="180" fixed="right">
         <template #default="scope">
-          <el-button link type="primary" :icon="EditIcon" @click="handleUpdate(scope.row)">修改</el-button>
-          <el-button link type="danger" :icon="Delete" @click="handleDelete(scope.row)">删除</el-button>
+          <el-button link type="primary" :icon="EditIcon" @click="handleUpdate(scope.row)">{{ $tr('修改') }}</el-button>
+          <el-button link type="danger" :icon="Delete" @click="handleDelete(scope.row)">{{ $tr('删除') }}</el-button>
         </template>
       </el-table-column>
     </el-table>
@@ -416,88 +416,88 @@ getList()
     <!-- 添加或修改邀请码对话框 -->
     <el-dialog :title="title" v-model="open" width="500px" append-to-body>
       <el-form ref="inviteCodeFormRef" :model="form" :rules="rules" label-width="100px">
-        <el-form-item label="邀请码" prop="inviteCode">
-          <el-input v-model="form.inviteCode" placeholder="请输入邀请码">
+        <el-form-item :label="$tr('邀请码')" prop="inviteCode">
+          <el-input v-model="form.inviteCode" :placeholder="$tr('请输入邀请码')">
             <template #append>
               <el-button 
                 type="primary" 
                 icon="Refresh" 
                 @click="generateFormInviteCode"
-                title="生成随机邀请码"
+                :title="$tr('生成随机邀请码')"
               >
-                生成
+                {{ $tr('生成') }}
               </el-button>
             </template>
           </el-input>
         </el-form-item>
-        <el-form-item label="所属会员" prop="memberUserId">
+        <el-form-item :label="$tr('所属会员')" prop="memberUserId">
           <MemberUserSelect 
             v-model="form.memberUserId" 
-            placeholder="请选择会员用户"
+            :placeholder="$tr('请选择会员用户')"
             @change="handleMemberUserChange"
           />
         </el-form-item>
-        <el-form-item label="父邀请码" prop="parentInviteCode">
-          <el-input v-model="form.parentInviteCode" placeholder="请输入父邀请码" />
+        <el-form-item :label="$tr('父邀请码')" prop="parentInviteCode">
+          <el-input v-model="form.parentInviteCode" :placeholder="$tr('请输入父邀请码')" />
         </el-form-item>
-        <el-form-item label="福利API次数" prop="giftApiCount">
+        <el-form-item :label="$tr('福利API次数')" prop="giftApiCount">
           <el-input-number 
             v-model="form.giftApiCount" 
             :min="0" 
             :max="1000" 
-            placeholder="使用该邀请码注册可获得的免费API调用次数"
+            :placeholder="$tr('使用该邀请码注册可获得的免费API调用次数')"
           />
           <div style=" margin-top: 5px; font-size: 12px;color: #909399;">
-            使用该邀请码注册的用户可获得的免费API调用次数
+            {{ $tr('使用该邀请码注册的用户可获得的免费API调用次数') }}
           </div>
         </el-form-item>
-        <el-form-item label="状态" prop="status">
+        <el-form-item :label="$tr('状态')" prop="status">
           <el-radio-group v-model="form.status">
-            <el-radio :value="0">正常</el-radio>
-            <el-radio :value="1">停用</el-radio>
+            <el-radio :value="0">{{ $tr('正常') }}</el-radio>
+            <el-radio :value="1">{{ $tr('停用') }}</el-radio>
           </el-radio-group>
         </el-form-item>
-        <el-form-item label="过期时间" prop="expireTime">
+        <el-form-item :label="$tr('过期时间')" prop="expireTime">
           <el-date-picker 
             v-model="form.expireTime"
             type="date"
-            placeholder="请选择过期时间"
+            :placeholder="$tr('请选择过期时间')"
             value-format="YYYY-MM-DD"
           />
         </el-form-item>
-        <el-form-item label="备注" prop="remark">
-          <el-input v-model="form.remark" type="textarea" placeholder="请输入内容" />
+        <el-form-item :label="$tr('备注')" prop="remark">
+          <el-input v-model="form.remark" type="textarea" :placeholder="$tr('请输入内容')" />
         </el-form-item>
       </el-form>
       <template #footer>
         <div class="dialog-footer">
-          <el-button @click="cancel">取 消</el-button>
-          <el-button type="primary" @click="submitForm">确 定</el-button>
+          <el-button @click="cancel">{{ $tr('取 消') }}</el-button>
+          <el-button type="primary" @click="submitForm">{{ $tr('确 定') }}</el-button>
         </div>
       </template>
     </el-dialog>
 
     <!-- 批量生成邀请码对话框 -->
-    <el-dialog title="批量生成邀请码" v-model="batchOpen" width="400px" append-to-body>
+    <el-dialog :title="$tr('批量生成邀请码')" v-model="batchOpen" width="400px" append-to-body>
       <el-form ref="batchFormRef" :model="batchForm" :rules="batchRules" label-width="100px">
-        <el-form-item label="会员用户" prop="memberUserId">
+        <el-form-item :label="$tr('会员用户')" prop="memberUserId">
           <MemberUserSelect 
             v-model="batchForm.memberUserId" 
-            placeholder="请选择会员用户"
+            :placeholder="$tr('请选择会员用户')"
             @change="handleBatchMemberUserChange"
           />
         </el-form-item>
-        <el-form-item label="生成数量" prop="count">
+        <el-form-item :label="$tr('生成数量')" prop="count">
           <el-input-number v-model="batchForm.count" :min="1" :max="100" />
         </el-form-item>
-        <el-form-item label="父邀请码" prop="parentInviteCode">
-          <el-input v-model="batchForm.parentInviteCode" placeholder="请输入父邀请码（可选）" />
+        <el-form-item :label="$tr('父邀请码')" prop="parentInviteCode">
+          <el-input v-model="batchForm.parentInviteCode" :placeholder="$tr('请输入父邀请码（可选）')" />
         </el-form-item>
       </el-form>
       <template #footer>
         <div class="dialog-footer">
-          <el-button @click="cancelBatch">取 消</el-button>
-          <el-button type="primary" @click="submitBatchForm">确 定</el-button>
+          <el-button @click="cancelBatch">{{ $tr('取 消') }}</el-button>
+          <el-button type="primary" @click="submitBatchForm">{{ $tr('确 定') }}</el-button>
         </div>
       </template>
     </el-dialog>

@@ -1590,10 +1590,10 @@
     <div class="relation-canvas-container">
     <div class="canvas-toolbar">
       <div class="toolbar-left">
-        <el-button :icon="ArrowLeft" @click="goBack">返回</el-button>
+        <el-button :icon="ArrowLeft" @click="goBack">{{ $tr('返回') }}</el-button>
         <el-select
           v-model="canvasInstanceName"
-          placeholder="切换画布实例"
+          :placeholder="$tr('切换画布实例')"
           size="default"
           filterable
           :disabled="switchingCanvas"
@@ -1609,36 +1609,34 @@
         </el-select>
         <span class="db-title">
           {{ dbConfigName
-          }}{{ canvasInstanceName ? ` / ${canvasInstanceName}` : '' }} -
-          关系画布
+          }}{{ canvasInstanceName ? ` / ${canvasInstanceName}` : '' }} {{ $tr('- 关系画布') }}
         </span>
         <span class="canvas-hint">
-          空白拖动画布 · 拖节点移动 · 边缘圆点拉线 · 双击表查看/改名 · Ctrl+滚轮缩放 ·
-          Shift 框选 · 表头颜色区分实例
+          {{ $tr('空白拖动画布 · 拖节点移动 · 边缘圆点拉线 · 双击表查看/改名 · Ctrl+滚轮缩放 · Shift 框选 · 表头颜色区分实例') }}
         </span>
       </div>
       <div class="toolbar-right">
         <el-tooltip
-          content="开启后点击表可叠加选中；也可按住 Shift / Ctrl 点选"
+          :content="$tr('开启后点击表可叠加选中；也可按住 Shift / Ctrl 点选')"
           placement="bottom"
         >
           <el-button
             :type="multiSelectMode ? 'warning' : 'default'"
             @click="toggleMultiSelectMode"
           >
-            {{ multiSelectMode ? '退出多选' : '多选模式' }}
+            {{ $tr(multiSelectMode ? '退出多选' : '多选模式') }}
           </el-button>
         </el-tooltip>
         <el-tooltip
-          content="请先多选至少 2 张表：开启「多选模式」后点击，或按住 Shift/Ctrl 点击"
+          :content="$tr('请先多选至少 2 张表：开启「多选模式」后点击，或按住 Shift/Ctrl 点击')"
           placement="bottom"
         >
           <el-button :disabled="selectedNodeIds.length < 2" @click="testPath">
-            寻路测试（已选 {{ selectedNodeIds.length }} 表）
+            {{ $tr('寻路测试（已选') }} {{ selectedNodeIds.length }} {{ $tr('表）') }}
           </el-button>
         </el-tooltip>
         <el-button type="primary" :loading="saving" @click="saveCanvas">
-          保存画布
+          {{ $tr('保存画布') }}
         </el-button>
       </div>
     </div>
@@ -1648,7 +1646,7 @@
         <div class="catalog-header">
           <el-select
             v-model="currentSchema"
-            placeholder="选择实例（拉表）"
+            :placeholder="$tr('选择实例（拉表）')"
             size="small"
             filterable
             style="width: 100%; margin-bottom: 8px"
@@ -1664,12 +1662,12 @@
           <el-input
             v-model="tableFilter"
             clearable
-            placeholder="搜索表名（推荐）"
+            :placeholder="$tr('搜索表名（推荐）')"
             size="small"
             :prefix-icon="Search"
           />
           <div class="catalog-meta">
-            <span>共 {{ filteredRemoteTables.length }} 张表</span>
+            <span>{{ $tr('共') }} {{ filteredRemoteTables.length }} {{ $tr('张表') }}</span>
             <el-button
               link
               type="primary"
@@ -1677,7 +1675,7 @@
               :loading="remoteLoading"
               @click="loadRemoteTables"
             >
-              刷新
+              {{ $tr('刷新') }}
             </el-button>
           </div>
         </div>
@@ -1712,21 +1710,21 @@
                 <div class="catalog-item-code">{{ table.tableName }}</div>
                 <div class="catalog-item-tags">
                   <el-tag v-if="isTableSynced(table)" size="small" type="info">
-                    已入库
+                    {{ $tr('已入库') }}
                   </el-tag>
                   <el-tag
                     v-if="isTableOnCanvas(table)"
                     size="small"
                     type="success"
                   >
-                    已在画布
+                    {{ $tr('已在画布') }}
                   </el-tag>
                   <el-tag
                     v-if="syncingTableName === table.tableName"
                     size="small"
                     type="warning"
                   >
-                    同步中
+                    {{ $tr('同步中') }}
                   </el-tag>
                 </div>
               </div>
@@ -1734,13 +1732,12 @@
           </div>
           <el-empty
             v-if="!remoteLoading && !filteredRemoteTables.length"
-            description="未找到表，请切换数据库或调整搜索"
+            :description="$tr('未找到表，请切换数据库或调整搜索')"
             :image-size="80"
           />
         </div>
         <div class="catalog-tip">
-          上方切换「拉表实例」可跨库加表到当前画布；工具栏切换的是整张实例画布。左键或右键「添加」加入；边缘拖出连线；Delete
-          移除（需保存才持久化）。
+          {{ $tr('上方切换「拉表实例」可跨库加表到当前画布；工具栏切换的是整张实例画布。左键或右键「添加」加入；边缘拖出连线；Delete 移除（需保存才持久化）。') }}
         </div>
       </div>
 
@@ -1759,24 +1756,24 @@
           :class="{ disabled: ctxMenuOnCanvas }"
           @click="!ctxMenuOnCanvas && ctxMenuAdd()"
         >
-          添加到画布
+          {{ $tr('添加到画布') }}
         </div>
         <div class="vq-ctx-item" @click="openRenameDialog()">
-          修改显示名称
+          {{ $tr('修改显示名称') }}
         </div>
         <div
           class="vq-ctx-item danger"
           :class="{ disabled: !ctxMenuOnCanvas }"
           @click="ctxMenuOnCanvas && ctxMenuRemove()"
         >
-          从画布删除
+          {{ $tr('从画布删除') }}
         </div>
       </div>
     </Teleport>
 
     <el-dialog
       v-model="edgeDialogVisible"
-      title="编辑表关系"
+      :title="$tr('编辑表关系')"
       width="900px"
       :close-on-click-modal="false"
     >
@@ -1788,10 +1785,10 @@
       <el-form label-width="90px" class="edge-form">
         <el-row :gutter="12">
           <el-col :span="12">
-            <el-form-item label="关系名称">
+            <el-form-item :label="$tr('关系名称')">
               <el-input
                 v-model="edgeForm.relationshipName"
-                placeholder="可选，如：订单-用户"
+                :placeholder="$tr('可选，如：订单-用户')"
               />
             </el-form-item>
           </el-col>
@@ -1805,19 +1802,19 @@
             </el-form-item>
           </el-col>
           <el-col :span="6">
-            <el-form-item label="关系类型">
+            <el-form-item :label="$tr('关系类型')">
               <el-select v-model="edgeForm.relationshipType">
-                <el-option label="一对一" value="ONE_TO_ONE" />
-                <el-option label="一对多" value="ONE_TO_MANY" />
-                <el-option label="多对一" value="MANY_TO_ONE" />
-                <el-option label="多对多" value="MANY_TO_MANY" />
+                <el-option :label="$tr('一对一')" value="ONE_TO_ONE" />
+                <el-option :label="$tr('一对多')" value="ONE_TO_MANY" />
+                <el-option :label="$tr('多对一')" value="MANY_TO_ONE" />
+                <el-option :label="$tr('多对多')" value="MANY_TO_MANY" />
               </el-select>
             </el-form-item>
           </el-col>
         </el-row>
 
         <el-divider content-position="left">
-          字段映射（多组之间 AND 连接）
+          {{ $tr('字段映射（多组之间 AND 连接）') }}
         </el-divider>
         <div
           v-for="(mapping, idx) in edgeForm.fields"
@@ -1827,7 +1824,7 @@
           <el-select
             v-model="mapping.sourceFieldId"
             filterable
-            placeholder="源表字段"
+            :placeholder="$tr('源表字段')"
             class="mapping-field"
           >
             <el-option
@@ -1848,7 +1845,7 @@
           <el-select
             v-model="mapping.targetFieldId"
             filterable
-            placeholder="目标表字段"
+            :placeholder="$tr('目标表字段')"
             class="mapping-field"
           >
             <el-option
@@ -1858,37 +1855,37 @@
               :value="f.id"
             />
           </el-select>
-          <el-checkbox v-model="mapping.isPrimaryMapping" label="主映射" />
+          <el-checkbox v-model="mapping.isPrimaryMapping" :label="$tr('主映射')" />
           <el-button
             type="danger"
             link
             :disabled="edgeForm.fields.length <= 1"
             @click="removeMapping(idx)"
           >
-            删除
+            {{ $tr('删除') }}
           </el-button>
         </div>
         <el-button link type="primary" @click="addMapping">
-          + 添加字段映射
+          {{ $tr('+ 添加字段映射') }}
         </el-button>
 
-        <el-form-item label="描述" style="margin-top: 12px">
+        <el-form-item :label="$tr('描述')" style="margin-top: 12px">
           <el-input
             v-model="edgeForm.description"
             type="textarea"
             :rows="2"
-            placeholder="可选"
+            :placeholder="$tr('可选')"
           />
         </el-form-item>
       </el-form>
       <template #footer>
-        <el-button type="danger" plain @click="deleteEdge">删除该关系</el-button>
-        <el-button @click="cancelEdgeDialog">取消</el-button>
-        <el-button type="primary" @click="confirmEdge">确定</el-button>
+        <el-button type="danger" plain @click="deleteEdge">{{ $tr('删除该关系') }}</el-button>
+        <el-button @click="cancelEdgeDialog">{{ $tr('取消') }}</el-button>
+        <el-button type="primary" @click="confirmEdge">{{ $tr('确定') }}</el-button>
       </template>
     </el-dialog>
 
-    <el-dialog v-model="pathDialogVisible" title="自动寻路结果" width="640px">
+    <el-dialog v-model="pathDialogVisible" :title="$tr('自动寻路结果')" width="640px">
       <template v-if="pathResult">
         <el-alert
           :type="pathResult.connected ? 'success' : 'error'"
@@ -1909,7 +1906,7 @@
             "
             style="margin-bottom: 8px"
           >
-            自动引入中间表：
+            {{ $tr('自动引入中间表：') }}
             <el-tag
               v-for="tid in pathResult.intermediateTableIds"
               :key="tid"
@@ -1944,32 +1941,32 @@
     >
       <div v-loading="tableInfoLoading" class="table-info-dialog">
         <el-form label-width="100px" class="table-info-name-form">
-          <el-form-item label="显示名称">
+          <el-form-item :label="$tr('显示名称')">
             <el-input
               v-model="tableInfo.displayName"
-              placeholder="表头显示名 / 注释"
+              :placeholder="$tr('表头显示名 / 注释')"
               maxlength="200"
               show-word-limit
             />
           </el-form-item>
-          <el-form-item label="同步库注释">
+          <el-form-item :label="$tr('同步库注释')">
             <el-checkbox v-model="tableInfo.syncRemoteComment">
-              同步修改数据库表注释
+              {{ $tr('同步修改数据库表注释') }}
             </el-checkbox>
             <div class="table-info-sync-tip">
-              勾选：同时改远端库 COMMENT；不勾选：仅改本系统目录/画布显示名
+              {{ $tr('勾选：同时改远端库 COMMENT；不勾选：仅改本系统目录/画布显示名') }}
             </div>
           </el-form-item>
         </el-form>
         <el-descriptions :column="2" border size="small" class="table-info-meta">
-          <el-descriptions-item label="表名">
+          <el-descriptions-item :label="$tr('表名')">
             {{ tableInfo.tableName || '-' }}
           </el-descriptions-item>
-          <el-descriptions-item label="实例">
+          <el-descriptions-item :label="$tr('实例')">
             <span class="schema-dot" :style="{ background: headerColorForSchema(tableInfo.schemaName) }"></span>
             {{ tableInfo.schemaName || '-' }}
           </el-descriptions-item>
-          <el-descriptions-item label="字段数">
+          <el-descriptions-item :label="$tr('字段数')">
             {{ tableInfo.columns.length }}
           </el-descriptions-item>
         </el-descriptions>
@@ -1980,10 +1977,10 @@
           size="small"
           max-height="360"
           style="margin-top: 12px"
-          empty-text="暂无字段信息"
+          :empty-text="$tr('暂无字段信息')"
         >
           <el-table-column
-            label="字段名"
+            :label="$tr('字段名')"
             min-width="140"
             show-overflow-tooltip
           >
@@ -1992,7 +1989,7 @@
             </template>
           </el-table-column>
           <el-table-column
-            label="类型"
+            :label="$tr('类型')"
             min-width="120"
             show-overflow-tooltip
           >
@@ -2000,34 +1997,30 @@
               {{ row.dataType || row.columnType || '-' }}
             </template>
           </el-table-column>
-          <el-table-column label="可空" width="70" align="center">
+          <el-table-column :label="$tr('可空')" width="70" align="center">
             <template #default="{ row }">
-              {{
-                row.isNullable === 1 ||
+              {{ $tr(row.isNullable === 1 ||
                 row.isNullable === true ||
                 row.nullable === true ||
                 row.nullable === 1 ||
                 row.isNullable === 'YES'
                   ? '是'
-                  : '否'
-              }}
+                  : '否') }}
             </template>
           </el-table-column>
-          <el-table-column label="主键" width="70" align="center">
+          <el-table-column :label="$tr('主键')" width="70" align="center">
             <template #default="{ row }">
-              {{
-                row.isPrimary === 1 ||
+              {{ $tr(row.isPrimary === 1 ||
                 row.isPrimary === true ||
                 row.primaryKey ||
                 row.isPrimaryKey ||
                 row.pk
                   ? '是'
-                  : ''
-              }}
+                  : '') }}
             </template>
           </el-table-column>
           <el-table-column
-            label="注释"
+            :label="$tr('注释')"
             min-width="160"
             show-overflow-tooltip
           >
@@ -2047,34 +2040,34 @@
         </el-table>
       </div>
       <template #footer>
-        <el-button @click="tableInfoVisible = false">关闭</el-button>
+        <el-button @click="tableInfoVisible = false">{{ $tr('关闭') }}</el-button>
         <el-button
           type="primary"
           :loading="tableInfoSaving"
           @click="saveTableDisplayNameFromInfo"
         >
-          保存显示名称
+          {{ $tr('保存显示名称') }}
         </el-button>
       </template>
     </el-dialog>
 
     <el-dialog
       v-model="renameDialogVisible"
-      title="修改显示名称"
+      :title="$tr('修改显示名称')"
       width="480px"
       destroy-on-close
     >
       <el-form label-width="90px">
-        <el-form-item label="表名">
+        <el-form-item :label="$tr('表名')">
           <el-input :model-value="renameForm.tableName" disabled />
         </el-form-item>
-        <el-form-item label="实例">
+        <el-form-item :label="$tr('实例')">
           <el-input :model-value="renameForm.schemaName" disabled />
         </el-form-item>
-        <el-form-item label="显示名称" required>
+        <el-form-item :label="$tr('显示名称')" required>
           <el-input
             v-model="renameForm.displayName"
-            placeholder="将写入数据库表注释"
+            :placeholder="$tr('将写入数据库表注释')"
             maxlength="200"
             show-word-limit
             @keyup.enter="confirmRenameFromCatalog"
@@ -2082,13 +2075,13 @@
         </el-form-item>
       </el-form>
       <template #footer>
-        <el-button @click="renameDialogVisible = false">取消</el-button>
+        <el-button @click="renameDialogVisible = false">{{ $tr('取消') }}</el-button>
         <el-button
           type="primary"
           :loading="renameSaving"
           @click="confirmRenameFromCatalog"
         >
-          确定
+          {{ $tr('确定') }}
         </el-button>
       </template>
     </el-dialog>

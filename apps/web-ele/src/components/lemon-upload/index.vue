@@ -220,10 +220,10 @@ watch(
       <template v-if="listType === 'picture-card'">
         <span class="text-2xl leading-none">+</span>
       </template>
-      <ElButton v-else type="primary" size="small">点击上传</ElButton>
+      <ElButton v-else type="primary" size="small">{{ $tr('点击上传') }}</ElButton>
     </ElUpload>
 
-    <ElDialog v-model="dialogVisible" title="查看大图">
+    <ElDialog v-model="dialogVisible" :title="$tr('查看大图')">
       <img class="w-full" :src="dialogImageUrl" alt="preview" />
     </ElDialog>
   </div>

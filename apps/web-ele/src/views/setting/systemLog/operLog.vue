@@ -80,15 +80,15 @@
     <vab-query-form>
       <vab-query-form-top-panel>
         <el-form inline label-width="70px" :model="queryForm" @submit.prevent>
-          <el-form-item label="操作用户">
+          <el-form-item :label="$tr('操作用户')">
             <el-input v-model.trim="queryForm.account" clearable />
           </el-form-item>
-          <el-form-item label="模块名称">
+          <el-form-item :label="$tr('模块名称')">
             <el-input v-model.trim="queryForm.title" clearable />
           </el-form-item>
           <el-form-item>
             <el-button :icon="Search" type="primary" @click="queryData">
-              查询
+              {{ $tr('查询') }}
             </el-button>
           </el-form-item>
         </el-form>
@@ -102,15 +102,15 @@
             <el-col :span="12">
               <div class="vab-table-expand">
                 <p>
-                  <span class="vab-table-expand-title">操作模块:</span>
+                  <span class="vab-table-expand-title">{{ $tr('操作模块:') }}</span>
                   {{ row.title }}
                 </p>
                 <p>
-                  <span class="vab-table-expand-title">操作类型:</span>
+                  <span class="vab-table-expand-title">{{ $tr('操作类型:') }}</span>
                   {{ getBusinessType(row) }}
                 </p>
                 <p>
-                  <span class="vab-table-expand-title">操作用户:</span>
+                  <span class="vab-table-expand-title">{{ $tr('操作用户:') }}</span>
                   {{ row.operName }}
                 </p>
                 <p>
@@ -118,11 +118,11 @@
                   {{ row.operIp }}
                 </p>
                 <p>
-                  <span class="vab-table-expand-title">操作时间:</span>
+                  <span class="vab-table-expand-title">{{ $tr('操作时间:') }}</span>
                   {{ row.operTime }}
                 </p>
                 <p>
-                  <span class="vab-table-expand-title">返回结果:</span>
+                  <span class="vab-table-expand-title">{{ $tr('返回结果:') }}</span>
                   <span v-if="row.status == 0">
                     <span class="vab-dot vab-dot-success"><span></span></span>
                     {{ row.jsonResult }}
@@ -137,19 +137,19 @@
             <el-col :span="12">
               <div class="vab-table-expand">
                 <p>
-                  <span class="vab-table-expand-title">请求地址:</span>
+                  <span class="vab-table-expand-title">{{ $tr('请求地址:') }}</span>
                   {{ row.operUrl }}
                 </p>
                 <p>
-                  <span class="vab-table-expand-title">请求方式:</span>
+                  <span class="vab-table-expand-title">{{ $tr('请求方式:') }}</span>
                   {{ row.requestMethod }}
                 </p>
                 <p>
-                  <span class="vab-table-expand-title">请求方法:</span>
+                  <span class="vab-table-expand-title">{{ $tr('请求方法:') }}</span>
                   {{ row.method }}
                 </p>
                 <p>
-                  <span class="vab-table-expand-title">请求参数:</span>
+                  <span class="vab-table-expand-title">{{ $tr('请求参数:') }}</span>
                   {{ row.operParam }}
                 </p>
               </div>
@@ -157,22 +157,22 @@
           </el-row>
         </template>
       </el-table-column>
-      <el-table-column label="操作模块" prop="title" min-width="120" />
+      <el-table-column :label="$tr('操作模块')" prop="title" min-width="120" />
       <el-table-column
-        label="操作类型"
+        :label="$tr('操作类型')"
         prop="businessType"
         width="100"
         :formatter="getBusinessType"
       />
-      <el-table-column label="操作用户" prop="operName" width="120" />
+      <el-table-column :label="$tr('操作用户')" prop="operName" width="120" />
       <el-table-column
-        label="请求地址"
+        :label="$tr('请求地址')"
         prop="operUrl"
         min-width="180"
         show-overflow-tooltip
       />
       <el-table-column
-        label="返回结果"
+        :label="$tr('返回结果')"
         prop="status"
         min-width="160"
         show-overflow-tooltip
@@ -188,15 +188,15 @@
           </span>
         </template>
       </el-table-column>
-      <el-table-column label="操作IP" prop="operIp" width="130" />
+      <el-table-column :label="$tr('操作IP')" prop="operIp" width="130" />
       <el-table-column
-        label="操作时间"
+        :label="$tr('操作时间')"
         prop="operTime"
         width="170"
         show-overflow-tooltip
       />
       <template #empty>
-        <el-empty class="vab-data-empty" description="暂无数据" />
+        <el-empty class="vab-data-empty" :description="$tr('暂无数据')" />
       </template>
     </el-table>
     <el-pagination

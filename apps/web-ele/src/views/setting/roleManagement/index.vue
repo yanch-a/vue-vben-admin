@@ -132,10 +132,10 @@
     <vab-query-form>
       <vab-query-form-left-panel :span="12">
         <el-button :icon="Plus" type="primary" @click="handleEdit($event)">
-          添加
+          {{ $tr('添加') }}
         </el-button>
         <el-button :icon="Delete" type="danger" @click="handleDelete($event)">
-          批量删除
+          {{ $tr('批量删除') }}
         </el-button>
       </vab-query-form-left-panel>
       <vab-query-form-right-panel :span="12">
@@ -144,19 +144,19 @@
             <el-input
               v-model.trim="queryForm.roleKey"
               clearable
-              placeholder="请输入角色编码"
+              :placeholder="$tr('请输入角色编码')"
             />
           </el-form-item>
           <el-form-item>
             <el-input
               v-model.trim="queryForm.roleName"
               clearable
-              placeholder="请输入角色名称"
+              :placeholder="$tr('请输入角色名称')"
             />
           </el-form-item>
           <el-form-item>
             <el-button :icon="Search" type="primary" @click="queryData">
-              查询
+              {{ $tr('查询') }}
             </el-button>
           </el-form-item>
         </el-form>
@@ -170,7 +170,7 @@
       @selection-change="setSelectRows"
     >
       <el-table-column align="center" show-overflow-tooltip type="selection" />
-      <el-table-column align="center" label="序号" width="55">
+      <el-table-column align="center" :label="$tr('序号')" width="55">
         <template #default="{ $index }">
           {{ $index + 1 }}
         </template>
@@ -183,27 +183,27 @@
       />
       <el-table-column
         align="center"
-        label="角色名称"
+        :label="$tr('角色名称')"
         prop="roleName"
         show-overflow-tooltip
       />
       <el-table-column
         align="center"
-        label="角色编码"
+        :label="$tr('角色编码')"
         prop="roleKey"
         show-overflow-tooltip
       />
       <el-table-column
         align="center"
-        label="排序"
+        :label="$tr('排序')"
         prop="roleSort"
         show-overflow-tooltip
       />
-      <el-table-column align="center" label="角色状态" prop="status" />
-      <el-table-column align="center" label="创建时间" prop="createTime" />
+      <el-table-column align="center" :label="$tr('角色状态')" prop="status" />
+      <el-table-column align="center" :label="$tr('创建时间')" prop="createTime" />
       <el-table-column
         align="center"
-        label="操作"
+        :label="$tr('操作')"
         show-overflow-tooltip
         width="200"
       >
@@ -214,7 +214,7 @@
             text
             type="primary"
             @click="handleEdit(row)"
-            title="编辑"
+            :title="$tr('编辑')"
           />
           <el-button
             v-permissions="{ permission: ['RoleManagement:delete'] }"
@@ -222,7 +222,7 @@
             text
             type="primary"
             @click="handleDelete(row)"
-            title="删除"
+            :title="$tr('删除')"
           />
           <el-button
             v-permissions="{ permission: ['RoleManagement:updateRolePerm'] }"
@@ -230,7 +230,7 @@
             text
             type="primary"
             @click="handleEditPermissions(row)"
-            title="分配菜单权限"
+            :title="$tr('分配菜单权限')"
           />
         </template>
       </el-table-column>
@@ -239,7 +239,7 @@
           class="vab-data-empty"
           :src="require('@/assets/empty_images/data_empty.png')"
         /> -->
-        <el-empty class="vab-data-empty" description="暂无数据" />
+        <el-empty class="vab-data-empty" :description="$tr('暂无数据')" />
       </template>
     </el-table>
     <el-pagination

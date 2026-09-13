@@ -66,15 +66,15 @@ onMounted(loadSites);
 </script>
 
 <template>
-  <Page auto-content-height title="CMS 入口">
+  <Page auto-content-height :title="$tr('CMS 入口')">
     <ElRow :gutter="16">
       <ElCol :span="10">
-        <div class="mb-4 text-base font-medium">当前站点</div>
+        <div class="mb-4 text-base font-medium">{{ $tr('当前站点') }}</div>
         <ElSelect
           v-model="siteId"
           v-loading="loading"
           class="w-full"
-          placeholder="请选择站点"
+          :placeholder="$tr('请选择站点')"
           @change="changeSite"
         >
           <ElOption
@@ -85,12 +85,12 @@ onMounted(loadSites);
           />
         </ElSelect>
 
-        <div class="mt-6 mb-3 text-base font-medium">站点列表</div>
+        <div class="mt-6 mb-3 text-base font-medium">{{ $tr('站点列表') }}</div>
         <ElTable :data="sites" border size="small">
           <ElTableColumn prop="id" label="ID" width="70" align="center" />
-          <ElTableColumn prop="siteName" label="站点名称" min-width="140" />
-          <ElTableColumn prop="siteKey" label="标识" min-width="100" />
-          <ElTableColumn label="操作" width="100" align="center">
+          <ElTableColumn prop="siteName" :label="$tr('站点名称')" min-width="140" />
+          <ElTableColumn prop="siteKey" :label="$tr('标识')" min-width="100" />
+          <ElTableColumn :label="$tr('操作')" width="100" align="center">
             <template #default="{ row }">
               <ElButton
                 link
@@ -102,7 +102,7 @@ onMounted(loadSites);
                   }
                 "
               >
-                设为当前
+                {{ $tr('设为当前') }}
               </ElButton>
             </template>
           </ElTableColumn>
@@ -110,7 +110,7 @@ onMounted(loadSites);
       </ElCol>
 
       <ElCol :span="14">
-        <div class="mb-4 text-base font-medium">功能入口</div>
+        <div class="mb-4 text-base font-medium">{{ $tr('功能入口') }}</div>
         <ElSpace wrap :size="12">
           <ElButton
             v-for="item in links"

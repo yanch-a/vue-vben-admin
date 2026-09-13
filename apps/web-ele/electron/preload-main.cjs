@@ -14,5 +14,6 @@ contextBridge.exposeInMainWorld(
     openServerSelector: () => ipcRenderer.invoke('lemon-server:open-selector'),
     setAuthenticated: (authenticated) =>
       ipcRenderer.invoke('lemon-server:set-authenticated', authenticated),
+    setLocale: (locale) => ipcRenderer.invoke('lemon-i18n:set-locale', locale),
   }),
 );

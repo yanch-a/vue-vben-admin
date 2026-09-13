@@ -1,8 +1,8 @@
-import { createApp, watchEffect } from 'vue';
+import { createApp, watch, watchEffect } from 'vue';
 
 import { registerAccessDirective } from '@vben/access';
 import { registerLoadingDirective } from '@vben/common-ui';
-import { preferences } from '@vben/preferences';
+import { flushPreferences, preferences } from '@vben/preferences';
 import { initStores, useAccessStore } from '@vben/stores';
 import '@vben/styles';
 import '@vben/styles/ele';
@@ -12,6 +12,8 @@ import ElementPlus from 'element-plus';
 import { ElLoading } from 'element-plus';
 
 import { $t, setupI18n } from '#/locales';
+import { setupElementPlusI18nBridge } from '#/locales/element-plus-i18n';
+import { translateUiText } from '#/locales/ui-text';
 
 import { initComponentAdapter } from './adapter/component';
 import { initSetupVbenForm } from './adapter/form';
@@ -19,7 +21,10 @@ import App from './app.vue';
 import { setupAdminPlusCompat } from './compat/admin-plus';
 import { registerPermissionsDirective } from './compat/permissions';
 import { registerVabComponents } from './compat/vab';
-import { setDesktopAuthenticated } from './desktop/runtime';
+import {
+  setDesktopAuthenticated,
+  setDesktopLocale,
+} from './desktop/runtime';
 import { router } from './router';
 import { branding } from './store/branding';
 
@@ -63,6 +68,26 @@ async function bootstrap(namespace: string) {
 
   // 国际化 i18n 配置
   await setupI18n(app);
+
+  // 兼容存量业务页面中的静态文字，并统一处理 Element Plus 动态反馈文案。
+  app.config.globalProperties.$tr = translateUiText;
+  setupElementPlusI18nBridge();
+  await setDesktopLocale(preferences.app.locale);
+
+  // 动态菜单由后端按请求语言返回；切换语言后刷新一次，确保菜单与响应语言同步。
+  // 刷新前必须等待偏好设置落盘，否则会中断 150ms 的防抖保存并恢复成默认中文。
+  watch(
+    () => preferences.app.locale,
+    async (locale, previousLocale) => {
+      if (previousLocale && locale !== previousLocale) {
+        await Promise.all([
+          flushPreferences(),
+          setDesktopLocale(locale),
+        ]);
+        window.location.reload();
+      }
+    },
+  );
 
   // 配置 pinia-tore
   await initStores(app, { namespace });

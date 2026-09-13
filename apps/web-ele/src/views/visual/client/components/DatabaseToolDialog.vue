@@ -193,7 +193,7 @@ async function onTest(row: DatabaseToolCatalogVO) {
 <template>
   <ElDialog
     v-model="visible"
-    title="官方数据库客户端"
+    :title="$tr('官方数据库客户端')"
     width="980px"
     destroy-on-close
     append-to-body
@@ -202,17 +202,17 @@ async function onTest(row: DatabaseToolCatalogVO) {
       type="info"
       :closable="false"
       show-icon
-      title="客户端由服务端进程调用。上传 ZIP 时请保持官方目录结构；上传和测试客户端需要系统管理员权限。"
+      :title="$tr('客户端由服务端进程调用。上传 ZIP 时请保持官方目录结构；上传和测试客户端需要系统管理员权限。')"
       class="mb-3"
     />
 
     <div class="tool-directory">
-      <div class="tool-directory-title">基础目录</div>
+      <div class="tool-directory-title">{{ $tr('基础目录') }}</div>
       <ElInput
         v-model="baseDirectory"
         class="directory-input"
         clearable
-        placeholder="例如 /data/apps/lemonDb/dbClient"
+        :placeholder="$tr('例如 /data/apps/lemonDb/dbClient')"
       />
       <ElButton
         type="primary"
@@ -220,14 +220,14 @@ async function onTest(row: DatabaseToolCatalogVO) {
         :loading="savingDirectory"
         @click="onSaveDirectory"
       >
-        保存并扫描
+        {{ $tr('保存并扫描') }}
       </ElButton>
       <ElTag
         v-if="settings"
         :type="settings.exists && settings.directory && settings.readable ? 'success' : 'warning'"
         size="small"
       >
-        {{ settings.availableTools }} / {{ settings.totalTools }} 个客户端可用
+        {{ settings.availableTools }} / {{ settings.totalTools }} {{ $tr('个客户端可用') }}
       </ElTag>
       <span v-if="settings?.message" class="directory-message">
         {{ settings.message }}
@@ -235,7 +235,7 @@ async function onTest(row: DatabaseToolCatalogVO) {
     </div>
 
     <div class="tool-upload">
-      <div class="tool-upload-title">上传客户端</div>
+      <div class="tool-upload-title">{{ $tr('上传客户端') }}</div>
       <ElSelect v-model="uploadDbType" filterable class="type-select">
         <ElOption
           v-for="item in dbTypeOptions"
@@ -263,38 +263,38 @@ async function onTest(row: DatabaseToolCatalogVO) {
           :on-change="onFileChange"
           :on-remove="onFileRemove"
         >
-          <ElButton>选择文件</ElButton>
+          <ElButton>{{ $tr('选择文件') }}</ElButton>
         </ElUpload>
         <span v-if="uploadFile" class="selected-file" :title="uploadFile.name">
           {{ uploadFile.name }}
         </span>
         <ElButton v-if="uploadFile" link type="danger" @click="clearSelectedFile">
-          清除
+          {{ $tr('清除') }}
         </ElButton>
       </div>
       <ElButton class="upload-submit" type="primary" :loading="uploading" @click="onUpload">
-        上传
+        {{ $tr('上传') }}
       </ElButton>
     </div>
 
     <ElTable v-loading="loading" :data="rows" size="small" border height="460">
-      <ElTableColumn prop="dbLabel" label="数据库" width="150" />
-      <ElTableColumn prop="toolName" label="工具" width="130" />
-      <ElTableColumn label="用途" width="90">
+      <ElTableColumn prop="dbLabel" :label="$tr('数据库')" width="150" />
+      <ElTableColumn prop="toolName" :label="$tr('工具')" width="130" />
+      <ElTableColumn :label="$tr('用途')" width="90">
         <template #default="{ row }">
           {{ operationLabel(row.operation) }}
         </template>
       </ElTableColumn>
-      <ElTableColumn label="状态" width="100">
+      <ElTableColumn :label="$tr('状态')" width="100">
         <template #default="{ row }">
           <ElTag :type="row.available ? 'success' : 'info'" size="small">
-            {{ row.available ? '已发现' : '未发现' }}
+            {{ $tr(row.available ? '已发现' : '未发现') }}
           </ElTag>
         </template>
       </ElTableColumn>
-      <ElTableColumn prop="source" label="来源" width="100" />
-      <ElTableColumn prop="executable" label="执行文件" min-width="240" show-overflow-tooltip />
-      <ElTableColumn label="版本 / 操作" min-width="220">
+      <ElTableColumn prop="source" :label="$tr('来源')" width="100" />
+      <ElTableColumn prop="executable" :label="$tr('执行文件')" min-width="240" show-overflow-tooltip />
+      <ElTableColumn :label="$tr('版本 / 操作')" min-width="220">
         <template #default="{ row }">
           <div class="version-cell">
             <span v-if="row.version" class="version">{{ row.version }}</span>
@@ -305,7 +305,7 @@ async function onTest(row: DatabaseToolCatalogVO) {
               :loading="testing === rowKey(row)"
               @click="onTest(row)"
             >
-              测试
+              {{ $tr('测试') }}
             </ElButton>
           </div>
         </template>
@@ -313,8 +313,8 @@ async function onTest(row: DatabaseToolCatalogVO) {
     </ElTable>
 
     <template #footer>
-      <ElButton :loading="loading" @click="loadCatalog">刷新</ElButton>
-      <ElButton @click="visible = false">关闭</ElButton>
+      <ElButton :loading="loading" @click="loadCatalog">{{ $tr('刷新') }}</ElButton>
+      <ElButton @click="visible = false">{{ $tr('关闭') }}</ElButton>
     </template>
   </ElDialog>
 </template>

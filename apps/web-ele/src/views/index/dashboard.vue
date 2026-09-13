@@ -10,8 +10,8 @@ defineOptions({ name: 'IndexDashboard' });
 
 <template>
   <Fallback
-    description="看板页面待从 admin-plus 迁移。菜单 component 已兼容：@/views/index/dashboard"
+    :description="$tr('看板页面待从 admin-plus 迁移。菜单 component 已兼容：@/views/index/dashboard')"
     status="coming-soon"
-    title="看板"
+    :title="$tr('看板')"
   />
 </template>

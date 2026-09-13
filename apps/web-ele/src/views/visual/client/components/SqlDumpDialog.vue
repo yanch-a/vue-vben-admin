@@ -215,7 +215,7 @@ async function onExport() {
 <template>
   <ElDialog
     v-model="visible"
-    title="SQL转储"
+    :title="$tr('SQL转储')"
     width="860px"
     destroy-on-close
     append-to-body
@@ -223,17 +223,17 @@ async function onExport() {
   >
     <div class="dump-toolbar">
       <div class="mode-row">
-        <span class="label">SQL导出</span>
+        <span class="label">{{ $tr('SQL导出') }}</span>
         <ElRadioGroup v-model="form.mode" size="small">
-          <ElRadioButton label="structure">结构唯一</ElRadioButton>
-          <ElRadioButton label="data">仅有数据</ElRadioButton>
-          <ElRadioButton label="both">结构和数据</ElRadioButton>
+          <ElRadioButton label="structure">{{ $tr('结构唯一') }}</ElRadioButton>
+          <ElRadioButton label="data">{{ $tr('仅有数据') }}</ElRadioButton>
+          <ElRadioButton label="both">{{ $tr('结构和数据') }}</ElRadioButton>
         </ElRadioGroup>
       </div>
       <div class="meta-row">
-        <span class="label">数据库名称</span>
+        <span class="label">{{ $tr('数据库名称') }}</span>
         <ElInput :model-value="instanceName" disabled style="width: 220px" />
-        <span class="label">导出文件名</span>
+        <span class="label">{{ $tr('导出文件名') }}</span>
         <ElInput v-model="fileName" style="flex: 1" placeholder="xxx.sql" />
       </div>
     </div>
@@ -241,15 +241,15 @@ async function onExport() {
     <div class="dump-body">
       <div v-loading="loadingTables" class="obj-pane">
         <div class="pane-title">
-          <span>对象</span>
+          <span>{{ $tr('对象') }}</span>
           <span class="pane-actions">
-            <ElButton link type="primary" size="small" @click="toggleAll(true)">全选</ElButton>
-            <ElButton link size="small" @click="toggleAll(false)">清空</ElButton>
+            <ElButton link type="primary" size="small" @click="toggleAll(true)">{{ $tr('全选') }}</ElButton>
+            <ElButton link size="small" @click="toggleAll(false)">{{ $tr('清空') }}</ElButton>
           </span>
         </div>
         <ElScrollbar height="360px">
           <ElCheckboxGroup v-model="checkedTables" class="table-checks">
-            <div class="folder">表</div>
+            <div class="folder">{{ $tr('表') }}</div>
             <ElCheckbox
               v-for="name in tableNames"
               :key="name"
@@ -263,36 +263,35 @@ async function onExport() {
 
       <div class="opt-pane">
         <div class="opt-group">
-          <div class="opt-title">把选项写进文件</div>
+          <div class="opt-title">{{ $tr('把选项写进文件') }}</div>
           <ElCheckbox v-model="form.includeUseDatabase">{{
             dialect.dumpUseOptionLabel
           }}</ElCheckbox>
-          <ElCheckbox v-model="form.includeCreateDatabase">包含创建库/Schema 语句</ElCheckbox>
+          <ElCheckbox v-model="form.includeCreateDatabase">{{ $tr('包含创建库/Schema 语句') }}</ElCheckbox>
           <ElCheckbox v-model="form.foreignKeyChecks0">{{
             dialect.dumpFkOptionLabel
           }}</ElCheckbox>
-          <ElCheckbox v-model="form.createBulkInsert">创建批量插入语句</ElCheckbox>
+          <ElCheckbox v-model="form.createBulkInsert">{{ $tr('创建批量插入语句') }}</ElCheckbox>
           <ElCheckbox
             v-model="form.oneRowPerLine"
             :disabled="!form.createBulkInsert"
             class="indent"
           >
-            每行一条记录
+            {{ $tr('每行一条记录') }}
           </ElCheckbox>
-          <ElCheckbox v-model="form.includeDrop">包含 "DROP" 语句</ElCheckbox>
-          <ElCheckbox v-model="form.includeVersionInfo">在备份文件中包含版本信息</ElCheckbox>
-          <ElCheckbox v-model="form.convertBlobToHex">将 BLOB 转为 HEX</ElCheckbox>
+          <ElCheckbox v-model="form.includeDrop">{{ $tr('包含 "DROP" 语句') }}</ElCheckbox>
+          <ElCheckbox v-model="form.includeVersionInfo">{{ $tr('在备份文件中包含版本信息') }}</ElCheckbox>
+          <ElCheckbox v-model="form.convertBlobToHex">{{ $tr('将 BLOB 转为 HEX') }}</ElCheckbox>
         </div>
         <div class="hint">
-          导出由服务端重新读取表结构与数据生成，不使用前端缓存数据。
-          单表数据上限 {{ visualClientConfig.exportMaxRows }} 行。
+          {{ $tr('导出由服务端重新读取表结构与数据生成，不使用前端缓存数据。 单表数据上限') }} {{ visualClientConfig.exportMaxRows }} {{ $tr('行。') }}
         </div>
       </div>
     </div>
 
     <template #footer>
-      <ElButton :loading="exporting" type="primary" @click="onExport">导出</ElButton>
-      <ElButton @click="visible = false">关闭</ElButton>
+      <ElButton :loading="exporting" type="primary" @click="onExport">{{ $tr('导出') }}</ElButton>
+      <ElButton @click="visible = false">{{ $tr('关闭') }}</ElButton>
     </template>
   </ElDialog>
 </template>

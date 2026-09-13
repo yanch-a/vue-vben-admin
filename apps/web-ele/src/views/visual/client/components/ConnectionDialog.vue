@@ -563,23 +563,23 @@ watch(
         @current-change="onCurrentChange"
         @row-dblclick="(row: any) => openByRow(row)"
       >
-        <ElTableColumn prop="dbName" label="名称" min-width="120" />
-        <ElTableColumn label="类型" width="150">
+        <ElTableColumn prop="dbName" :label="$tr('名称')" min-width="120" />
+        <ElTableColumn :label="$tr('类型')" width="150">
           <template #default="{ row }">
             {{ resolveDbType(row.dbType).label }}
           </template>
         </ElTableColumn>
-        <ElTableColumn prop="dbHost" label="主机" min-width="120" />
-        <ElTableColumn prop="schemaName" label="默认库" min-width="100" />
-        <ElTableColumn label="操作" width="100" fixed="right">
+        <ElTableColumn prop="dbHost" :label="$tr('主机')" min-width="120" />
+        <ElTableColumn prop="schemaName" :label="$tr('默认库')" min-width="100" />
+        <ElTableColumn :label="$tr('操作')" width="100" fixed="right">
           <template #default="{ row }">
             <ElButton link type="primary" @click.stop="startEdit(row)">
-              编辑
+              {{ $tr('编辑') }}
             </ElButton>
           </template>
         </ElTableColumn>
       </ElTable>
-      <div class="hint">提示：双击行即可打开连接；编辑请点「编辑」按钮</div>
+      <div class="hint">{{ $tr('提示：双击行即可打开连接；编辑请点「编辑」按钮') }}</div>
     </div>
 
     <!-- 新建 / 编辑表单 -->
@@ -591,10 +591,10 @@ watch(
       :rules="rules"
       label-width="120px"
     >
-      <ElFormItem label="连接名称" prop="dbName">
-        <ElInput v-model="form.dbName" placeholder="显示名称" />
+      <ElFormItem :label="$tr('连接名称')" prop="dbName">
+        <ElInput v-model="form.dbName" :placeholder="$tr('显示名称')" />
       </ElFormItem>
-      <ElFormItem label="数据库类型" prop="dbType">
+      <ElFormItem :label="$tr('数据库类型')" prop="dbType">
         <ElSelect v-model="form.dbType" class="w-full" filterable>
           <ElOptionGroup
             v-for="group in dbTypeGroups"
@@ -615,36 +615,36 @@ watch(
         <ElInput v-model="form.schemaName" :placeholder="schemaPlaceholder" />
       </ElFormItem>
       <template v-if="needsHost">
-        <ElFormItem label="主机" prop="dbHost">
+        <ElFormItem :label="$tr('主机')" prop="dbHost">
           <ElInput v-model="form.dbHost" placeholder="127.0.0.1" />
         </ElFormItem>
-        <ElFormItem label="端口" prop="dbPort">
+        <ElFormItem :label="$tr('端口')" prop="dbPort">
           <ElInputNumber
             v-model="form.dbPort"
             :min="1"
             :max="65535"
             controls-position="right"
           />
-          <span class="tip">默认 {{ descriptor.defaultPort }}</span>
+          <span class="tip">{{ $tr('默认') }} {{ descriptor.defaultPort }}</span>
         </ElFormItem>
       </template>
       <ElFormItem label="JDBC URL" prop="jdbcUrl">
         <div class="url-row">
           <ElInput
             v-model="form.jdbcUrl"
-            placeholder="留空按类型自动生成，填写后优先使用"
+            :placeholder="$tr('留空按类型自动生成，填写后优先使用')"
           />
-          <ElButton @click="fillUrlFromServer">按当前配置生成</ElButton>
+          <ElButton @click="fillUrlFromServer">{{ $tr('按当前配置生成') }}</ElButton>
         </div>
-        <div class="tip preview">实际使用：{{ urlPreview }}</div>
+        <div class="tip preview">{{ $tr('实际使用：') }}{{ urlPreview }}</div>
       </ElFormItem>
-      <ElFormItem label="用户名" prop="username">
+      <ElFormItem :label="$tr('用户名')" prop="username">
         <ElInput
           v-model="form.username"
           :placeholder="credentialRequired ? '' : '可留空'"
         />
       </ElFormItem>
-      <ElFormItem label="密码" prop="password">
+      <ElFormItem :label="$tr('密码')" prop="password">
         <ElInput
           v-model="form.password"
           type="password"
@@ -654,16 +654,16 @@ watch(
       </ElFormItem>
 
       <template v-if="needsHost">
-        <ElDivider content-position="left">SSH 隧道（可选）</ElDivider>
-        <ElFormItem label="启用 SSH">
+        <ElDivider content-position="left">{{ $tr('SSH 隧道（可选）') }}</ElDivider>
+        <ElFormItem :label="$tr('启用 SSH')">
           <ElSwitch v-model="sshEnabled" />
-          <span class="tip">经跳板机转发到上方数据库主机</span>
+          <span class="tip">{{ $tr('经跳板机转发到上方数据库主机') }}</span>
         </ElFormItem>
         <template v-if="sshEnabled">
-          <ElFormItem label="SSH 主机" prop="sshHost">
-            <ElInput v-model="form.sshHost" placeholder="跳板机 IP 或域名" />
+          <ElFormItem :label="$tr('SSH 主机')" prop="sshHost">
+            <ElInput v-model="form.sshHost" :placeholder="$tr('跳板机 IP 或域名')" />
           </ElFormItem>
-          <ElFormItem label="SSH 端口" prop="sshPort">
+          <ElFormItem :label="$tr('SSH 端口')" prop="sshPort">
             <ElInputNumber
               v-model="form.sshPort"
               :min="1"
@@ -671,16 +671,16 @@ watch(
               controls-position="right"
             />
           </ElFormItem>
-          <ElFormItem label="SSH 用户" prop="sshUsername">
+          <ElFormItem :label="$tr('SSH 用户')" prop="sshUsername">
             <ElInput v-model="form.sshUsername" />
           </ElFormItem>
-          <ElFormItem label="SSH 认证">
+          <ElFormItem :label="$tr('SSH 认证')">
             <ElRadioGroup v-model="sshAuthMode">
-              <ElRadio value="password">密码</ElRadio>
-              <ElRadio value="key">私钥</ElRadio>
+              <ElRadio value="password">{{ $tr('密码') }}</ElRadio>
+              <ElRadio value="key">{{ $tr('私钥') }}</ElRadio>
             </ElRadioGroup>
           </ElFormItem>
-          <ElFormItem v-if="sshAuthMode === 'password'" label="SSH 密码">
+          <ElFormItem v-if="sshAuthMode === 'password'" :label="$tr('SSH 密码')">
             <ElInput
               v-model="form.sshPassword"
               type="password"
@@ -689,57 +689,57 @@ watch(
             />
           </ElFormItem>
           <template v-else>
-            <ElFormItem label="SSH 私钥">
+            <ElFormItem :label="$tr('SSH 私钥')">
               <ElInput
                 v-model="form.sshPrivateKey"
                 type="textarea"
                 :rows="4"
-                placeholder="粘贴 PEM 私钥；留空则沿用已保存"
+                :placeholder="$tr('粘贴 PEM 私钥；留空则沿用已保存')"
               />
             </ElFormItem>
-            <ElFormItem label="私钥口令">
+            <ElFormItem :label="$tr('私钥口令')">
               <ElInput
                 v-model="form.sshPassphrase"
                 type="password"
                 show-password
-                placeholder="可选"
+                :placeholder="$tr('可选')"
               />
             </ElFormItem>
           </template>
         </template>
       </template>
 
-      <ElDivider content-position="left">AI 助手</ElDivider>
-      <ElFormItem label="启用 AI">
+      <ElDivider content-position="left">{{ $tr('AI 助手') }}</ElDivider>
+      <ElFormItem :label="$tr('启用 AI')">
         <ElSwitch v-model="aiEnabled" />
-        <span class="tip">关闭后该连接不可唤出 AI 助手</span>
+        <span class="tip">{{ $tr('关闭后该连接不可唤出 AI 助手') }}</span>
       </ElFormItem>
-      <ElFormItem label="允许样例数据">
+      <ElFormItem :label="$tr('允许样例数据')">
         <ElSwitch v-model="aiAllowSampleData" />
-        <span class="tip">开启后 Agent 可读取少量真实行（默认关闭）</span>
+        <span class="tip">{{ $tr('开启后 Agent 可读取少量真实行（默认关闭）') }}</span>
       </ElFormItem>
 
-      <ElFormItem label="描述" prop="description">
+      <ElFormItem :label="$tr('描述')" prop="description">
         <ElInput v-model="form.description" type="textarea" :rows="2" />
       </ElFormItem>
     </ElForm>
 
     <template #footer>
       <ElButton @click="handleCancel">
-        {{ isOpenMode && openView === 'form' ? '返回列表' : '取消' }}
+        {{ $tr(isOpenMode && openView === 'form' ? '返回列表' : '取消') }}
       </ElButton>
       <ElButton
         v-if="isOpenMode && openView === 'list'"
         :disabled="!selectedId"
         @click="startEdit()"
       >
-        编辑
+        {{ $tr('编辑') }}
       </ElButton>
-      <ElButton :loading="testing" @click="handleTest">测试连接</ElButton>
+      <ElButton :loading="testing" @click="handleTest">{{ $tr('测试连接') }}</ElButton>
       <ElButton type="primary" :loading="saving" @click="handleSubmit">
-        <template v-if="isOpenMode && openView === 'list'">打开</template>
-        <template v-else-if="form.id">保存</template>
-        <template v-else>保存并打开</template>
+        <template v-if="isOpenMode && openView === 'list'">{{ $tr('打开') }}</template>
+        <template v-else-if="form.id">{{ $tr('保存') }}</template>
+        <template v-else>{{ $tr('保存并打开') }}</template>
       </ElButton>
     </template>
   </ElDialog>

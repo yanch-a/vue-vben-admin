@@ -127,7 +127,7 @@ async function onSubmit() {
 <template>
   <ElDialog
     v-model="visible"
-    title="官方客户端导入"
+    :title="$tr('官方客户端导入')"
     width="560px"
     destroy-on-close
     append-to-body
@@ -136,14 +136,14 @@ async function onSubmit() {
       type="info"
       :closable="false"
       show-icon
-      title="导入任务在服务端执行，客户端必须已在“客户端工具”中测试可用。"
+      :title="$tr('导入任务在服务端执行，客户端必须已在“客户端工具”中测试可用。')"
       class="mb-3"
     />
     <ElForm label-width="108px" @submit.prevent>
-      <ElFormItem label="目标实例">
+      <ElFormItem :label="$tr('目标实例')">
         <ElInput :model-value="instanceName" disabled />
       </ElFormItem>
-      <ElFormItem label="备份文件" required>
+      <ElFormItem :label="$tr('备份文件')" required>
         <ElUpload
           :auto-upload="false"
           :limit="1"
@@ -152,7 +152,7 @@ async function onSubmit() {
           :on-remove="onFileRemove"
           :on-exceed="onExceed"
         >
-          <ElButton>选择文件</ElButton>
+          <ElButton>{{ $tr('选择文件') }}</ElButton>
           <template #tip>
             <div class="tip">{{ supportedFileHint() }}</div>
           </template>
@@ -165,15 +165,15 @@ async function onSubmit() {
           :placeholder="isMongo ? 'JSON / CSV 导入时必填' : 'CSV 导入时必填'"
         />
       </ElFormItem>
-      <ElFormItem v-if="isMongo" label="覆盖已有数据">
+      <ElFormItem v-if="isMongo" :label="$tr('覆盖已有数据')">
         <ElSwitch v-model="form.dropExisting" />
-        <span class="tip inline">使用官方工具的 drop 选项</span>
+        <span class="tip inline">{{ $tr('使用官方工具的 drop 选项') }}</span>
       </ElFormItem>
     </ElForm>
     <template #footer>
-      <ElButton @click="visible = false">取消</ElButton>
+      <ElButton @click="visible = false">{{ $tr('取消') }}</ElButton>
       <ElButton type="primary" :loading="submitting" @click="onSubmit">
-        开始导入
+        {{ $tr('开始导入') }}
       </ElButton>
     </template>
   </ElDialog>

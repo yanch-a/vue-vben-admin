@@ -113,8 +113,8 @@ onBeforeUnmount(() => {
 <template>
   <div class="lemon-register">
     <div class="lemon-register__card">
-      <h1 class="title">欢迎注册</h1>
-      <p class="subtitle">请填写您的注册信息</p>
+      <h1 class="title">{{ $tr('欢迎注册') }}</h1>
+      <p class="subtitle">{{ $tr('请填写您的注册信息') }}</p>
 
       <ElForm
         ref="formRef"
@@ -126,7 +126,7 @@ onBeforeUnmount(() => {
         <ElFormItem prop="username">
           <ElInput
             v-model.trim="form.username"
-            placeholder="请输入用户名"
+            :placeholder="$tr('请输入用户名')"
             clearable
           />
         </ElFormItem>
@@ -134,7 +134,7 @@ onBeforeUnmount(() => {
           <ElInput
             v-model.trim="form.phone"
             maxlength="11"
-            placeholder="请输入手机号"
+            :placeholder="$tr('请输入手机号')"
             clearable
           />
         </ElFormItem>
@@ -143,21 +143,21 @@ onBeforeUnmount(() => {
             <ElInput
               v-model.trim="form.phoneCode"
               maxlength="6"
-              placeholder="请输入手机验证码"
+              :placeholder="$tr('请输入手机验证码')"
             />
             <ElButton
               :disabled="countdown > 0"
               :loading="sendCodeLoading"
               @click="handleSendCode"
             >
-              {{ countdown > 0 ? `${countdown}s` : '获取验证码' }}
+              {{ countdown > 0 ? `${countdown}s` : $tr('获取验证码') }}
             </ElButton>
           </div>
         </ElFormItem>
         <ElFormItem prop="inviteCode">
           <ElInput
             v-model.trim="form.inviteCode"
-            placeholder="邀请码（可选）"
+            :placeholder="$tr('邀请码（可选）')"
             clearable
           />
         </ElFormItem>
@@ -166,7 +166,7 @@ onBeforeUnmount(() => {
             v-model.trim="form.password"
             type="password"
             show-password
-            placeholder="请输入密码"
+            :placeholder="$tr('请输入密码')"
             autocomplete="new-password"
           />
         </ElFormItem>
@@ -176,10 +176,10 @@ onBeforeUnmount(() => {
           :loading="loading"
           @click="handleRegister"
         >
-          注册
+          {{ $tr('注册') }}
         </ElButton>
         <div class="login-link">
-          <router-link to="/auth/login">已有账号？立即登录</router-link>
+          <router-link to="/auth/login">{{ $tr('已有账号？立即登录') }}</router-link>
         </div>
       </ElForm>
     </div>

@@ -68,21 +68,21 @@ const propertyRows = computed(() => {
   >
     <div v-loading="loading">
       <ElTabs v-if="info">
-        <ElTabPane label="基本信息">
+        <ElTabPane :label="$tr('基本信息')">
           <ElDescriptions :column="2" border size="small">
-            <ElDescriptionsItem label="表名">
+            <ElDescriptionsItem :label="$tr('表名')">
               {{ info.tableName }}
             </ElDescriptionsItem>
-            <ElDescriptionsItem label="实例">
+            <ElDescriptionsItem :label="$tr('实例')">
               {{ info.instanceName }}
             </ElDescriptionsItem>
             <ElDescriptionsItem label="Schema">
               {{ info.schemaName || '-' }}
             </ElDescriptionsItem>
-            <ElDescriptionsItem label="类型">
+            <ElDescriptionsItem :label="$tr('类型')">
               {{ info.tableType || 'TABLE' }}
             </ElDescriptionsItem>
-            <ElDescriptionsItem label="注释" :span="2">
+            <ElDescriptionsItem :label="$tr('注释')" :span="2">
               {{ info.description || '-' }}
             </ElDescriptionsItem>
             <ElDescriptionsItem
@@ -103,27 +103,27 @@ const propertyRows = computed(() => {
             border
             stripe
           >
-            <ElTableColumn prop="fieldName" label="字段名" min-width="120" />
-            <ElTableColumn prop="dataType" label="类型" min-width="120" />
-            <ElTableColumn label="主键" width="60" align="center">
+            <ElTableColumn prop="fieldName" :label="$tr('字段名')" min-width="120" />
+            <ElTableColumn prop="dataType" :label="$tr('类型')" min-width="120" />
+            <ElTableColumn :label="$tr('主键')" width="60" align="center">
               <template #default="{ row }">
-                {{ row.isPrimary ? '是' : '' }}
+                {{ $tr(row.isPrimary ? '是' : '') }}
               </template>
             </ElTableColumn>
-            <ElTableColumn label="可空" width="60" align="center">
+            <ElTableColumn :label="$tr('可空')" width="60" align="center">
               <template #default="{ row }">
-                {{ row.isNullable ? '是' : '否' }}
+                {{ $tr(row.isNullable ? '是' : '否') }}
               </template>
             </ElTableColumn>
-            <ElTableColumn prop="defaultValue" label="默认值" min-width="100" />
-            <ElTableColumn prop="description" label="注释" min-width="140" />
+            <ElTableColumn prop="defaultValue" :label="$tr('默认值')" min-width="100" />
+            <ElTableColumn prop="description" :label="$tr('注释')" min-width="140" />
           </ElTable>
         </ElTabPane>
 
         <ElTabPane :label="`索引 (${info.indexes?.length || 0})`">
           <ElEmpty
             v-if="!(info.indexes && info.indexes.length)"
-            description="无索引信息"
+            :description="$tr('无索引信息')"
           />
           <ElTable
             v-else
@@ -133,14 +133,14 @@ const propertyRows = computed(() => {
             border
             stripe
           >
-            <ElTableColumn prop="indexName" label="索引名" min-width="140" />
-            <ElTableColumn label="唯一" width="60" align="center">
+            <ElTableColumn prop="indexName" :label="$tr('索引名')" min-width="140" />
+            <ElTableColumn :label="$tr('唯一')" width="60" align="center">
               <template #default="{ row }">
-                {{ row.unique ? '是' : '否' }}
+                {{ $tr(row.unique ? '是' : '否') }}
               </template>
             </ElTableColumn>
-            <ElTableColumn prop="indexType" label="类型" min-width="90" />
-            <ElTableColumn prop="columns" label="列/定义" min-width="220" />
+            <ElTableColumn prop="indexType" :label="$tr('类型')" min-width="90" />
+            <ElTableColumn prop="columns" :label="$tr('列/定义')" min-width="220" />
           </ElTable>
         </ElTabPane>
 
@@ -148,10 +148,10 @@ const propertyRows = computed(() => {
           <pre class="ddl-block">{{ info.ddl || '-- 无 DDL' }}</pre>
         </ElTabPane>
       </ElTabs>
-      <ElEmpty v-else-if="!loading" description="暂无表信息" />
+      <ElEmpty v-else-if="!loading" :description="$tr('暂无表信息')" />
     </div>
     <template #footer>
-      <ElButton @click="visible = false">关闭</ElButton>
+      <ElButton @click="visible = false">{{ $tr('关闭') }}</ElButton>
     </template>
   </ElDialog>
 </template>

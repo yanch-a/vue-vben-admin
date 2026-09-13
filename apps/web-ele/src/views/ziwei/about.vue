@@ -5,5 +5,5 @@ defineOptions({ name: 'AboutUs' });
 </script>
 
 <template>
-  <Fallback status="coming-soon" title="关于我们" />
+  <Fallback status="coming-soon" :title="$tr('关于我们')" />
 </template>

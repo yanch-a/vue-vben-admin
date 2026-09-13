@@ -563,7 +563,7 @@ defineExpose({
     @drop="onDrop"
   >
     <div ref="container" class="sql-editor" />
-    <div v-show="dragOver" class="drop-hint">松开以导入 .sql / .txt</div>
+    <div v-show="dragOver" class="drop-hint">{{ $tr('松开以导入 .sql / .txt') }}</div>
   </div>
 </template>
 

@@ -335,7 +335,7 @@ defineExpose({
       v-if="!columns.length"
       class="vrt-empty"
     >
-      {{ emptyText || '暂无结果' }}
+      {{ $tr(emptyText || '暂无结果') }}
     </div>
     <template v-else>
       <div class="vrt-header" :style="{ width: tableWidth + 'px' }">
@@ -358,7 +358,7 @@ defineExpose({
           {{ col }}
           <span
             class="vrt-resizer"
-            title="拖动调整列宽"
+            :title="$tr('拖动调整列宽')"
             @mousedown="onResizeStart(i, $event)"
           />
         </div>
@@ -371,7 +371,7 @@ defineExpose({
           v-if="rowCount === 0"
           class="vrt-empty"
         >
-          {{ emptyText || '查询成功，无数据' }}
+          {{ $tr(emptyText || '查询成功，无数据') }}
         </div>
         <div
           v-else

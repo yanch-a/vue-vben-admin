@@ -90,9 +90,9 @@ defineExpose({ reload: loadList });
 <template>
   <div class="empty-workspace" v-loading="loading">
     <div class="empty-workspace__head">
-      <div class="empty-workspace__title">选择数据库开始查询</div>
+      <div class="empty-workspace__title">{{ $tr('选择数据库开始查询') }}</div>
       <div class="empty-workspace__desc">
-        以下为当前账号有权限使用的连接，点击卡片即可打开。
+        {{ $tr('以下为当前账号有权限使用的连接，点击卡片即可打开。') }}
       </div>
       <div class="empty-workspace__tools">
         <ElInput
@@ -100,23 +100,23 @@ defineExpose({ reload: loadList });
           clearable
           size="default"
           class="empty-workspace__search"
-          placeholder="搜索名称 / 主机 / 类型"
+          :placeholder="$tr('搜索名称 / 主机 / 类型')"
         />
-        <ElButton @click="loadList">刷新</ElButton>
-        <ElButton type="primary" @click="emit('create')">新建连接</ElButton>
+        <ElButton @click="loadList">{{ $tr('刷新') }}</ElButton>
+        <ElButton type="primary" @click="emit('create')">{{ $tr('新建连接') }}</ElButton>
       </div>
     </div>
 
     <div v-if="loadError" class="empty-workspace__error">{{ loadError }}</div>
 
     <div v-else-if="!loading && list.length === 0" class="empty-workspace__blank">
-      <p>暂无可用数据库连接</p>
-      <p class="hint">请先新建连接，或联系管理员为你授权。</p>
-      <ElButton type="primary" @click="emit('create')">新建连接</ElButton>
+      <p>{{ $tr('暂无可用数据库连接') }}</p>
+      <p class="hint">{{ $tr('请先新建连接，或联系管理员为你授权。') }}</p>
+      <ElButton type="primary" @click="emit('create')">{{ $tr('新建连接') }}</ElButton>
     </div>
 
     <div v-else-if="!loading && filteredList.length === 0" class="empty-workspace__blank">
-      <p>没有匹配「{{ keyword }}」的连接</p>
+      <p>{{ $tr('没有匹配「') }}{{ keyword }}{{ $tr('」的连接') }}</p>
     </div>
 
     <div v-else class="empty-workspace__grid">
@@ -128,7 +128,7 @@ defineExpose({ reload: loadList });
         @click="onCardClick(row)"
       >
         <div class="db-card__top">
-          <span class="db-card__name" :title="row.dbName">{{ row.dbName || '未命名' }}</span>
+          <span class="db-card__name" :title="row.dbName">{{ $tr(row.dbName || '未命名') }}</span>
           <span class="db-card__type">{{ typeLabel(row) }}</span>
         </div>
         <div class="db-card__meta">

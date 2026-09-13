@@ -153,7 +153,7 @@ onUnmounted(() => {
         <div class="search-area">
           <el-input
             v-model="searchKeyword"
-            placeholder="请输入用户名或真实姓名"
+            :placeholder="$tr('请输入用户名或真实姓名')"
             clearable
             @keyup.enter="handleSearch"
             @clear="handleClear"
@@ -166,7 +166,7 @@ onUnmounted(() => {
                 @click="handleSearch"
                 :loading="loading"
               >
-                查询
+                {{ $tr('查询') }}
               </el-button>
             </template>
           </el-input>
@@ -195,7 +195,7 @@ onUnmounted(() => {
           <!-- 空状态 -->
           <div v-if="!loading && memberUserList.length === 0" class="empty-state">
             <i class="el-icon-user"></i>
-            <p>暂无会员用户数据</p>
+            <p>{{ $tr('暂无会员用户数据') }}</p>
           </div>
         </div>
       </div>

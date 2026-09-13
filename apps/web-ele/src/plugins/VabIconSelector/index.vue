@@ -58,7 +58,7 @@
             </el-form-item>
             <el-form-item label-width="0">
               <el-button native-type="submit" type="primary" @click="queryData">
-                查询
+                {{ $tr('查询') }}
               </el-button>
             </el-form-item>
           </el-form>

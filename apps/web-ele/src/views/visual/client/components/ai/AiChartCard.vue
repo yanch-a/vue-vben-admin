@@ -83,9 +83,9 @@ async function copyOption() {
     <div class="head">
       <strong>{{ title }}</strong>
       <div class="btns">
-        <ElButton size="small" @click="emit('openSql', sql)">打开 SQL</ElButton>
-        <ElButton size="small" @click="onSave">保存</ElButton>
-        <ElButton size="small" @click="copyOption">复制 option</ElButton>
+        <ElButton size="small" @click="emit('openSql', sql)">{{ $tr('打开 SQL') }}</ElButton>
+        <ElButton size="small" @click="onSave">{{ $tr('保存') }}</ElButton>
+        <ElButton size="small" @click="copyOption">{{ $tr('复制 option') }}</ElButton>
       </div>
     </div>
     <div v-if="isKpi" class="kpi">{{ kpiValue }}</div>

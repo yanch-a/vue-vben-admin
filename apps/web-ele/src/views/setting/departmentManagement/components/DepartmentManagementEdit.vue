@@ -97,7 +97,7 @@
     <el-form ref="formRef" label-width="80px" :model="form" :rules="rules">
       <el-row>
         <el-col :span="12">
-          <el-form-item label="上级部门" prop="parentId">
+          <el-form-item :label="$tr('上级部门')" prop="parentId">
             <el-tree-select
               v-model="form.parentId"
               check-strictly
@@ -110,7 +110,7 @@
           </el-form-item>
         </el-col>
         <el-col :span="12">
-          <el-form-item label="部门名称" prop="deptName">
+          <el-form-item :label="$tr('部门名称')" prop="deptName">
             <el-input v-model="form.deptName" />
           </el-form-item>
         </el-col>
@@ -118,12 +118,12 @@
 
       <el-row>
         <el-col :span="12">
-          <el-form-item label="部门编码" prop="deptCode">
+          <el-form-item :label="$tr('部门编码')" prop="deptCode">
             <el-input v-model="form.deptCode" />
           </el-form-item>
         </el-col>
         <el-col :span="12">
-          <el-form-item label="负责人" prop="leader">
+          <el-form-item :label="$tr('负责人')" prop="leader">
             <el-input v-model="form.leader" />
           </el-form-item>
         </el-col>
@@ -131,12 +131,12 @@
 
       <el-row>
         <el-col :span="12">
-          <el-form-item label="联系电话" prop="phone">
+          <el-form-item :label="$tr('联系电话')" prop="phone">
             <el-input v-model="form.phone" />
           </el-form-item>
         </el-col>
         <el-col :span="12">
-          <el-form-item label="邮箱" prop="email">
+          <el-form-item :label="$tr('邮箱')" prop="email">
             <el-input v-model="form.email" />
           </el-form-item>
         </el-col>
@@ -144,20 +144,20 @@
       
       <el-row>
         <el-col :span="12">
-          <el-form-item label="排序" prop="orderNum">
+          <el-form-item :label="$tr('排序')" prop="orderNum">
             <el-input-number v-model="form.orderNum" :max="1000" :min="0" />
           </el-form-item>
         </el-col>
         <el-col :span="12">
-          <el-form-item label="是否可用">
+          <el-form-item :label="$tr('是否可用')">
             <el-switch v-model="form.status" :active-value="activeValue.active" :inactive-value="activeValue.inActive" />
           </el-form-item>
         </el-col>
       </el-row>
     </el-form>
     <template #footer>
-      <el-button @click="close">取 消</el-button>
-      <el-button type="primary" @click="save">确 定</el-button>
+      <el-button @click="close">{{ $tr('取 消') }}</el-button>
+      <el-button type="primary" @click="save">{{ $tr('确 定') }}</el-button>
     </template>
   </el-dialog>
 </template>

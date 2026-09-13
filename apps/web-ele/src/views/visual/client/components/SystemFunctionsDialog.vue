@@ -227,11 +227,11 @@ function statLine(key: string, stat: any) {
         type="info"
         :closable="false"
         show-icon
-        title="仅导出您拥有管理权限的数据库连接；查询类数据按当前登录用户隔离。"
+        :title="$tr('仅导出您拥有管理权限的数据库连接；查询类数据按当前登录用户隔离。')"
         class="mb-3"
       />
       <ElForm label-width="100px" @submit.prevent>
-        <ElFormItem label="导出范围">
+        <ElFormItem :label="$tr('导出范围')">
           <ElCheckboxGroup v-model="exportForm.sections">
             <ElCheckbox
               v-for="opt in sectionOptions"
@@ -243,19 +243,19 @@ function statLine(key: string, stat: any) {
             </ElCheckbox>
           </ElCheckboxGroup>
         </ElFormItem>
-        <ElFormItem label="连接范围">
+        <ElFormItem :label="$tr('连接范围')">
           <ElRadioGroup v-model="exportForm.allConnections">
-            <ElRadio :value="true">全部可管理连接</ElRadio>
-            <ElRadio :value="false">指定连接</ElRadio>
+            <ElRadio :value="true">{{ $tr('全部可管理连接') }}</ElRadio>
+            <ElRadio :value="false">{{ $tr('指定连接') }}</ElRadio>
           </ElRadioGroup>
         </ElFormItem>
-        <ElFormItem v-if="!exportForm.allConnections" label="选择连接">
+        <ElFormItem v-if="!exportForm.allConnections" :label="$tr('选择连接')">
           <ElSelect
             v-model="exportForm.dbConfigIds"
             multiple
             collapse-tags
             collapse-tags-tooltip
-            placeholder="选择要导出的连接"
+            :placeholder="$tr('选择要导出的连接')"
             style="width: 100%"
           >
             <ElOption
@@ -266,21 +266,21 @@ function statLine(key: string, stat: any) {
             />
           </ElSelect>
         </ElFormItem>
-        <ElFormItem label="加密密码" required>
+        <ElFormItem :label="$tr('加密密码')" required>
           <ElInput
             v-model="exportForm.password"
             type="password"
             show-password
-            placeholder="至少 6 位，用于保护配置包"
+            :placeholder="$tr('至少 6 位，用于保护配置包')"
             autocomplete="new-password"
           />
         </ElFormItem>
-        <ElFormItem label="确认密码" required>
+        <ElFormItem :label="$tr('确认密码')" required>
           <ElInput
             v-model="exportForm.confirmPassword"
             type="password"
             show-password
-            placeholder="再次输入密码"
+            :placeholder="$tr('再次输入密码')"
             autocomplete="new-password"
           />
         </ElFormItem>
@@ -293,11 +293,11 @@ function statLine(key: string, stat: any) {
         type="warning"
         :closable="false"
         show-icon
-        title="导入的连接将归属当前用户；同名冲突可按策略跳过、覆盖或重命名。"
+        :title="$tr('导入的连接将归属当前用户；同名冲突可按策略跳过、覆盖或重命名。')"
         class="mb-3"
       />
       <ElForm label-width="100px" @submit.prevent>
-        <ElFormItem label="配置文件" required>
+        <ElFormItem :label="$tr('配置文件')" required>
           <ElUpload
             :auto-upload="false"
             :limit="1"
@@ -305,26 +305,26 @@ function statLine(key: string, stat: any) {
             :on-change="(f: any) => onFileChange(f?.raw)"
             :on-remove="() => onFileChange(undefined)"
           >
-            <ElButton size="small">选择 .vqb 文件</ElButton>
+            <ElButton size="small">{{ $tr('选择 .vqb 文件') }}</ElButton>
           </ElUpload>
         </ElFormItem>
-        <ElFormItem label="解密密码" required>
+        <ElFormItem :label="$tr('解密密码')" required>
           <ElInput
             v-model="importForm.password"
             type="password"
             show-password
-            placeholder="导出时设置的密码"
+            :placeholder="$tr('导出时设置的密码')"
             autocomplete="current-password"
           />
         </ElFormItem>
-        <ElFormItem label="冲突策略">
+        <ElFormItem :label="$tr('冲突策略')">
           <ElRadioGroup v-model="importForm.conflictStrategy">
-            <ElRadio value="SKIP">跳过已存在</ElRadio>
-            <ElRadio value="OVERWRITE">覆盖已存在</ElRadio>
-            <ElRadio value="RENAME">重命名新建</ElRadio>
+            <ElRadio value="SKIP">{{ $tr('跳过已存在') }}</ElRadio>
+            <ElRadio value="OVERWRITE">{{ $tr('覆盖已存在') }}</ElRadio>
+            <ElRadio value="RENAME">{{ $tr('重命名新建') }}</ElRadio>
           </ElRadioGroup>
         </ElFormItem>
-        <ElFormItem v-if="previewResult" label="预览结果">
+        <ElFormItem v-if="previewResult" :label="$tr('预览结果')">
           <div class="preview-box">
             <div
               v-for="(stat, key) in previewResult.stats || {}"
@@ -347,16 +347,16 @@ function statLine(key: string, stat: any) {
 
     <template #footer>
       <template v-if="activeMode === 'export'">
-        <ElButton @click="visible = false">取消</ElButton>
+        <ElButton @click="visible = false">{{ $tr('取消') }}</ElButton>
         <ElButton type="primary" :loading="loading" @click="doExport">
-          导出
+          {{ $tr('导出') }}
         </ElButton>
       </template>
       <template v-else>
-        <ElButton @click="visible = false">取消</ElButton>
-        <ElButton :loading="loading" @click="doPreviewImport">预览</ElButton>
+        <ElButton @click="visible = false">{{ $tr('取消') }}</ElButton>
+        <ElButton :loading="loading" @click="doPreviewImport">{{ $tr('预览') }}</ElButton>
         <ElButton type="primary" :loading="loading" @click="doImport">
-          确认导入
+          {{ $tr('确认导入') }}
         </ElButton>
       </template>
     </template>

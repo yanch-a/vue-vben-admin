@@ -1024,14 +1024,14 @@ watch(
             :loading="sheetSaving"
             @click="onSaveSheet"
           >
-            保存修改{{ dirtyCount > 0 ? ` (${dirtyCount})` : '' }}
+            {{ $tr('保存修改') }}{{ dirtyCount > 0 ? ` (${dirtyCount})` : '' }}
           </ElButton>
           <ElButton
             link
             :disabled="executing || sheetSaving"
             @click="onExitSheet"
           >
-            退出编辑
+            {{ $tr('退出编辑') }}
           </ElButton>
         </template>
         <ElButton
@@ -1041,7 +1041,7 @@ watch(
           :disabled="!canEnterSheet"
           @click="onEnterSheet"
         >
-          表格编辑
+          {{ $tr('表格编辑') }}
         </ElButton>
         <ElDropdown
           trigger="click"
@@ -1049,12 +1049,12 @@ watch(
           @command="onCopyCommand"
         >
           <ElButton link type="primary" :disabled="!canCopyRows || executing">
-            复制
+            {{ $tr('复制') }}
           </ElButton>
           <template #dropdown>
             <ElDropdownMenu>
-              <ElDropdownItem command="all">复制所有行到剪切板</ElDropdownItem>
-              <ElDropdownItem command="selected">复制选定行到剪切板</ElDropdownItem>
+              <ElDropdownItem command="all">{{ $tr('复制所有行到剪切板') }}</ElDropdownItem>
+              <ElDropdownItem command="selected">{{ $tr('复制选定行到剪切板') }}</ElDropdownItem>
             </ElDropdownMenu>
           </template>
         </ElDropdown>
@@ -1069,16 +1069,16 @@ watch(
             :loading="exporting"
             :disabled="!canExport || executing"
           >
-            导出
+            {{ $tr('导出') }}
           </ElButton>
           <template #dropdown>
             <ElDropdownMenu>
-              <ElDropdownItem command="excel">导出 Excel</ElDropdownItem>
-              <ElDropdownItem command="sql">导出 SQL</ElDropdownItem>
+              <ElDropdownItem command="excel">{{ $tr('导出 Excel') }}</ElDropdownItem>
+              <ElDropdownItem command="sql">{{ $tr('导出 SQL') }}</ElDropdownItem>
             </ElDropdownMenu>
           </template>
         </ElDropdown>
-        <ElButton link type="primary" @click="onHidePanel">隐藏</ElButton>
+        <ElButton link type="primary" @click="onHidePanel">{{ $tr('隐藏') }}</ElButton>
       </div>
     </div>
     <div
@@ -1087,10 +1087,10 @@ watch(
     >
       <p v-if="activeTab === 'result' && editMode" class="sheet-hint">
         <template v-if="isJoinQuery">
-          联表只能按各表主键 UPDATE。改某表字段时，SELECT 必须带上该表主键；两表都有 id 时请写成 别名.id 或 id AS user_id。
+          {{ $tr('联表只能按各表主键 UPDATE。改某表字段时，SELECT 必须带上该表主键；两表都有 id 时请写成 别名.id 或 id AS user_id。') }}
         </template>
         <template v-else>
-          单击单元格编辑，改过的行会整行标黄。主键也可以改，保存时按修改前的原值定位。NULL 显示为 NULL，空着保存仍是 NULL。
+          {{ $tr('单击单元格编辑，改过的行会整行标黄。主键也可以改，保存时按修改前的原值定位。NULL 显示为 NULL，空着保存仍是 NULL。') }}
         </template>
       </p>
       <template v-if="activeTab === 'result'">
@@ -1099,7 +1099,7 @@ watch(
             ref="tableElRef"
             :rows="displayRows"
             :columns="columns"
-            empty-text="查询成功，无数据"
+            :empty-text="$tr('查询成功，无数据')"
             :edit-mode="editMode"
             :editing-cell="editingCell"
             :edit-draft="editDraft"
@@ -1116,7 +1116,7 @@ watch(
             @edit-offscreen="commitEditingCell"
           />
         </div>
-        <div v-else class="empty">暂无结果</div>
+        <div v-else class="empty">{{ $tr('暂无结果') }}</div>
       </template>
       <template v-if="activeTab === 'messages'">
         <pre class="messages">{{ messagesText }}</pre>
@@ -1131,7 +1131,7 @@ watch(
               })
             "
           >
-            {{ policyError ? '问 AI 怎么处理' : '让 AI 修复' }}
+            {{ $tr(policyError ? '问 AI 怎么处理' : '让 AI 修复') }}
           </ElButton>
         </div>
       </template>
@@ -1146,28 +1146,28 @@ watch(
         @contextmenu.prevent
       >
         <div class="item" :class="{ disabled: !canMutate }" @click="canMutate && onEdit()">
-          修改…
+          {{ $tr('修改…') }}
         </div>
         <div class="item danger" :class="{ disabled: !canDeleteRow }" @click="canDeleteRow && onDelete()">
-          删除
+          {{ $tr('删除') }}
         </div>
         <div class="divider" />
         <div class="item" :class="{ disabled: !canCopyRows }" @click="canCopyRows && onCopyAllRows()">
-          复制所有行到剪切板
+          {{ $tr('复制所有行到剪切板') }}
         </div>
         <div
           class="item"
           :class="{ disabled: !canCopyRows }"
           @click="canCopyRows && onCopySelectedRows()"
         >
-          复制选定行到剪切板
+          {{ $tr('复制选定行到剪切板') }}
         </div>
         <div class="divider" />
         <div class="item" :class="{ disabled: !canCopyInsert }" @click="canCopyInsert && onCopyInsert()">
-          拷贝 INSERT 语句
+          {{ $tr('拷贝 INSERT 语句') }}
         </div>
         <div class="item" :class="{ disabled: !canMutate }" @click="canMutate && onCopyUpdate()">
-          拷贝 UPDATE 语句
+          {{ $tr('拷贝 UPDATE 语句') }}
         </div>
       </div>
     </Teleport>
@@ -1186,13 +1186,13 @@ watch(
       append-to-body
     >
       <p v-if="isJoinQuery" class="pk-hint">
-        联表只能按各表主键定位。改哪张表，结果里就要带上该表主键；同名 id 请写成 别名.id。
+        {{ $tr('联表只能按各表主键定位。改哪张表，结果里就要带上该表主键；同名 id 请写成 别名.id。') }}
       </p>
       <p v-else-if="tableHasPk" class="pk-hint">
-        WHERE 使用主键：{{ pkInResult.join(', ') }}
+        {{ $tr('WHERE 使用主键：') }}{{ pkInResult.join(', ') }}
       </p>
       <p v-else class="pk-hint warn">
-        当前表没有主键，保存时按结果列旧值匹配，可能影响其它行。
+        {{ $tr('当前表没有主键，保存时按结果列旧值匹配，可能影响其它行。') }}
       </p>
       <ElForm label-width="140px" class="edit-form">
         <ElFormItem v-for="col in columns" :key="col" :label="col">
@@ -1215,8 +1215,8 @@ watch(
         </ElFormItem>
       </ElForm>
       <template #footer>
-        <ElButton @click="editVisible = false">取消</ElButton>
-        <ElButton type="primary" @click="onSaveEdit">保存</ElButton>
+        <ElButton @click="editVisible = false">{{ $tr('取消') }}</ElButton>
+        <ElButton type="primary" @click="onSaveEdit">{{ $tr('保存') }}</ElButton>
       </template>
     </ElDialog>
   </div>

@@ -572,12 +572,12 @@
           class="kind-card active"
           type="button"
         >
-          <strong>按钮</strong>
-          <span>旧数据兼容，不进侧栏路由</span>
+          <strong>{{ $tr('按钮') }}</strong>
+          <span>{{ $tr('旧数据兼容，不进侧栏路由') }}</span>
         </button>
       </div>
 
-      <el-form-item label="上级菜单" prop="parentId">
+      <el-form-item :label="$tr('上级菜单')" prop="parentId">
         <el-tree-select
           :key="treeSelectKey"
           v-model="form.parentId"
@@ -595,16 +595,16 @@
 
       <el-row :gutter="12">
         <el-col :span="12">
-          <el-form-item label="菜单名称" prop="menuName">
-            <el-input v-model="form.menuName" maxlength="50" placeholder="侧栏 / 面包屑标题" />
+          <el-form-item :label="$tr('菜单名称')" prop="menuName">
+            <el-input v-model="form.menuName" maxlength="50" :placeholder="$tr('侧栏 / 面包屑标题')" />
           </el-form-item>
         </el-col>
         <el-col :span="12">
-          <el-form-item label="路由 name" prop="name">
+          <el-form-item :label="$tr('路由 name')" prop="name">
             <el-input
               v-model="form.name"
               maxlength="40"
-              placeholder="Vue Router name，同级唯一"
+              :placeholder="$tr('Vue Router name，同级唯一')"
               @input="nameTouched = true"
             />
           </el-form-item>
@@ -625,12 +625,12 @@
         />
       </el-form-item>
 
-      <el-form-item v-if="uiType === 'page'" label="组件路径" prop="component">
+      <el-form-item v-if="uiType === 'page'" :label="$tr('组件路径')" prop="component">
         <template #label>
           <span class="label-with-tip">
-            组件路径
+            {{ $tr('组件路径') }}
             <el-tooltip
-              content="相对 src/views，例如 /visual/client/index。隐藏页可不填。"
+              :content="$tr('相对 src/views，例如 /visual/client/index。隐藏页可不填。')"
               placement="top"
             >
               <el-icon><InfoFilled /></el-icon>
@@ -640,31 +640,31 @@
         <el-input v-model="form.component" placeholder="/visual/client/index" />
       </el-form-item>
 
-      <el-form-item v-if="uiType === 'iframe'" label="内嵌地址" prop="iframeSrc">
+      <el-form-item v-if="uiType === 'iframe'" :label="$tr('内嵌地址')" prop="iframeSrc">
         <el-input v-model="form.iframeSrc" placeholder="https://..." />
       </el-form-item>
 
-      <el-form-item v-if="uiType === 'catalog'" label="重定向">
-        <el-input v-model="form.redirect" placeholder="进入目录时跳转，如 /setting/menuManagement" />
+      <el-form-item v-if="uiType === 'catalog'" :label="$tr('重定向')">
+        <el-input v-model="form.redirect" :placeholder="$tr('进入目录时跳转，如 /setting/menuManagement')" />
       </el-form-item>
 
       <el-row :gutter="12">
         <el-col :span="12">
-          <el-form-item label="图标">
+          <el-form-item :label="$tr('图标')">
             <IconSelector v-model="form.icon" />
           </el-form-item>
         </el-col>
         <el-col :span="12">
-          <el-form-item label="排序">
+          <el-form-item :label="$tr('排序')">
             <el-input-number v-model="form.orderNum" :max="9999" :min="0" style="width: 100%" />
           </el-form-item>
         </el-col>
       </el-row>
 
-      <el-form-item label="常用开关">
+      <el-form-item :label="$tr('常用开关')">
         <div class="switch-list">
           <label>
-            <span>侧栏显示</span>
+            <span>{{ $tr('侧栏显示') }}</span>
             <el-switch
               v-model="form.visible"
               :active-value="activeValue.active"
@@ -673,7 +673,7 @@
             />
           </label>
           <label v-if="uiType === 'page'">
-            <span>页面缓存</span>
+            <span>{{ $tr('页面缓存') }}</span>
             <el-switch
               v-model="form.isCache"
               :active-value="activeValue.active"
@@ -681,7 +681,7 @@
             />
           </label>
           <label v-if="uiType === 'link' || uiType === 'iframe'">
-            <span>新窗口打开</span>
+            <span>{{ $tr('新窗口打开') }}</span>
             <el-switch
               v-model="form.openInNewWindow"
               :active-value="activeValue.active"
@@ -689,7 +689,7 @@
             />
           </label>
           <label v-if="uiType === 'catalog'">
-            <span>隐藏子菜单</span>
+            <span>{{ $tr('隐藏子菜单') }}</span>
             <el-switch
               v-model="form.hideChildrenInMenu"
               :active-value="activeValue.active"
@@ -700,39 +700,42 @@
       </el-form-item>
 
       <el-collapse class="advanced-collapse">
-        <el-collapse-item name="advanced" title="高级（徽标 / 高亮 / Tab）">
+        <el-collapse-item name="advanced" :title="$tr('高级（徽标 / 高亮 / Tab）')">
           <el-row :gutter="12">
             <el-col :span="12">
-              <el-form-item label="高亮 path">
-                <el-input v-model="form.activePath" placeholder="隐藏页高亮的父菜单 path" />
+              <el-form-item :label="$tr('高亮 path')">
+                <el-input v-model="form.activePath" :placeholder="$tr('隐藏页高亮的父菜单 path')" />
               </el-form-item>
             </el-col>
             <el-col :span="12">
-              <el-form-item label="激活图标">
-                <el-input v-model="form.activeIcon" placeholder="meta.activeIcon，可空" />
+              <el-form-item :label="$tr('激活图标')">
+                <el-input v-model="form.activeIcon" :placeholder="$tr('meta.activeIcon，可空')" />
               </el-form-item>
             </el-col>
             <el-col v-if="uiType === 'page'" :span="12">
-              <el-form-item label="路由参数">
-                <el-input v-model="form.queryParam" placeholder='JSON，如 {"id":1}' />
+              <el-form-item :label="$tr('路由参数')">
+                <el-input
+                  v-model="form.queryParam"
+                  :placeholder='$tr(`JSON，如 {"id":1}`)'
+                />
               </el-form-item>
             </el-col>
             <el-col :span="12">
-              <el-form-item label="徽标">
-                <el-input v-model="form.badge" placeholder="如 New" />
+              <el-form-item :label="$tr('徽标')">
+                <el-input v-model="form.badge" :placeholder="$tr('如 New')" />
               </el-form-item>
             </el-col>
             <el-col :span="12">
-              <el-form-item label="徽标类型">
-                <el-select v-model="form.badgeType" clearable placeholder="类型" style="width: 100%">
-                  <el-option label="文字" value="normal" />
-                  <el-option label="圆点" value="dot" />
+              <el-form-item :label="$tr('徽标类型')">
+                <el-select v-model="form.badgeType" clearable :placeholder="$tr('类型')" style="width: 100%">
+                  <el-option :label="$tr('文字')" value="normal" />
+                  <el-option :label="$tr('圆点')" value="dot" />
                 </el-select>
               </el-form-item>
             </el-col>
             <el-col :span="12">
-              <el-form-item label="徽标颜色">
-                <el-select v-model="form.badgeVariants" clearable placeholder="颜色" style="width: 100%">
+              <el-form-item :label="$tr('徽标颜色')">
+                <el-select v-model="form.badgeVariants" clearable :placeholder="$tr('颜色')" style="width: 100%">
                   <el-option label="primary" value="primary" />
                   <el-option label="success" value="success" />
                   <el-option label="warning" value="warning" />
@@ -743,7 +746,7 @@
           </el-row>
           <div class="switch-list">
             <label>
-              <span>固定 Tab</span>
+              <span>{{ $tr('固定 Tab') }}</span>
               <el-switch
                 v-model="form.affixTab"
                 :active-value="activeValue.active"
@@ -751,7 +754,7 @@
               />
             </label>
             <label>
-              <span>隐藏 Tab</span>
+              <span>{{ $tr('隐藏 Tab') }}</span>
               <el-switch
                 v-model="form.hideInTab"
                 :active-value="activeValue.active"
@@ -759,7 +762,7 @@
               />
             </label>
             <label>
-              <span>隐藏面包屑</span>
+              <span>{{ $tr('隐藏面包屑') }}</span>
               <el-switch
                 v-model="form.hideInBreadcrumb"
                 :active-value="activeValue.active"
@@ -772,9 +775,9 @@
 
       <div v-if="uiType === 'page' || uiType === 'catalog'" class="mount-card">
         <div class="mount-card__title">
-          接口权限
+          {{ $tr('接口权限') }}
           <el-tooltip
-            content="Controller 新增 @Operation 后，这里会标出未挂载项。勾选并保存后才写入。角色若要立刻拥有新权限，需到角色管理里再勾一次该菜单。"
+            :content="$tr('Controller 新增 @Operation 后，这里会标出未挂载项。勾选并保存后才写入。角色若要立刻拥有新权限，需到角色管理里再勾一次该菜单。')"
             placement="top"
           >
             <el-icon><InfoFilled /></el-icon>
@@ -785,7 +788,7 @@
             v-model="mountPickCode"
             clearable
             filterable
-            placeholder="选择后端模块，可对照新增接口"
+            :placeholder="$tr('选择后端模块，可对照新增接口')"
             style="flex: 1"
           >
             <el-option
@@ -802,19 +805,18 @@
                 size="small"
                 type="warning"
               >
-                {{ getPendingNewOpCodes(item.code).length }} 个未挂载
+                {{ getPendingNewOpCodes(item.code).length }} {{ $tr('个未挂载') }}
               </el-tag>
             </el-option>
           </el-select>
-          <el-button type="primary" @click="addModuleMount(false)">挂载</el-button>
-          <el-button @click="addModuleMount(true)">挂载并填名称</el-button>
+          <el-button type="primary" @click="addModuleMount(false)">{{ $tr('挂载') }}</el-button>
+          <el-button @click="addModuleMount(true)">{{ $tr('挂载并填名称') }}</el-button>
         </div>
 
         <div v-if="pickPreview" class="mount-preview">
           <template v-if="pickPreview.mounted">
             <div class="mount-preview__title">
-              {{ pickPreview.name }} 已挂到本菜单
-              （上次 {{ pickPreview.savedCount }} 个 / 代码里 {{ pickPreview.total }} 个）
+              {{ pickPreview.name }} {{ $tr('已挂到本菜单 （上次') }} {{ pickPreview.savedCount }} {{ $tr('个 / 代码里') }} {{ pickPreview.total }} {{ $tr('个）') }}
             </div>
             <el-alert
               v-if="pickPreview.newOps.length"
@@ -828,7 +830,7 @@
               :closable="false"
               show-icon
               type="success"
-              title="该模块没有未挂载的新接口"
+              :title="$tr('该模块没有未挂载的新接口')"
             />
             <ul v-if="pickPreview.newOps.length" class="mount-preview__list">
               <li v-for="op in pickPreview.newOps" :key="op.code">
@@ -842,12 +844,12 @@
               type="warning"
               @click="mountNewOps(pickPreview.code)"
             >
-              勾选这些新接口
+              {{ $tr('勾选这些新接口') }}
             </el-button>
           </template>
           <template v-else>
             <div class="mount-preview__title">
-              {{ pickPreview.name }} 尚未挂到本菜单，共 {{ pickPreview.total }} 个接口
+              {{ pickPreview.name }} {{ $tr('尚未挂到本菜单，共') }} {{ pickPreview.total }} {{ $tr('个接口') }}
             </div>
             <ul class="mount-preview__list">
               <li v-for="op in pickPreview.newOps" :key="op.code">
@@ -860,7 +862,7 @@
 
         <el-empty
           v-if="!(form.moduleMounts && form.moduleMounts.length)"
-          description="页面接口权限可选挂，目录一般不需要"
+          :description="$tr('页面接口权限可选挂，目录一般不需要')"
           :image-size="48"
         />
 
@@ -878,7 +880,7 @@
                 size="small"
                 type="warning"
               >
-                {{ getPendingNewOpCodes(mount.moduleCode).length }} 个未挂载
+                {{ getPendingNewOpCodes(mount.moduleCode).length }} {{ $tr('个未挂载') }}
               </el-tag>
             </div>
             <el-space>
@@ -888,16 +890,16 @@
                 type="warning"
                 @click="mountNewOps(mount.moduleCode)"
               >
-                勾选新增
+                {{ $tr('勾选新增') }}
               </el-button>
               <el-button link type="primary" @click="toggleMountAll(mount.moduleCode, true)">
-                全选
+                {{ $tr('全选') }}
               </el-button>
               <el-button link @click="toggleMountAll(mount.moduleCode, false)">
-                清空
+                {{ $tr('清空') }}
               </el-button>
               <el-button link type="danger" @click="removeModuleMount(mount.moduleCode)">
-                移除
+                {{ $tr('移除') }}
               </el-button>
             </el-space>
           </div>
@@ -911,21 +913,21 @@
               {{ op.name }}
               <span class="op-code">({{ key }})</span>
               <el-tag v-if="isNewOp(mount.moduleCode, key)" size="small" type="warning">
-                新
+                {{ $tr('新') }}
               </el-tag>
             </el-checkbox>
           </el-checkbox-group>
         </div>
       </div>
 
-      <el-form-item label="备注">
-        <el-input v-model="form.remark" maxlength="200" placeholder="仅后台备注，不影响路由" />
+      <el-form-item :label="$tr('备注')">
+        <el-input v-model="form.remark" maxlength="200" :placeholder="$tr('仅后台备注，不影响路由')" />
       </el-form-item>
     </el-form>
 
     <template #footer>
-      <el-button @click="close">取消</el-button>
-      <el-button :loading="saving" type="primary" @click="save">保存</el-button>
+      <el-button @click="close">{{ $tr('取消') }}</el-button>
+      <el-button :loading="saving" type="primary" @click="save">{{ $tr('保存') }}</el-button>
     </template>
   </el-drawer>
 </template>

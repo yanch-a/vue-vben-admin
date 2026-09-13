@@ -141,16 +141,16 @@ async function onSubmit() {
 <template>
   <ElDialog
     v-model="visible"
-    title="上传 SQL 文件"
+    :title="$tr('上传 SQL 文件')"
     width="520px"
     destroy-on-close
     append-to-body
   >
     <ElForm label-width="108px" @submit.prevent>
-      <ElFormItem label="目标实例">
+      <ElFormItem :label="$tr('目标实例')">
         <ElInput :model-value="instanceName" disabled />
       </ElFormItem>
-      <ElFormItem label="SQL 文件" required>
+      <ElFormItem :label="$tr('SQL 文件')" required>
         <ElUpload
           :auto-upload="false"
           :limit="1"
@@ -159,41 +159,41 @@ async function onSubmit() {
           :on-remove="onFileRemove"
           :on-exceed="onExceed"
         >
-          <ElButton>选择文件</ElButton>
+          <ElButton>{{ $tr('选择文件') }}</ElButton>
           <template #tip>
             <div class="tip">
-              {{ form.engine === 'native' && isMongo ? 'MongoDB mongosh 脚本' : '支持 .sql / .txt / .js' }}
+              {{ $tr(form.engine === 'native' && isMongo ? 'MongoDB mongosh 脚本' : '支持 .sql / .txt / .js') }}
             </div>
           </template>
         </ElUpload>
       </ElFormItem>
-      <ElFormItem label="执行方式">
+      <ElFormItem :label="$tr('执行方式')">
         <ElRadioGroup v-model="form.engine" size="small">
-          <ElRadioButton label="managed">逐条校验</ElRadioButton>
-          <ElRadioButton label="native">官方客户端</ElRadioButton>
+          <ElRadioButton label="managed">{{ $tr('逐条校验') }}</ElRadioButton>
+          <ElRadioButton label="native">{{ $tr('官方客户端') }}</ElRadioButton>
         </ElRadioGroup>
       </ElFormItem>
-      <ElFormItem label="文件编码">
+      <ElFormItem :label="$tr('文件编码')">
         <ElSelect v-model="form.charset" class="w-full">
           <ElOption label="UTF-8" value="UTF-8" />
           <ElOption label="GBK" value="GBK" />
         </ElSelect>
       </ElFormItem>
-      <ElFormItem v-if="form.engine === 'managed'" label="遇错继续">
+      <ElFormItem v-if="form.engine === 'managed'" :label="$tr('遇错继续')">
         <ElSwitch v-model="form.continueOnError" />
-        <span class="tip inline">关闭则第一条失败即停止</span>
+        <span class="tip inline">{{ $tr('关闭则第一条失败即停止') }}</span>
       </ElFormItem>
       <ElAlert
         v-else
         type="info"
         :closable="false"
-        title="官方客户端由服务端执行；脚本错误会按厂商客户端返回失败。"
+        :title="$tr('官方客户端由服务端执行；脚本错误会按厂商客户端返回失败。')"
       />
     </ElForm>
     <template #footer>
-      <ElButton @click="visible = false">取消</ElButton>
+      <ElButton @click="visible = false">{{ $tr('取消') }}</ElButton>
       <ElButton type="primary" :loading="submitting" @click="onSubmit">
-        开始执行
+        {{ $tr('开始执行') }}
       </ElButton>
     </template>
   </ElDialog>

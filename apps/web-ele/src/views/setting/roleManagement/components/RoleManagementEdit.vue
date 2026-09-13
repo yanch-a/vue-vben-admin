@@ -83,20 +83,20 @@
     <el-form ref="formRef" label-width="80px" :model="form" :rules="rules">
       <el-row>
         <el-col :span="12">
-          <el-form-item label="角色码" prop="roleKey">
+          <el-form-item :label="$tr('角色码')" prop="roleKey">
             <el-input v-model="form.roleKey" />
           </el-form-item>
         </el-col>
         <el-col :span="12">
-          <el-form-item label="角色名称" prop="roleName">
+          <el-form-item :label="$tr('角色名称')" prop="roleName">
             <el-input v-model="form.roleName" />
           </el-form-item>
         </el-col>
       </el-row>
       <el-row>
         <el-col :span="8">
-          <el-form-item label="数据权限" prop="dataScope">
-            <el-select v-model="form.dataScope" placeholder="数据权限">
+          <el-form-item :label="$tr('数据权限')" prop="dataScope">
+            <el-select v-model="form.dataScope" :placeholder="$tr('数据权限')">
               <el-option
                 v-for="(key, value) in dataScope"
                 :key="value"
@@ -107,27 +107,27 @@
           </el-form-item>
         </el-col>
         <el-col :span="8">
-          <el-form-item label="排序" prop="roleSort">
+          <el-form-item :label="$tr('排序')" prop="roleSort">
             <el-input-number v-model="form.roleSort" :max="1000" :min="0" />
           </el-form-item>
         </el-col>
         <el-col :span="8">
-          <el-form-item label="角色状态" prop="status">
+          <el-form-item :label="$tr('角色状态')" prop="status">
             <el-switch v-model="form.status" :active-value="activeValue.active" :inactive-value="activeValue.inActive" />
           </el-form-item>
         </el-col>
       </el-row>
       <el-row>
         <el-col :span="24">
-          <el-form-item label="备注" prop="remark">
+          <el-form-item :label="$tr('备注')" prop="remark">
             <el-input v-model="form.remark" />
           </el-form-item>
         </el-col>
       </el-row>
     </el-form>
     <template #footer>
-      <el-button @click="close">取 消</el-button>
-      <el-button type="primary" @click="save">确 定</el-button>
+      <el-button @click="close">{{ $tr('取 消') }}</el-button>
+      <el-button type="primary" @click="save">{{ $tr('确 定') }}</el-button>
     </template>
   </el-dialog>
 </template>

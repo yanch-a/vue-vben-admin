@@ -70,12 +70,12 @@
   <el-form ref="formRef" label-width="100px" :model="form" :rules="rules" size="default">
       <el-row>
         <el-col :span="8">
-          <el-form-item label="业务分类" prop="moduleCode">
-            <el-input v-model="form.moduleCode" maxlength="30" placeholder="业务分类" />
+          <el-form-item :label="$tr('业务分类')" prop="moduleCode">
+            <el-input v-model="form.moduleCode" maxlength="30" :placeholder="$tr('业务分类')" />
           </el-form-item>
         </el-col>
         <el-col :span="24">
-          <el-form-item label="文件">
+          <el-form-item :label="$tr('文件')">
             <LemonUpload :attach-code="form.moduleCode || 'resource'" :ids="form.attachmentIds" @handle-file="handleContentImg" />
           </el-form-item>
         </el-col>

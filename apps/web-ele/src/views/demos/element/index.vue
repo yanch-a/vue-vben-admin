@@ -58,12 +58,12 @@ const segmentedOptions = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 
 <template>
   <Page
-    description="支持多语言，主题功能集成切换等"
-    title="Element Plus组件使用演示"
+    :description="$tr('支持多语言，主题功能集成切换等')"
+    :title="$tr('Element Plus组件使用演示')"
   >
     <div class="flex flex-wrap gap-5">
       <ElCard class="mb-5 w-auto">
-        <template #header> 按钮 </template>
+        <template #header> {{ $tr('按钮') }} </template>
         <ElSpace>
           <ElButton text>Text</ElButton>
           <ElButton>Default</ElButton>
@@ -77,19 +77,19 @@ const segmentedOptions = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
       <ElCard class="mb-5 w-80">
         <template #header> Message </template>
         <ElSpace>
-          <ElButton type="info" @click="info"> 信息 </ElButton>
-          <ElButton type="danger" @click="error"> 错误 </ElButton>
-          <ElButton type="warning" @click="warning"> 警告 </ElButton>
-          <ElButton type="success" @click="success"> 成功 </ElButton>
+          <ElButton type="info" @click="info"> {{ $tr('信息') }} </ElButton>
+          <ElButton type="danger" @click="error"> {{ $tr('错误') }} </ElButton>
+          <ElButton type="warning" @click="warning"> {{ $tr('警告') }} </ElButton>
+          <ElButton type="success" @click="success"> {{ $tr('成功') }} </ElButton>
         </ElSpace>
       </ElCard>
       <ElCard class="mb-5 w-80">
         <template #header> Notification </template>
         <ElSpace>
-          <ElButton type="info" @click="notify('info')"> 信息 </ElButton>
-          <ElButton type="danger" @click="notify('error')"> 错误 </ElButton>
-          <ElButton type="warning" @click="notify('warning')"> 警告 </ElButton>
-          <ElButton type="success" @click="notify('success')"> 成功 </ElButton>
+          <ElButton type="info" @click="notify('info')"> {{ $tr('信息') }} </ElButton>
+          <ElButton type="danger" @click="notify('error')"> {{ $tr('错误') }} </ElButton>
+          <ElButton type="warning" @click="notify('warning')"> {{ $tr('警告') }} </ElButton>
+          <ElButton type="success" @click="notify('success')"> {{ $tr('成功') }} </ElButton>
         </ElSpace>
       </ElCard>
       <ElCard class="mb-5 w-auto">
@@ -102,12 +102,12 @@ const segmentedOptions = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
       </ElCard>
       <ElCard class="mb-5 w-80">
         <template #header> V-Loading </template>
-        <div class="flex-center size-72" v-loading="true">一些演示的内容</div>
+        <div class="flex-center size-72" v-loading="true">{{ $tr('一些演示的内容') }}</div>
       </ElCard>
       <ElCard class="mb-5 w-80">
         <ElTable :data="tableData" stripe>
-          <ElTable.TableColumn label="测试列1" prop="prop1" />
-          <ElTable.TableColumn label="测试列2" prop="prop2" />
+          <ElTable.TableColumn :label="$tr('测试列1')" prop="prop1" />
+          <ElTable.TableColumn :label="$tr('测试列2')" prop="prop2" />
         </ElTable>
       </ElCard>
     </div>

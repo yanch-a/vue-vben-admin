@@ -2,6 +2,8 @@ import type { App } from 'vue';
 
 import { ElMessage, ElMessageBox } from 'element-plus';
 
+import { translateUiText } from '#/locales/ui-text';
+
 /**
  * 兼容 admin-plus 的 $baseMessage / $baseConfirm
  */
@@ -13,7 +15,7 @@ export function setupAdminPlusCompat(app: App) {
     dangerouslyUseHTMLString = false,
   ) => {
     ElMessage({
-      message,
+      message: translateUiText(message),
       type,
       dangerouslyUseHTMLString,
     });
@@ -25,11 +27,15 @@ export function setupAdminPlusCompat(app: App) {
     callback?: () => void,
     catchCallback?: () => void,
   ) => {
-    ElMessageBox.confirm(content, title || '提示', {
-      confirmButtonText: '确定',
-      cancelButtonText: '取消',
+    ElMessageBox.confirm(
+      translateUiText(content),
+      translateUiText(title || '提示'),
+      {
+      confirmButtonText: translateUiText('确定'),
+      cancelButtonText: translateUiText('取消'),
       type: 'warning',
-    })
+      },
+    )
       .then(() => {
         callback?.();
       })

@@ -64,16 +64,16 @@
     <vab-query-form>
       <vab-query-form-top-panel>
         <el-form inline label-width="60px" :model="queryForm" @submit.prevent>
-          <el-form-item label="账号">
+          <el-form-item :label="$tr('账号')">
             <el-input
               v-model.trim="queryForm.userName"
               clearable
-              placeholder="请输入账号"
+              :placeholder="$tr('请输入账号')"
             />
           </el-form-item>
           <el-form-item>
             <el-button :icon="Search" type="primary" @click="queryData">
-              查询
+              {{ $tr('查询') }}
             </el-button>
           </el-form-item>
         </el-form>
@@ -85,11 +85,11 @@
         <template #default="{ row }">
           <div class="vab-table-expand">
             <p>
-              <span class="vab-table-expand-title">账号:</span>
+              <span class="vab-table-expand-title">{{ $tr('账号:') }}</span>
               {{ row.userName }}
             </p>
             <p>
-              <span class="vab-table-expand-title">登录状态:</span>
+              <span class="vab-table-expand-title">{{ $tr('登录状态:') }}</span>
               <span v-if="row.status === '0'">
                 <span class="vab-dot vab-dot-success"><span></span></span>
                 {{ row.msg }}
@@ -100,31 +100,31 @@
               </span>
             </p>
             <p>
-              <span class="vab-table-expand-title">登录IP:</span>
+              <span class="vab-table-expand-title">{{ $tr('登录IP:') }}</span>
               {{ row.ipaddr }}
             </p>
             <p>
-              <span class="vab-table-expand-title">登录地点:</span>
+              <span class="vab-table-expand-title">{{ $tr('登录地点:') }}</span>
               {{ row.loginLocation }}
             </p>
             <p>
-              <span class="vab-table-expand-title">登录时间:</span>
+              <span class="vab-table-expand-title">{{ $tr('登录时间:') }}</span>
               {{ row.loginTime }}
             </p>
             <p>
-              <span class="vab-table-expand-title">浏览器:</span>
+              <span class="vab-table-expand-title">{{ $tr('浏览器:') }}</span>
               {{ row.browser }}
             </p>
             <p>
-              <span class="vab-table-expand-title">操作系统:</span>
+              <span class="vab-table-expand-title">{{ $tr('操作系统:') }}</span>
               {{ row.os }}
             </p>
           </div>
         </template>
       </el-table-column>
-      <el-table-column label="账号" prop="userName" show-overflow-tooltip />
+      <el-table-column :label="$tr('账号')" prop="userName" show-overflow-tooltip />
       <el-table-column
-        label="执行结果"
+        :label="$tr('执行结果')"
         prop="status"
         min-width="140"
         show-overflow-tooltip
@@ -140,15 +140,15 @@
           </span>
         </template>
       </el-table-column>
-      <el-table-column label="登录IP" prop="ipaddr" width="140" />
+      <el-table-column :label="$tr('登录IP')" prop="ipaddr" width="140" />
       <el-table-column
-        label="登录时间"
+        :label="$tr('登录时间')"
         prop="loginTime"
         width="170"
         show-overflow-tooltip
       />
       <template #empty>
-        <el-empty class="vab-data-empty" description="暂无数据" />
+        <el-empty class="vab-data-empty" :description="$tr('暂无数据')" />
       </template>
     </el-table>
     <el-pagination

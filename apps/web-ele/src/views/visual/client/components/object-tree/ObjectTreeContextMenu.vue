@@ -109,74 +109,74 @@ function onAction(action: TreeCtxAction) {
       @contextmenu.prevent
     >
       <template v-if="isBlank()">
-        <div class="item" @click="onAction('createDatabase')">创建数据库</div>
-        <div class="item" @click="onAction('refreshTree')">刷新</div>
+        <div class="item" @click="onAction('createDatabase')">{{ $tr('创建数据库') }}</div>
+        <div class="item" @click="onAction('refreshTree')">{{ $tr('刷新') }}</div>
       </template>
       <template v-else-if="isDb()">
         <div class="item" @click="onAction('refreshInstance')">
-          刷新{{ instanceLabel }}
+          {{ $tr('刷新') }}{{ instanceLabel }}
         </div>
         <div class="divider" />
         <template v-if="canManageInstance">
           <div class="item" @click="onAction('createDatabase')">
-            创建{{ instanceLabel === '模式' ? '数据库' : instanceLabel }}
+            {{ $tr('创建') }}{{ $tr(instanceLabel === '模式' ? '数据库' : instanceLabel) }}
           </div>
           <div class="item danger" @click="onAction('dropDatabase')">
-            删除{{ instanceLabel }}
+            {{ $tr('删除') }}{{ instanceLabel }}
           </div>
           <div class="divider" />
         </template>
-        <div class="item" @click="onAction('importData')">导入数据（官方客户端）</div>
+        <div class="item" @click="onAction('importData')">{{ $tr('导入数据（官方客户端）') }}</div>
         <div class="item" @click="onAction('copyDbToHost')">
-          将{{ instanceLabel }}复制到不同主机
+          {{ $tr('将') }}{{ instanceLabel }}{{ $tr('复制到不同主机') }}
         </div>
-        <div class="item" @click="onAction('runSqlScript')">执行 SQL 脚本</div>
+        <div class="item" @click="onAction('runSqlScript')">{{ $tr('执行 SQL 脚本') }}</div>
         <div class="item" @click="onAction('exportTableSchemaExcel')">
-          把表结构导出为 Excel
+          {{ $tr('把表结构导出为 Excel') }}
         </div>
       </template>
       <template v-else-if="isTablesFolder()">
-        <div class="item" @click="onAction('createTable')">创建表</div>
-        <div class="item" @click="onAction('copyDbToHost')">将表复制到不同主机</div>
+        <div class="item" @click="onAction('createTable')">{{ $tr('创建表') }}</div>
+        <div class="item" @click="onAction('copyDbToHost')">{{ $tr('将表复制到不同主机') }}</div>
       </template>
       <template v-else-if="isProgramFolder()">
         <div class="item" @click="onAction('createProgramObject')">
-          创建{{ programLabel() }}
+          {{ $tr('创建') }}{{ programLabel() }}
         </div>
       </template>
       <template v-else-if="isProgramLeaf()">
         <div class="item" @click="onAction('executeProgramObject')">
-          执行
+          {{ $tr('执行') }}
         </div>
         <div class="item" @click="onAction('createProgramObject')">
-          创建{{ programLabel() }}
+          {{ $tr('创建') }}{{ programLabel() }}
         </div>
         <div class="item" @click="onAction('alterProgramObject')">
-          改变{{ programLabel() }}
+          {{ $tr('改变') }}{{ programLabel() }}
         </div>
         <div class="item danger" @click="onAction('dropProgramObject')">
-          删除{{ programLabel() }}
+          {{ $tr('删除') }}{{ programLabel() }}
         </div>
       </template>
       <template v-else-if="isTable()">
-        <div class="item" @click="onAction('openTable')">打开表 (F11)</div>
-        <div class="item" @click="onAction('viewTableInfo')">查看表信息</div>
-        <div class="item danger" @click="onAction('truncateTable')">清空表</div>
-        <div class="item danger" @click="onAction('dropTable')">删除表</div>
-        <div class="item" @click="onAction('alterTable')">改变表</div>
-        <div class="item" @click="onAction('copyDdl')">复制 DDL</div>
-        <div class="item" @click="onAction('copyDbToHost')">将表复制到不同主机</div>
+        <div class="item" @click="onAction('openTable')">{{ $tr('打开表 (F11)') }}</div>
+        <div class="item" @click="onAction('viewTableInfo')">{{ $tr('查看表信息') }}</div>
+        <div class="item danger" @click="onAction('truncateTable')">{{ $tr('清空表') }}</div>
+        <div class="item danger" @click="onAction('dropTable')">{{ $tr('删除表') }}</div>
+        <div class="item" @click="onAction('alterTable')">{{ $tr('改变表') }}</div>
+        <div class="item" @click="onAction('copyDdl')">{{ $tr('复制 DDL') }}</div>
+        <div class="item" @click="onAction('copyDbToHost')">{{ $tr('将表复制到不同主机') }}</div>
         <div class="divider" />
-        <div class="item" @click="onAction('exportTableExcel')">导出为 Excel</div>
-        <div class="item" @click="onAction('exportTableSql')">导出为 SQL</div>
+        <div class="item" @click="onAction('exportTableExcel')">{{ $tr('导出为 Excel') }}</div>
+        <div class="item" @click="onAction('exportTableSql')">{{ $tr('导出为 SQL') }}</div>
       </template>
       <template v-else-if="isSavedQuery()">
-        <div class="item" @click="onAction('openSavedQuery')">打开</div>
-        <div class="item" @click="onAction('renameSavedQuery')">重命名</div>
-        <div class="item" @click="onAction('copySavedQuerySql')">复制 SQL</div>
-        <div class="item danger" @click="onAction('deleteSavedQuery')">删除</div>
+        <div class="item" @click="onAction('openSavedQuery')">{{ $tr('打开') }}</div>
+        <div class="item" @click="onAction('renameSavedQuery')">{{ $tr('重命名') }}</div>
+        <div class="item" @click="onAction('copySavedQuerySql')">{{ $tr('复制 SQL') }}</div>
+        <div class="item danger" @click="onAction('deleteSavedQuery')">{{ $tr('删除') }}</div>
       </template>
-      <div v-else class="item muted">暂无可用操作</div>
+      <div v-else class="item muted">{{ $tr('暂无可用操作') }}</div>
     </div>
   </Teleport>
 </template>

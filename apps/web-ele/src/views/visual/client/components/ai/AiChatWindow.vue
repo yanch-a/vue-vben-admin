@@ -164,7 +164,7 @@ defineExpose({
       :style="winStyle"
     >
       <div class="ai-win-header" @mousedown="onDragStart">
-        <span class="title">AI 助手 · {{ connLabel || '未连接' }}</span>
+        <span class="title">{{ $tr('AI 助手 ·') }} {{ $tr(connLabel || '未连接') }}</span>
         <ElTag
           v-if="running"
           size="small"
@@ -173,7 +173,7 @@ defineExpose({
           class="run-tag"
         >
           <span class="run-dot" />
-          运行中
+          {{ $tr('运行中') }}
         </ElTag>
         <ElTag
           v-else-if="lastAssistantDone"
@@ -181,7 +181,7 @@ defineExpose({
           type="success"
           effect="dark"
         >
-          已完成
+          {{ $tr('已完成') }}
         </ElTag>
         <ElSelect
           v-model="modelId"
@@ -199,22 +199,22 @@ defineExpose({
           </ElOptionGroup>
         </ElSelect>
         <div class="actions" @mousedown.stop>
-          <button title="会话列表" @click="openConvList">☰</button>
-          <button title="最小化到任务栏" @click="minimize">—</button>
-          <button title="最大化/还原" @click="toggleMax">☐</button>
-          <button title="关闭" @click="close">×</button>
+          <button :title="$tr('会话列表')" @click="openConvList">☰</button>
+          <button :title="$tr('最小化到任务栏')" @click="minimize">—</button>
+          <button :title="$tr('最大化/还原')" @click="toggleMax">☐</button>
+          <button :title="$tr('关闭')" @click="close">×</button>
         </div>
       </div>
       <!-- 与 SQL 编辑器联动的上下文：实例 + 脱敏状态 -->
       <div class="ai-win-ctx" @mousedown.stop>
         <span class="ctx-item" :title="connLabel || ''">
-          连接
-          <strong>{{ connLabel || '未连接' }}</strong>
+          {{ $tr('连接') }}
+          <strong>{{ $tr(connLabel || '未连接') }}</strong>
         </span>
         <span class="ctx-sep">|</span>
         <span class="ctx-item" :class="{ warn: !instanceName }">
-          实例
-          <strong>{{ instanceName || '未选择' }}</strong>
+          {{ $tr('实例') }}
+          <strong>{{ $tr(instanceName || '未选择') }}</strong>
         </span>
         <span class="ctx-sep">|</span>
         <ElTag
@@ -227,7 +227,7 @@ defineExpose({
               : '允许把真实行数据发给模型（含 run_sql / sample_rows）'
           "
         >
-          {{ isMaskedMode ? '脱敏模式' : '真实样例' }}
+          {{ $tr(isMaskedMode ? '脱敏模式' : '真实样例') }}
         </ElTag>
       </div>
       <AiMessageList
@@ -260,17 +260,17 @@ defineExpose({
       />
       <ElDrawer
         v-model="convDrawer"
-        title="会话"
+        :title="$tr('会话')"
         size="280px"
         append-to-body
         class="ai-chat-drawer"
       >
         <ElButton size="small" type="primary" @click="newConversation(); convDrawer = false">
-          新建会话
+          {{ $tr('新建会话') }}
         </ElButton>
         <div v-for="c in convs" :key="c.id" class="conv-item">
           <span class="conv-title" @click="loadConversation(c.id); convDrawer = false">
-            {{ c.title || '未命名' }}
+            {{ $tr(c.title || '未命名') }}
           </span>
           <ElButton
             link
@@ -278,7 +278,7 @@ defineExpose({
             size="small"
             @click="deleteConversation(c.id).then(openConvList)"
           >
-            删
+            {{ $tr('删') }}
           </ElButton>
         </div>
       </ElDrawer>

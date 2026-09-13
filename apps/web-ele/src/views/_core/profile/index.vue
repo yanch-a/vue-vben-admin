@@ -35,7 +35,7 @@ const tabs = ref([
 <template>
   <Profile
     v-model:model-value="tabsValue"
-    title="个人中心"
+    :title="$tr('个人中心')"
     :user-info="userStore.userInfo"
     :tabs="tabs"
   >

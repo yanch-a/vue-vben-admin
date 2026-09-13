@@ -136,7 +136,7 @@ onBeforeUnmount(() => {
         ×
       </button>
     </div>
-    <div v-if="!connections.length" class="empty">请新建或打开数据库连接</div>
+    <div v-if="!connections.length" class="empty">{{ $tr('请新建或打开数据库连接') }}</div>
 
     <Teleport to="body">
       <div
@@ -146,25 +146,25 @@ onBeforeUnmount(() => {
         @click.stop
         @contextmenu.prevent
       >
-        <div class="item" @click="onRefreshBrowse">刷新当前浏览对象</div>
-        <div class="item" @click="onEditColor">修改浏览对象颜色</div>
+        <div class="item" @click="onRefreshBrowse">{{ $tr('刷新当前浏览对象') }}</div>
+        <div class="item" @click="onEditColor">{{ $tr('修改浏览对象颜色') }}</div>
       </div>
     </Teleport>
 
     <ElDialog
       v-model="colorDialog.visible"
-      title="修改浏览对象颜色"
+      :title="$tr('修改浏览对象颜色')"
       width="360px"
       append-to-body
       destroy-on-close
     >
       <div class="color-row">
-        <span>连接栏背景色</span>
+        <span>{{ $tr('连接栏背景色') }}</span>
         <ElColorPicker v-model="colorDialog.color" color-format="hex" />
       </div>
       <template #footer>
-        <ElButton @click="clearColor">恢复默认</ElButton>
-        <ElButton type="primary" @click="applyColor">确定</ElButton>
+        <ElButton @click="clearColor">{{ $tr('恢复默认') }}</ElButton>
+        <ElButton type="primary" @click="applyColor">{{ $tr('确定') }}</ElButton>
       </template>
     </ElDialog>
   </div>

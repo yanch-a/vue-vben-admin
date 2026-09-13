@@ -251,10 +251,10 @@
           type="primary"
           @click="handleAdd"
         >
-          新增菜单
+          {{ $tr('新增菜单') }}
         </el-button>
         <el-button :icon="Sort" @click="handleExpand">
-          {{ expand ? '折叠全部' : '展开全部' }}
+          {{ $tr(expand ? '折叠全部' : '展开全部') }}
         </el-button>
       </vab-query-form-left-panel>
       <vab-query-form-right-panel :span="14">
@@ -263,13 +263,13 @@
             <el-select
               v-model="kindFilter"
               clearable
-              placeholder="全部类型"
+              :placeholder="$tr('全部类型')"
               style="width: 120px"
             >
-              <el-option label="目录" value="catalog" />
-              <el-option label="页面" value="page" />
-              <el-option label="外链" value="link" />
-              <el-option label="内嵌" value="iframe" />
+              <el-option :label="$tr('目录')" value="catalog" />
+              <el-option :label="$tr('页面')" value="page" />
+              <el-option :label="$tr('外链')" value="link" />
+              <el-option :label="$tr('内嵌')" value="iframe" />
             </el-select>
           </el-form-item>
           <el-form-item>
@@ -277,7 +277,7 @@
               v-model.trim="keyword"
               clearable
               :prefix-icon="Search"
-              placeholder="搜索名称 / path / 组件"
+              :placeholder="$tr('搜索名称 / path / 组件')"
               style="width: 240px"
             />
           </el-form-item>
@@ -294,7 +294,7 @@
       row-key="menuId"
       :tree-props="{ children: 'children', hasChildren: 'hasChildren' }"
     >
-      <el-table-column label="菜单" min-width="220">
+      <el-table-column :label="$tr('菜单')" min-width="220">
         <template #default="{ row }">
           <span class="menu-name-cell">
             <vab-icon v-if="row.icon" :icon="row.icon" class="menu-icon" />
@@ -302,23 +302,23 @@
           </span>
         </template>
       </el-table-column>
-      <el-table-column label="类型" width="80">
+      <el-table-column :label="$tr('类型')" width="80">
         <template #default="{ row }">
           <el-tag disable-transitions size="small" :type="kindTag(row)">
             {{ kindLabel(row) }}
           </el-tag>
         </template>
       </el-table-column>
-      <el-table-column label="路由 name" min-width="140" prop="name" show-overflow-tooltip />
+      <el-table-column :label="$tr('路由 name')" min-width="140" prop="name" show-overflow-tooltip />
       <el-table-column label="path" min-width="160" prop="path" show-overflow-tooltip />
-      <el-table-column label="组件" min-width="180" prop="component" show-overflow-tooltip>
+      <el-table-column :label="$tr('组件')" min-width="180" prop="component" show-overflow-tooltip>
         <template #default="{ row }">
           <span v-if="row.iframeSrc" class="muted">iframe</span>
-          <span v-else-if="Number(row.isFrame) === 1" class="muted">外链</span>
+          <span v-else-if="Number(row.isFrame) === 1" class="muted">{{ $tr('外链') }}</span>
           <span v-else>{{ row.component || '-' }}</span>
         </template>
       </el-table-column>
-      <el-table-column align="center" label="排序" width="110">
+      <el-table-column align="center" :label="$tr('排序')" width="110">
         <template #default="{ row }">
           <div class="order-cell">
             <span>{{ row.orderNum ?? '-' }}</span>
@@ -339,7 +339,7 @@
           </div>
         </template>
       </el-table-column>
-      <el-table-column align="center" label="侧栏显示" width="90">
+      <el-table-column align="center" :label="$tr('侧栏显示')" width="90">
         <template #default="{ row }">
           <el-switch
             v-model="row.visible"
@@ -349,7 +349,7 @@
           />
         </template>
       </el-table-column>
-      <el-table-column align="right" fixed="right" label="操作" width="220">
+      <el-table-column align="right" fixed="right" :label="$tr('操作')" width="220">
         <template #default="{ row }">
           <el-button
             v-permissions="{ permission: ['MenuManagement:aou'] }"
@@ -358,7 +358,7 @@
             type="primary"
             @click="handleAddChild(row)"
           >
-            子级
+            {{ $tr('子级') }}
           </el-button>
           <el-button
             v-permissions="{ permission: ['MenuManagement:aou'] }"
@@ -366,7 +366,7 @@
             type="primary"
             @click="handleEdit(row)"
           >
-            编辑
+            {{ $tr('编辑') }}
           </el-button>
           <el-button
             v-permissions="{ permission: ['MenuManagement:delete'] }"
@@ -374,12 +374,12 @@
             type="danger"
             @click="handleDelete(row)"
           >
-            删除
+            {{ $tr('删除') }}
           </el-button>
         </template>
       </el-table-column>
       <template #empty>
-        <el-empty description="暂无菜单" />
+        <el-empty :description="$tr('暂无菜单')" />
       </template>
     </el-table>
 

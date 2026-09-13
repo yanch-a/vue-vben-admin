@@ -259,29 +259,29 @@ async function onCopy() {
 <template>
   <ElDialog
     v-model="visible"
-    title="复制数据库"
+    :title="$tr('复制数据库')"
     width="920px"
     destroy-on-close
     append-to-body
     class="copy-db-dialog"
   >
-    <p class="desc">此选项复制数据库/主机之间的对象。</p>
+    <p class="desc">{{ $tr('此选项复制数据库/主机之间的对象。') }}</p>
 
     <div class="copy-body">
       <!-- 左侧：来源 -->
       <div class="pane source-pane">
-        <div class="pane-head">来源</div>
+        <div class="pane-head">{{ $tr('来源') }}</div>
         <div class="source-name">
-          <span class="label">名</span>
+          <span class="label">{{ $tr('名') }}</span>
           <ElInput :model-value="sourceLabel" disabled />
         </div>
         <div class="pane-title">
-          <span>对象</span>
+          <span>{{ $tr('对象') }}</span>
           <span class="pane-actions">
             <ElButton link type="primary" size="small" @click="toggleAllTables(true)">
-              全选表
+              {{ $tr('全选表') }}
             </ElButton>
-            <ElButton link size="small" @click="toggleAllTables(false)">清空</ElButton>
+            <ElButton link size="small" @click="toggleAllTables(false)">{{ $tr('清空') }}</ElButton>
           </span>
         </div>
         <ElScrollbar v-loading="loadingTables" height="360px">
@@ -300,7 +300,7 @@ async function onCopy() {
                 @click.stop
                 @change="(v: boolean) => toggleAllTables(!!v)"
               >
-                表
+                {{ $tr('表') }}
               </ElCheckbox>
             </div>
             <ElCheckboxGroup v-if="tablesExpanded" v-model="checkedTables" class="table-checks">
@@ -309,25 +309,25 @@ async function onCopy() {
               </ElCheckbox>
             </ElCheckboxGroup>
 
-            <div class="folder-row disabled" title="第一期暂不支持">
+            <div class="folder-row disabled" :title="$tr('第一期暂不支持')">
               <span class="exp">+</span>
-              <ElCheckbox disabled>视图</ElCheckbox>
+              <ElCheckbox disabled>{{ $tr('视图') }}</ElCheckbox>
             </div>
-            <div class="folder-row disabled" title="第一期暂不支持">
+            <div class="folder-row disabled" :title="$tr('第一期暂不支持')">
               <span class="exp">+</span>
-              <ElCheckbox disabled>存储过程</ElCheckbox>
+              <ElCheckbox disabled>{{ $tr('存储过程') }}</ElCheckbox>
             </div>
-            <div class="folder-row disabled" title="第一期暂不支持">
+            <div class="folder-row disabled" :title="$tr('第一期暂不支持')">
               <span class="exp">+</span>
-              <ElCheckbox disabled>函数</ElCheckbox>
+              <ElCheckbox disabled>{{ $tr('函数') }}</ElCheckbox>
             </div>
-            <div class="folder-row disabled" title="第一期暂不支持">
+            <div class="folder-row disabled" :title="$tr('第一期暂不支持')">
               <span class="exp">+</span>
-              <ElCheckbox disabled>触发器</ElCheckbox>
+              <ElCheckbox disabled>{{ $tr('触发器') }}</ElCheckbox>
             </div>
-            <div class="folder-row disabled" title="第一期暂不支持">
+            <div class="folder-row disabled" :title="$tr('第一期暂不支持')">
               <span class="exp">+</span>
-              <ElCheckbox disabled>事件</ElCheckbox>
+              <ElCheckbox disabled>{{ $tr('事件') }}</ElCheckbox>
             </div>
           </div>
         </ElScrollbar>
@@ -335,17 +335,17 @@ async function onCopy() {
 
       <!-- 右侧：目标 + 选项 -->
       <div class="pane target-pane">
-        <div class="pane-head">目标</div>
+        <div class="pane-head">{{ $tr('目标') }}</div>
         <p class="note">
-          注意：若要复制到不同主机，请先在「打开连接」中配置并打开目标连接；目标连接下拉会列出已保存的连接。
+          {{ $tr('注意：若要复制到不同主机，请先在「打开连接」中配置并打开目标连接；目标连接下拉会列出已保存的连接。') }}
         </p>
         <div class="field-row" v-loading="loadingTargets">
-          <span class="label">连接</span>
+          <span class="label">{{ $tr('连接') }}</span>
           <ElSelect
             v-model="form.targetDbConfigId"
             filterable
             style="flex: 1"
-            placeholder="选择目标连接"
+            :placeholder="$tr('选择目标连接')"
           >
             <ElOption
               v-for="c in targetConfigs"
@@ -356,12 +356,12 @@ async function onCopy() {
           </ElSelect>
         </div>
         <div class="field-row" v-loading="loadingInstances">
-          <span class="label">数据库</span>
+          <span class="label">{{ $tr('数据库') }}</span>
           <ElSelect
             v-model="form.targetInstance"
             filterable
             style="flex: 1"
-            placeholder="选择目标库"
+            :placeholder="$tr('选择目标库')"
           >
             <ElOption
               v-for="name in targetInstances"
@@ -375,33 +375,32 @@ async function onCopy() {
         <ElDivider />
 
         <ElRadioGroup v-model="form.mode" class="mode-radios">
-          <ElRadio label="both">结构和数据</ElRadio>
-          <ElRadio label="structure">结构唯一</ElRadio>
+          <ElRadio label="both">{{ $tr('结构和数据') }}</ElRadio>
+          <ElRadio label="structure">{{ $tr('结构唯一') }}</ElRadio>
         </ElRadioGroup>
 
         <div class="opts">
-          <ElCheckbox v-model="form.dropIfExists">如果目标中存在则删除</ElCheckbox>
-          <ElCheckbox v-model="form.bulkInsert">使用大容量插入（多值 INSERT）</ElCheckbox>
+          <ElCheckbox v-model="form.dropIfExists">{{ $tr('如果目标中存在则删除') }}</ElCheckbox>
+          <ElCheckbox v-model="form.bulkInsert">{{ $tr('使用大容量插入（多值 INSERT）') }}</ElCheckbox>
           <ElCheckbox v-if="showIgnoreDefiner" v-model="form.ignoreDefiner">
-            忽略 DEFINER
+            {{ $tr('忽略 DEFINER') }}
           </ElCheckbox>
-          <ElCheckbox v-model="form.limitRows">限制每表导出行数</ElCheckbox>
+          <ElCheckbox v-model="form.limitRows">{{ $tr('限制每表导出行数') }}</ElCheckbox>
           <div v-if="form.limitRows" class="max-rows">
-            <span class="label">上限</span>
+            <span class="label">{{ $tr('上限') }}</span>
             <ElInputNumber v-model="form.maxRows" :min="1" :max="10000000" :step="10000" />
           </div>
         </div>
 
         <div class="hint">
-          默认复制全表数据。勾选「限制每表导出行数」时，超出部分会截断并把任务标为部分成功。
-          异库类型按统一标准映射建表（含主键、唯一/普通索引、自增、安全默认值）。
+          {{ $tr('默认复制全表数据。勾选「限制每表导出行数」时，超出部分会截断并把任务标为部分成功。 异库类型按统一标准映射建表（含主键、唯一/普通索引、自增、安全默认值）。') }}
         </div>
       </div>
     </div>
 
     <template #footer>
-      <ElButton :loading="submitting" type="primary" @click="onCopy">复制</ElButton>
-      <ElButton @click="visible = false">关闭</ElButton>
+      <ElButton :loading="submitting" type="primary" @click="onCopy">{{ $tr('复制') }}</ElButton>
+      <ElButton @click="visible = false">{{ $tr('关闭') }}</ElButton>
     </template>
   </ElDialog>
 </template>

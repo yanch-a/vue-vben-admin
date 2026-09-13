@@ -194,13 +194,13 @@
     <el-page-header :content="pageTitle" @back="goBack">
       <template #extra>
         <div class="flex items-center">
-          <el-button class="ml-2" type="primary" @click="save">保存</el-button>
+          <el-button class="ml-2" type="primary" @click="save">{{ $tr('保存') }}</el-button>
         </div>
       </template>
     </el-page-header>
     <el-tabs v-model="activeName" class="demo-tabs">
       <el-form ref="elForm" inline label-width="120px" :model="form" :rules="rules" size="large">
-        <el-tab-pane label="基本信息" name="base">
+        <el-tab-pane :label="$tr('基本信息')" name="base">
           <el-row :gutter="20">
             <el-col :lg="16" :md="8" :sm="24" :xl="16" :xs="24">
               <el-card class="box-card">
@@ -208,23 +208,23 @@
                   <template v-for="item in baseProps" :key="item.id">
                     <el-col v-if="item.field === 'title'" :span="24">
                       <el-form-item :label="item.fieldName" prop="title">
-                        <el-input v-model="form.title" maxlength="200" placeholder="请输入标题" />
+                        <el-input v-model="form.title" maxlength="200" :placeholder="$tr('请输入标题')" />
                       </el-form-item>
                     </el-col>
                     <el-col v-if="item.field === 'link'" :span="24">
                       <el-form-item :label="item.fieldName" prop="link">
                         <template #label>
-                          <el-tooltip content="请以http 或 https开头" placement="top">
+                          <el-tooltip :content="$tr('请以http 或 https开头')" placement="top">
                             <el-icon style="height: 100%;"><InfoFilled /></el-icon>
                           </el-tooltip>
-                          外部链接
+                          {{ $tr('外部链接') }}
                         </template>
-                        <el-input v-model="form.link" maxlength="150" placeholder="请输入外部链接" />
+                        <el-input v-model="form.link" maxlength="150" :placeholder="$tr('请输入外部链接')" />
                       </el-form-item>
                     </el-col>
                     <el-col v-if="item.field === 'description'" :span="24">
                       <el-form-item :label="item.fieldName" prop="description">
-                        <el-input v-model="form.description" type="textarea" :maxlength="1000" placeholder="请输入描述" :autosize="{minRows: 4, maxRows: 4}" />
+                        <el-input v-model="form.description" type="textarea" :maxlength="1000" :placeholder="$tr('请输入描述')" :autosize="{minRows: 4, maxRows: 4}" />
                       </el-form-item>
                     </el-col>
                     <el-col v-if="item.field === 'contentImg'" :span="24">

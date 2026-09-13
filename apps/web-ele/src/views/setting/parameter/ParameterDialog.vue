@@ -85,29 +85,29 @@
     <el-form ref="elForm" label-width="160px" :model="form" :rules="rules" size="large">
       <el-row>
         <el-col :span="12">
-          <el-form-item label="标题" prop="title">
-            <el-input v-model="form.title" maxlength="50" placeholder="请输入单行文本标题" />
+          <el-form-item :label="$tr('标题')" prop="title">
+            <el-input v-model="form.title" maxlength="50" :placeholder="$tr('请输入单行文本标题')" />
           </el-form-item>
         </el-col>
         <el-col :span="12">
-          <el-form-item label="编码" prop="code">
-            <el-input v-model="form.code" maxlength="30" placeholder="请输入编码" />
+          <el-form-item :label="$tr('编码')" prop="code">
+            <el-input v-model="form.code" maxlength="30" :placeholder="$tr('请输入编码')" />
           </el-form-item>
         </el-col>
         <el-col :span="24">
-          <el-form-item label="值1" prop="value1">
-            <el-input v-model="form.value1" maxlength="200" placeholder="请输入值1" />
+          <el-form-item :label="$tr('值1')" prop="value1">
+            <el-input v-model="form.value1" maxlength="200" :placeholder="$tr('请输入值1')" />
           </el-form-item>
         </el-col>
         <el-col :span="24">
-          <el-form-item label="值2" prop="value2">
-            <el-input v-model="form.value2" maxlength="200" placeholder="请输入值2" />
+          <el-form-item :label="$tr('值2')" prop="value2">
+            <el-input v-model="form.value2" maxlength="200" :placeholder="$tr('请输入值2')" />
           </el-form-item>
         </el-col>
         <el-col :span="24">
-          <el-form-item label="多行文本" prop="remark">
+          <el-form-item :label="$tr('多行文本')" prop="remark">
             <el-input
-v-model="form.remark" type="textarea" :maxlength="500" placeholder="请输入描述"
+v-model="form.remark" type="textarea" :maxlength="500" :placeholder="$tr('请输入描述')"
                       :autosize="{minRows: 4, maxRows: 4}"
 />
           </el-form-item>
@@ -115,8 +115,8 @@ v-model="form.remark" type="textarea" :maxlength="500" placeholder="请输入描
 </el-row>
     </el-form>
     <template #footer>
-      <el-button @click="close">取 消</el-button>
-      <el-button type="primary" @click="save">确 定</el-button>
+      <el-button @click="close">{{ $tr('取 消') }}</el-button>
+      <el-button type="primary" @click="save">{{ $tr('确 定') }}</el-button>
     </template>
   </el-dialog>
 </template>

@@ -61,7 +61,7 @@ async function copySql() {
 
 <template>
   <div class="ai-cfg-card">
-    <div class="title">查询视图配置</div>
+    <div class="title">{{ $tr('查询视图配置') }}</div>
     <p v-if="summary" class="sum">{{ summary }}</p>
     <p v-if="config.explanation" class="exp">{{ config.explanation }}</p>
     <ul v-if="config.warnings?.length" class="warn">
@@ -69,9 +69,9 @@ async function copySql() {
     </ul>
     <pre v-if="previewSql" class="sql">{{ previewSql }}</pre>
     <div class="btns">
-      <ElButton size="small" type="primary" @click="onApply">应用到界面</ElButton>
-      <ElButton size="small" :disabled="!previewSql" @click="onOpenSql">用 SQL 打开编辑器</ElButton>
-      <ElButton size="small" :disabled="!previewSql" @click="copySql">复制 SQL</ElButton>
+      <ElButton size="small" type="primary" @click="onApply">{{ $tr('应用到界面') }}</ElButton>
+      <ElButton size="small" :disabled="!previewSql" @click="onOpenSql">{{ $tr('用 SQL 打开编辑器') }}</ElButton>
+      <ElButton size="small" :disabled="!previewSql" @click="copySql">{{ $tr('复制 SQL') }}</ElButton>
     </div>
   </div>
 </template>

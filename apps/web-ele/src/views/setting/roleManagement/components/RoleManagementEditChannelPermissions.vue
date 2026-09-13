@@ -137,7 +137,7 @@
       </div>
     </el-form>
     <template #footer>
-      <el-button type="primary" @click="close">关 闭</el-button>
+      <el-button type="primary" @click="close">{{ $tr('关 闭') }}</el-button>
     </template>
   </el-dialog>
 </template>

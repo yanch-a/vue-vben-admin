@@ -138,25 +138,25 @@ watch(visible, (v) => {
       />
 
       <div class="row">
-        <span class="label">机器码</span>
+        <span class="label">{{ $tr('机器码') }}</span>
         <code class="mid">{{ status?.machineId || '-' }}</code>
-        <ElButton link type="primary" @click="copyMachineId">复制</ElButton>
+        <ElButton link type="primary" @click="copyMachineId">{{ $tr('复制') }}</ElButton>
       </div>
       <p class="hint">
-        试用期无需机器码。购买绑机授权时，把机器码发给厂商即可；也可申请不绑机 License。
+        {{ $tr('试用期无需机器码。购买绑机授权时，把机器码发给厂商即可；也可申请不绑机 License。') }}
       </p>
 
       <ElInput
         v-model="content"
         type="textarea"
         :rows="8"
-        placeholder="粘贴厂商提供的 License JSON（.lic 文件内容）"
+        :placeholder="$tr('粘贴厂商提供的 License JSON（.lic 文件内容）')"
       />
     </div>
     <template #footer>
-      <ElButton v-if="!force && !needLicense" @click="visible = false">关闭</ElButton>
-      <ElButton :loading="loading" @click="refresh">刷新状态</ElButton>
-      <ElButton type="primary" :loading="saving" @click="onInstall">导入并激活</ElButton>
+      <ElButton v-if="!force && !needLicense" @click="visible = false">{{ $tr('关闭') }}</ElButton>
+      <ElButton :loading="loading" @click="refresh">{{ $tr('刷新状态') }}</ElButton>
+      <ElButton type="primary" :loading="saving" @click="onInstall">{{ $tr('导入并激活') }}</ElButton>
     </template>
   </ElDialog>
 </template>

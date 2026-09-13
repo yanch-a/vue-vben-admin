@@ -214,44 +214,44 @@
       v-show="showSearch"
       label-width="100px"
     >
-      <el-form-item label="等级名称" prop="levelName">
+      <el-form-item :label="$tr('等级名称')" prop="levelName">
         <el-input
           v-model="queryParams.levelName"
-          placeholder="请输入等级名称"
+          :placeholder="$tr('请输入等级名称')"
           clearable
           @keyup.enter="handleQuery"
         />
       </el-form-item>
-      <el-form-item label="等级编码" prop="levelCode">
+      <el-form-item :label="$tr('等级编码')" prop="levelCode">
         <el-input
           v-model="queryParams.levelCode"
-          placeholder="请输入等级编码"
+          :placeholder="$tr('请输入等级编码')"
           clearable
           @keyup.enter="handleQuery"
         />
       </el-form-item>
-      <el-form-item label="状态" prop="dataStatus">
+      <el-form-item :label="$tr('状态')" prop="dataStatus">
         <el-select
           v-model="queryParams.dataStatus"
-          placeholder="会员等级状态"
+          :placeholder="$tr('会员等级状态')"
           clearable
         >
-          <el-option label="正常" value="1" />
-          <el-option label="停用" value="0" />
+          <el-option :label="$tr('正常')" value="1" />
+          <el-option :label="$tr('停用')" value="0" />
         </el-select>
       </el-form-item>
       <el-form-item>
         <el-button type="primary" :icon="Search" @click="handleQuery">
-          搜索
+          {{ $tr('搜索') }}
         </el-button>
-        <el-button :icon="Refresh" @click="resetQuery">重置</el-button>
+        <el-button :icon="Refresh" @click="resetQuery">{{ $tr('重置') }}</el-button>
       </el-form-item>
     </el-form>
 
     <el-row :gutter="10" class="mb8">
       <el-col :span="1.5">
         <el-button type="primary" plain :icon="Plus" @click="handleAdd">
-          新增
+          {{ $tr('新增') }}
         </el-button>
       </el-col>
       <el-col :span="1.5">
@@ -262,7 +262,7 @@
           :disabled="single"
           @click="handleUpdate"
         >
-          修改
+          {{ $tr('修改') }}
         </el-button>
       </el-col>
       <el-col :span="1.5">
@@ -273,7 +273,7 @@
           :disabled="multiple"
           @click="handleDelete"
         >
-          删除
+          {{ $tr('删除') }}
         </el-button>
       </el-col>
     </el-row>
@@ -284,27 +284,27 @@
       @selection-change="handleSelectionChange"
     >
       <el-table-column type="selection" width="55" align="center" />
-      <el-table-column label="等级ID" align="center" prop="id" width="80" />
+      <el-table-column :label="$tr('等级ID')" align="center" prop="id" width="80" />
       <el-table-column
-        label="等级权重"
+        :label="$tr('等级权重')"
         align="center"
         prop="level"
         width="100"
       />
       <el-table-column
-        label="等级名称"
+        :label="$tr('等级名称')"
         align="center"
         prop="levelName"
         width="120"
       />
       <el-table-column
-        label="等级编码"
+        :label="$tr('等级编码')"
         align="center"
         prop="levelCode"
         width="120"
       />
-      <el-table-column label="排序" align="center" prop="orderNum" width="80" />
-      <el-table-column label="积分区间" align="center" width="150">
+      <el-table-column :label="$tr('排序')" align="center" prop="orderNum" width="80" />
+      <el-table-column :label="$tr('积分区间')" align="center" width="150">
         <template #default="scope">
           <span>
             {{ scope.row.minIntegral || 0 }}-{{ scope.row.maxIntegral || '∞' }}
@@ -312,7 +312,7 @@
         </template>
       </el-table-column>
       <el-table-column
-        label="月费价格"
+        :label="$tr('月费价格')"
         align="center"
         prop="monthPrice"
         width="120"
@@ -322,7 +322,7 @@
         </template>
       </el-table-column>
       <el-table-column
-        label="季费价格"
+        :label="$tr('季费价格')"
         align="center"
         prop="quarterPrice"
         width="120"
@@ -332,7 +332,7 @@
         </template>
       </el-table-column>
       <el-table-column
-        label="年费价格"
+        :label="$tr('年费价格')"
         align="center"
         prop="yearPrice"
         width="120"
@@ -342,7 +342,7 @@
         </template>
       </el-table-column>
       <el-table-column
-        label="折扣显示"
+        :label="$tr('折扣显示')"
         align="center"
         prop="discountDisplay"
         width="100"
@@ -351,20 +351,20 @@
           <span
             v-if="scope.row.discountDisplay && scope.row.discountDisplay < 1"
           >
-            {{ (scope.row.discountDisplay * 10).toFixed(1) }}折
+            {{ (scope.row.discountDisplay * 10).toFixed(1) }}{{ $tr('折') }}
           </span>
-          <span v-else>无折扣</span>
+          <span v-else>{{ $tr('无折扣') }}</span>
         </template>
       </el-table-column>
-      <el-table-column label="状态" align="center" prop="dataStatus" width="80">
+      <el-table-column :label="$tr('状态')" align="center" prop="dataStatus" width="80">
         <template #default="scope">
           <el-tag :type="scope.row.dataStatus === 1 ? 'success' : 'danger'">
-            {{ scope.row.dataStatus === 1 ? '正常' : '停用' }}
+            {{ $tr(scope.row.dataStatus === 1 ? '正常' : '停用') }}
           </el-tag>
         </template>
       </el-table-column>
       <el-table-column
-        label="创建时间"
+        :label="$tr('创建时间')"
         align="center"
         prop="createTime"
         width="180"
@@ -376,7 +376,7 @@
         </template>
       </el-table-column>
       <el-table-column
-        label="操作"
+        :label="$tr('操作')"
         align="center"
         class-name="small-padding fixed-width"
         width="180"
@@ -389,7 +389,7 @@
             :icon="EditIcon"
             @click="handleUpdate(scope.row)"
           >
-            修改
+            {{ $tr('修改') }}
           </el-button>
           <el-button
             link
@@ -397,7 +397,7 @@
             :icon="Delete"
             @click="handleDelete(scope.row)"
           >
-            删除
+            {{ $tr('删除') }}
           </el-button>
         </template>
       </el-table-column>
@@ -424,17 +424,17 @@
       >
         <el-row>
           <el-col :span="8">
-            <el-form-item label="等级名称" prop="levelName">
-              <el-input v-model="form.levelName" placeholder="请输入等级名称" />
+            <el-form-item :label="$tr('等级名称')" prop="levelName">
+              <el-input v-model="form.levelName" :placeholder="$tr('请输入等级名称')" />
             </el-form-item>
           </el-col>
           <el-col :span="8">
-            <el-form-item label="等级编码" prop="levelCode">
-              <el-input v-model="form.levelCode" placeholder="请输入等级编码" />
+            <el-form-item :label="$tr('等级编码')" prop="levelCode">
+              <el-input v-model="form.levelCode" :placeholder="$tr('请输入等级编码')" />
             </el-form-item>
           </el-col>
           <el-col :span="8">
-            <el-form-item label="等级权重" prop="level">
+            <el-form-item :label="$tr('等级权重')" prop="level">
               <el-input-number
                 v-model="form.level"
                 :min="1"
@@ -445,7 +445,7 @@
         </el-row>
         <el-row>
           <el-col :span="8">
-            <el-form-item label="排序" prop="orderNum">
+            <el-form-item :label="$tr('排序')" prop="orderNum">
               <el-input-number
                 v-model="form.orderNum"
                 :min="0"
@@ -454,15 +454,15 @@
             </el-form-item>
           </el-col>
           <el-col :span="8">
-            <el-form-item label="状态" prop="dataStatus">
+            <el-form-item :label="$tr('状态')" prop="dataStatus">
               <el-radio-group v-model="form.dataStatus">
-                <el-radio :label="1">正常</el-radio>
-                <el-radio :label="0">停用</el-radio>
+                <el-radio :label="1">{{ $tr('正常') }}</el-radio>
+                <el-radio :label="0">{{ $tr('停用') }}</el-radio>
               </el-radio-group>
             </el-form-item>
           </el-col>
           <el-col :span="8">
-            <el-form-item label="等级权益" prop="discount">
+            <el-form-item :label="$tr('等级权益')" prop="discount">
               <el-input-number
                 v-model="form.discount"
                 :precision="2"
@@ -476,7 +476,7 @@
         </el-row>
         <el-row>
           <el-col :span="8">
-            <el-form-item label="最小积分" prop="minIntegral">
+            <el-form-item :label="$tr('最小积分')" prop="minIntegral">
               <el-input-number
                 v-model="form.minIntegral"
                 :min="0"
@@ -485,7 +485,7 @@
             </el-form-item>
           </el-col>
           <el-col :span="8">
-            <el-form-item label="最大积分" prop="maxIntegral">
+            <el-form-item :label="$tr('最大积分')" prop="maxIntegral">
               <el-input-number
                 v-model="form.maxIntegral"
                 :min="0"
@@ -496,7 +496,7 @@
         </el-row>
         <el-row>
           <el-col :span="8">
-            <el-form-item label="月费价格" prop="monthPrice">
+            <el-form-item :label="$tr('月费价格')" prop="monthPrice">
               <el-input-number
                 v-model="form.monthPrice"
                 :precision="2"
@@ -506,7 +506,7 @@
             </el-form-item>
           </el-col>
           <el-col :span="8">
-            <el-form-item label="季费价格" prop="quarterPrice">
+            <el-form-item :label="$tr('季费价格')" prop="quarterPrice">
               <el-input-number
                 v-model="form.quarterPrice"
                 :precision="2"
@@ -516,7 +516,7 @@
             </el-form-item>
           </el-col>
           <el-col :span="8">
-            <el-form-item label="半年费价格" prop="halfYearPrice">
+            <el-form-item :label="$tr('半年费价格')" prop="halfYearPrice">
               <el-input-number
                 v-model="form.halfYearPrice"
                 :precision="2"
@@ -527,7 +527,7 @@
             </el-form-item>
           </el-col>
           <el-col :span="8">
-            <el-form-item label="年费价格" prop="yearPrice">
+            <el-form-item :label="$tr('年费价格')" prop="yearPrice">
               <el-input-number
                 v-model="form.yearPrice"
                 :precision="2"
@@ -539,41 +539,41 @@
         </el-row>
         <el-row>
           <el-col :span="8">
-            <el-form-item label="月费次数" prop="monthApiQuota">
+            <el-form-item :label="$tr('月费次数')" prop="monthApiQuota">
               <el-input-number
                 v-model="form.monthApiQuota"
                 :min="-1"
-                placeholder="-1表示无限"
+                :placeholder="$tr('-1表示无限')"
                 style="width: 100%"
               />
             </el-form-item>
           </el-col>
           <el-col :span="8">
-            <el-form-item label="季费次数" prop="quarterApiQuota">
+            <el-form-item :label="$tr('季费次数')" prop="quarterApiQuota">
               <el-input-number
                 v-model="form.quarterApiQuota"
                 :min="-1"
-                placeholder="-1表示无限"
+                :placeholder="$tr('-1表示无限')"
                 style="width: 100%"
               />
             </el-form-item>
           </el-col>
           <el-col :span="8">
-            <el-form-item label="半年费次数" prop="halfYearApiQuota">
+            <el-form-item :label="$tr('半年费次数')" prop="halfYearApiQuota">
               <el-input-number
                 v-model="form.halfYearApiQuota"
                 :min="-1"
-                placeholder="-1表示无限"
+                :placeholder="$tr('-1表示无限')"
                 style="width: 100%"
               />
             </el-form-item>
           </el-col>
           <el-col :span="8">
-            <el-form-item label="年费次数" prop="yearApiQuota">
+            <el-form-item :label="$tr('年费次数')" prop="yearApiQuota">
               <el-input-number
                 v-model="form.yearApiQuota"
                 :min="-1"
-                placeholder="-1表示无限"
+                :placeholder="$tr('-1表示无限')"
                 style="width: 100%"
               />
             </el-form-item>
@@ -581,41 +581,41 @@
         </el-row>
         <el-row>
           <el-col :span="8">
-            <el-form-item label="月费对话额度" prop="monthChatQuota">
+            <el-form-item :label="$tr('月费对话额度')" prop="monthChatQuota">
               <el-input-number
                 v-model="form.monthChatQuota"
                 :min="-1"
-                placeholder="-1表示无限"
+                :placeholder="$tr('-1表示无限')"
                 style="width: 100%"
               />
             </el-form-item>
           </el-col>
           <el-col :span="8">
-            <el-form-item label="季费对话额度" prop="quarterChatQuota">
+            <el-form-item :label="$tr('季费对话额度')" prop="quarterChatQuota">
               <el-input-number
                 v-model="form.quarterChatQuota"
                 :min="-1"
-                placeholder="-1表示无限"
+                :placeholder="$tr('-1表示无限')"
                 style="width: 100%"
               />
             </el-form-item>
           </el-col>
           <el-col :span="8">
-            <el-form-item label="半年费对话额度" prop="halfYearChatQuota">
+            <el-form-item :label="$tr('半年费对话额度')" prop="halfYearChatQuota">
               <el-input-number
                 v-model="form.halfYearChatQuota"
                 :min="-1"
-                placeholder="-1表示无限"
+                :placeholder="$tr('-1表示无限')"
                 style="width: 100%"
               />
             </el-form-item>
           </el-col>
           <el-col :span="8">
-            <el-form-item label="年费对话额度" prop="yearChatQuota">
+            <el-form-item :label="$tr('年费对话额度')" prop="yearChatQuota">
               <el-input-number
                 v-model="form.yearChatQuota"
                 :min="-1"
-                placeholder="-1表示无限"
+                :placeholder="$tr('-1表示无限')"
                 style="width: 100%"
               />
             </el-form-item>
@@ -623,45 +623,45 @@
         </el-row>
         <el-row>
           <el-col :span="8">
-            <el-form-item label="折扣显示" prop="discountDisplay">
+            <el-form-item :label="$tr('折扣显示')" prop="discountDisplay">
               <el-input-number
                 v-model="form.discountDisplay"
                 :precision="2"
                 :min="0"
                 :max="1"
                 :step="0.1"
-                placeholder="1为不显示,0.9为9折"
+                :placeholder="$tr('1为不显示,0.9为9折')"
                 style="width: 100%"
               />
             </el-form-item>
           </el-col>
         </el-row>
-        <el-form-item label="等级描述" prop="levelDesc">
+        <el-form-item :label="$tr('等级描述')" prop="levelDesc">
           <el-input
             v-model="form.levelDesc"
             type="textarea"
-            placeholder="请输入等级描述"
+            :placeholder="$tr('请输入等级描述')"
           />
         </el-form-item>
-        <el-form-item label="等级权限" prop="permissions">
+        <el-form-item :label="$tr('等级权限')" prop="permissions">
           <el-input
             v-model="form.permissions"
             type="textarea"
-            placeholder="请输入权限配置（JSON格式）"
+            :placeholder="$tr('请输入权限配置（JSON格式）')"
           />
         </el-form-item>
-        <el-form-item label="备注" prop="remark">
+        <el-form-item :label="$tr('备注')" prop="remark">
           <el-input
             v-model="form.remark"
             type="textarea"
-            placeholder="请输入内容"
+            :placeholder="$tr('请输入内容')"
           />
         </el-form-item>
       </el-form>
       <template #footer>
         <div class="dialog-footer">
-          <el-button @click="cancel">取 消</el-button>
-          <el-button type="primary" @click="submitForm">确 定</el-button>
+          <el-button @click="cancel">{{ $tr('取 消') }}</el-button>
+          <el-button type="primary" @click="submitForm">{{ $tr('确 定') }}</el-button>
         </div>
       </template>
     </el-dialog>

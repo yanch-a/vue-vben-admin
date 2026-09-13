@@ -239,25 +239,25 @@ function navTo(nav: WorkbenchProjectItem | WorkbenchQuickNavItem) {
       :avatar="userStore.userInfo?.avatar || preferences.app.defaultAvatar"
     >
       <template #title>
-        早安, {{ userStore.userInfo?.realName }}, 开始您一天的工作吧！
+        {{ $tr('早安,') }} {{ userStore.userInfo?.realName }}{{ $tr(', 开始您一天的工作吧！') }}
       </template>
-      <template #description> 今日晴，20℃ - 32℃！ </template>
+      <template #description> {{ $tr('今日晴，20℃ - 32℃！') }} </template>
     </WorkbenchHeader>
 
     <div class="mt-5 flex flex-col lg:flex-row">
       <div class="mr-4 w-full lg:w-3/5">
-        <WorkbenchProject :items="projectItems" title="项目" @click="navTo" />
-        <WorkbenchTrends :items="trendItems" class="mt-5" title="最新动态" />
+        <WorkbenchProject :items="projectItems" :title="$tr('项目')" @click="navTo" />
+        <WorkbenchTrends :items="trendItems" class="mt-5" :title="$tr('最新动态')" />
       </div>
       <div class="w-full lg:w-2/5">
         <WorkbenchQuickNav
           :items="quickNavItems"
           class="mt-5 lg:mt-0"
-          title="快捷导航"
+          :title="$tr('快捷导航')"
           @click="navTo"
         />
-        <WorkbenchTodo :items="todoItems" class="mt-5" title="待办事项" />
-        <AnalysisChartCard class="mt-5" title="访问来源">
+        <WorkbenchTodo :items="todoItems" class="mt-5" :title="$tr('待办事项')" />
+        <AnalysisChartCard class="mt-5" :title="$tr('访问来源')">
           <AnalyticsVisitsSource />
         </AnalysisChartCard>
       </div>

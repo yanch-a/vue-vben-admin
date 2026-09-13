@@ -121,7 +121,7 @@ onBeforeUnmount(() => {
       type="button"
       class="add"
       :disabled="tabs.length >= maxTabs"
-      title="新建查询"
+      :title="$tr('新建查询')"
       @click="emit('add')"
     >
       +
@@ -135,9 +135,9 @@ onBeforeUnmount(() => {
         @click.stop
         @contextmenu.prevent
       >
-        <div class="item" @click="onCloseCurrent">关闭当前</div>
-        <div class="item" @click="onCloseAll">关闭所有</div>
-        <div class="item" @click="onCloseOthers">关闭其他</div>
+        <div class="item" @click="onCloseCurrent">{{ $tr('关闭当前') }}</div>
+        <div class="item" @click="onCloseAll">{{ $tr('关闭所有') }}</div>
+        <div class="item" @click="onCloseOthers">{{ $tr('关闭其他') }}</div>
       </div>
     </Teleport>
   </div>

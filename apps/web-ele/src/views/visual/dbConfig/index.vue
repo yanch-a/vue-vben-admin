@@ -542,24 +542,24 @@
     <div class="db-config-toolbar">
       <div class="db-config-toolbar__left">
         <div class="db-config-title-row">
-          <h2 class="db-config-title">数据库连接</h2>
+          <h2 class="db-config-title">{{ $tr('数据库连接') }}</h2>
           <el-button
             v-permissions="{ permission: ['DbConfig:add'] }"
             type="primary"
             @click="handleAdd"
           >
             <el-icon class="el-icon--left"><Plus /></el-icon>
-            新增连接
+            {{ $tr('新增连接') }}
           </el-button>
         </div>
-        <p class="db-config-desc">以卡片管理各数据源，支持测试、授权与画布。</p>
+        <p class="db-config-desc">{{ $tr('以卡片管理各数据源，支持测试、授权与画布。') }}</p>
       </div>
       <div class="db-config-toolbar__right">
         <el-input
           v-model.trim="queryForm.dbName"
           clearable
           class="db-config-search"
-          placeholder="搜索数据库名称"
+          :placeholder="$tr('搜索数据库名称')"
           @keyup.enter="queryData"
         />
         <el-button
@@ -568,21 +568,21 @@
           @click="queryData"
         >
           <el-icon class="el-icon--left"><Search /></el-icon>
-          查询
+          {{ $tr('查询') }}
         </el-button>
       </div>
     </div>
 
     <div v-if="!loading && tableData.length === 0" class="db-config-empty">
-      <p>暂无数据库连接</p>
-      <p class="db-config-empty__hint">点击下方按钮或标题旁「新增连接」创建第一条连接。</p>
+      <p>{{ $tr('暂无数据库连接') }}</p>
+      <p class="db-config-empty__hint">{{ $tr('点击下方按钮或标题旁「新增连接」创建第一条连接。') }}</p>
       <el-button
         v-permissions="{ permission: ['DbConfig:add'] }"
         type="primary"
         @click="handleAdd"
       >
         <el-icon class="el-icon--left"><Plus /></el-icon>
-        新增连接
+        {{ $tr('新增连接') }}
       </el-button>
     </div>
 
@@ -595,7 +595,7 @@
         @click="handleAdd"
       >
         <span class="db-card-add__icon" aria-hidden="true">+</span>
-        <span class="db-card-add__text">新增连接</span>
+        <span class="db-card-add__text">{{ $tr('新增连接') }}</span>
       </button>
 
       <article
@@ -607,7 +607,7 @@
         <header class="db-card__header">
           <div class="db-card__title-row">
             <h3 class="db-card__name" :title="row.dbName">
-              {{ row.dbName || '未命名' }}
+              {{ $tr(row.dbName || '未命名') }}
             </h3>
             <span class="db-card__type">{{ typeLabel(row) }}</span>
           </div>
@@ -617,14 +617,14 @@
               :class="row.connectionStatus === 1 ? 'is-online' : 'is-offline'"
             >
               <i class="db-card__dot"></i>
-              {{ row.connectionStatus === 1 ? '在线' : '离线' }}
+              {{ $tr(row.connectionStatus === 1 ? '在线' : '离线') }}
             </span>
             <el-tag
               :type="row.isPublic === 1 ? 'success' : 'info'"
               size="small"
               effect="plain"
             >
-              {{ row.isPublic === 1 ? '公开' : '私有' }}
+              {{ $tr(row.isPublic === 1 ? '公开' : '私有') }}
             </el-tag>
             <el-tag v-if="row.sshEnabled === 1" size="small" type="warning" effect="plain">
               SSH
@@ -634,15 +634,15 @@
 
         <div class="db-card__body">
           <div class="db-card__meta" :title="hostText(row)">
-            <span class="db-card__label">主机</span>
+            <span class="db-card__label">{{ $tr('主机') }}</span>
             <span class="db-card__value">{{ hostText(row) }}</span>
           </div>
           <div v-if="row.schemaName" class="db-card__meta" :title="row.schemaName">
-            <span class="db-card__label">库名</span>
+            <span class="db-card__label">{{ $tr('库名') }}</span>
             <span class="db-card__value">{{ row.schemaName }}</span>
           </div>
           <div v-if="row.username" class="db-card__meta" :title="row.username">
-            <span class="db-card__label">用户</span>
+            <span class="db-card__label">{{ $tr('用户') }}</span>
             <span class="db-card__value">{{ row.username }}</span>
           </div>
           <p
@@ -653,7 +653,7 @@
             {{ row.description }}
           </p>
           <p v-if="row.lastCheckTime" class="db-card__time">
-            最近检查 {{ row.lastCheckTime }}
+            {{ $tr('最近检查') }} {{ row.lastCheckTime }}
           </p>
         </div>
 
@@ -663,7 +663,7 @@
             type="primary"
             @click="handleOpenClient(row)"
           >
-            打开
+            {{ $tr('打开') }}
           </el-button>
           <el-button
             v-permissions="{ permission: ['DataBaseOperate:test'] }"
@@ -671,7 +671,7 @@
             type="primary"
             @click="testConnectionMethod(row)"
           >
-            测试
+            {{ $tr('测试') }}
           </el-button>
           <el-button
             v-permissions="{ permission: ['DbConfig:update'] }"
@@ -679,7 +679,7 @@
             type="primary"
             @click="handleEdit(row)"
           >
-            编辑
+            {{ $tr('编辑') }}
           </el-button>
           <el-button
             v-permissions="{ permission: ['DbConfigUser:update'] }"
@@ -687,11 +687,11 @@
             type="primary"
             @click="openAuthDialog(row)"
           >
-            权限
+            {{ $tr('权限') }}
           </el-button>
           <el-dropdown trigger="click">
             <el-button link type="primary">
-              更多
+              {{ $tr('更多') }}
             </el-button>
             <template #dropdown>
               <el-dropdown-menu>
@@ -699,20 +699,20 @@
                   v-permissions="{ permission: ['TableGroup:list'] }"
                   @click="handleCanvas(row)"
                 >
-                  表分组
+                  {{ $tr('表分组') }}
                 </el-dropdown-item>
                 <el-dropdown-item
                   v-permissions="{ permission: ['TableRelationship:info'] }"
                   @click="handleRelationCanvas(row)"
                 >
-                  关系画布
+                  {{ $tr('关系画布') }}
                 </el-dropdown-item>
                 <el-dropdown-item
                   v-permissions="{ permission: ['DbConfig:delete'] }"
                   divided
                   @click="handleDelete(row)"
                 >
-                  <span class="db-card__danger">删除</span>
+                  <span class="db-card__danger">{{ $tr('删除') }}</span>
                 </el-dropdown-item>
               </el-dropdown-menu>
             </template>
@@ -741,17 +741,17 @@
       destroy-on-close
     >
       <el-form ref="formRef" :model="form" :rules="rules" label-width="150px">
-        <el-form-item label="数据库中文名称" prop="dbName">
-          <el-input v-model="form.dbName" placeholder="请输入数据库中文名称" />
+        <el-form-item :label="$tr('数据库中文名称')" prop="dbName">
+          <el-input v-model="form.dbName" :placeholder="$tr('请输入数据库中文名称')" />
         </el-form-item>
-        <el-form-item label="默认数据库" prop="schemaName">
+        <el-form-item :label="$tr('默认数据库')" prop="schemaName">
           <el-input
             v-model="form.schemaName"
-            placeholder="可选，如 MySQL 库名 / PG database；留空则连服务器后自选"
+            :placeholder="$tr('可选，如 MySQL 库名 / PG database；留空则连服务器后自选')"
           />
         </el-form-item>
-        <el-form-item label="数据库类型" prop="dbType">
-          <el-select v-model="form.dbType" placeholder="请选择数据库类型">
+        <el-form-item :label="$tr('数据库类型')" prop="dbType">
+          <el-select v-model="form.dbType" :placeholder="$tr('请选择数据库类型')">
             <el-option
               v-for="item in dataBaseType"
               :key="item.code"
@@ -760,19 +760,19 @@
             />
           </el-select>
         </el-form-item>
-        <el-form-item label="主机地址" prop="dbHost">
-          <el-input v-model="form.dbHost" placeholder="请输入主机地址" />
+        <el-form-item :label="$tr('主机地址')" prop="dbHost">
+          <el-input v-model="form.dbHost" :placeholder="$tr('请输入主机地址')" />
         </el-form-item>
-        <el-form-item label="端口" prop="dbPort">
+        <el-form-item :label="$tr('端口')" prop="dbPort">
           <el-input-number v-model="form.dbPort" :min="1" :max="65535" />
         </el-form-item>
-        <el-form-item label="连接URL" prop="jdbcUrl">
-          <el-input v-model="form.jdbcUrl" placeholder="请输入JDBC连接URL" />
+        <el-form-item :label="$tr('连接URL')" prop="jdbcUrl">
+          <el-input v-model="form.jdbcUrl" :placeholder="$tr('请输入JDBC连接URL')" />
         </el-form-item>
-        <el-form-item label="用户名" prop="username">
-          <el-input v-model="form.username" placeholder="请输入用户名" />
+        <el-form-item :label="$tr('用户名')" prop="username">
+          <el-input v-model="form.username" :placeholder="$tr('请输入用户名')" />
         </el-form-item>
-        <el-form-item label="密码" prop="password">
+        <el-form-item :label="$tr('密码')" prop="password">
           <el-input
             v-model="form.password"
             type="password"
@@ -780,8 +780,8 @@
             show-password
           />
         </el-form-item>
-        <el-divider content-position="left">SSH 隧道（可选）</el-divider>
-        <el-form-item label="启用 SSH">
+        <el-divider content-position="left">{{ $tr('SSH 隧道（可选）') }}</el-divider>
+        <el-form-item :label="$tr('启用 SSH')">
           <el-switch
             v-model="form.sshEnabled"
             :active-value="1"
@@ -789,22 +789,22 @@
           />
         </el-form-item>
         <template v-if="form.sshEnabled === 1">
-          <el-form-item label="SSH 主机">
-            <el-input v-model="form.sshHost" placeholder="跳板机地址" />
+          <el-form-item :label="$tr('SSH 主机')">
+            <el-input v-model="form.sshHost" :placeholder="$tr('跳板机地址')" />
           </el-form-item>
-          <el-form-item label="SSH 端口">
+          <el-form-item :label="$tr('SSH 端口')">
             <el-input-number v-model="form.sshPort" :min="1" :max="65535" />
           </el-form-item>
-          <el-form-item label="SSH 用户">
+          <el-form-item :label="$tr('SSH 用户')">
             <el-input v-model="form.sshUsername" />
           </el-form-item>
-          <el-form-item label="SSH 认证">
+          <el-form-item :label="$tr('SSH 认证')">
             <el-radio-group v-model="sshAuthMode">
-              <el-radio value="password">密码</el-radio>
-              <el-radio value="key">私钥</el-radio>
+              <el-radio value="password">{{ $tr('密码') }}</el-radio>
+              <el-radio value="key">{{ $tr('私钥') }}</el-radio>
             </el-radio-group>
           </el-form-item>
-          <el-form-item v-if="sshAuthMode === 'password'" label="SSH 密码">
+          <el-form-item v-if="sshAuthMode === 'password'" :label="$tr('SSH 密码')">
             <el-input
               v-model="form.sshPassword"
               type="password"
@@ -813,51 +813,51 @@
             />
           </el-form-item>
           <template v-else>
-            <el-form-item label="SSH 私钥">
+            <el-form-item :label="$tr('SSH 私钥')">
               <el-input
                 v-model="form.sshPrivateKey"
                 type="textarea"
                 :rows="4"
-                placeholder="PEM 私钥；留空则不修改"
+                :placeholder="$tr('PEM 私钥；留空则不修改')"
               />
             </el-form-item>
-            <el-form-item label="私钥口令">
+            <el-form-item :label="$tr('私钥口令')">
               <el-input
                 v-model="form.sshPassphrase"
                 type="password"
                 show-password
-                placeholder="可选"
+                :placeholder="$tr('可选')"
               />
             </el-form-item>
           </template>
         </template>
-        <el-form-item label="是否公开">
+        <el-form-item :label="$tr('是否公开')">
           <el-switch
             v-model="form.isPublic"
             :active-value="1"
             :inactive-value="0"
-            active-text="公开库"
-            inactive-text="私有库"
+            :active-text="$tr('公开库')"
+            :inactive-text="$tr('私有库')"
           />
           <div style="font-size: 12px; color: var(--el-text-color-secondary)">
-            公开：登录用户可使用（默认不可改画布）；私有：仅所有者/管理员与授权用户
+            {{ $tr('公开：登录用户可使用（默认不可改画布）；私有：仅所有者/管理员与授权用户') }}
           </div>
         </el-form-item>
-        <el-form-item label="描述" prop="description">
+        <el-form-item :label="$tr('描述')" prop="description">
           <el-input
             v-model="form.description"
             type="textarea"
             :rows="3"
-            placeholder="请输入描述"
+            :placeholder="$tr('请输入描述')"
           />
         </el-form-item>
-        <el-form-item label="排序" prop="orderNum">
+        <el-form-item :label="$tr('排序')" prop="orderNum">
           <el-input-number v-model="form.orderNum" :min="0" :max="9999" />
         </el-form-item>
       </el-form>
       <template #footer>
-        <el-button @click="dialogVisible = false">取消</el-button>
-        <el-button type="primary" @click="handleSubmit">确定</el-button>
+        <el-button @click="dialogVisible = false">{{ $tr('取消') }}</el-button>
+        <el-button type="primary" @click="handleSubmit">{{ $tr('确定') }}</el-button>
       </template>
     </el-dialog>
 
@@ -870,18 +870,18 @@
     >
       <div class="auth-layout">
         <div class="auth-left">
-          <div class="auth-section-title">查找用户</div>
+          <div class="auth-section-title">{{ $tr('查找用户') }}</div>
           <div class="auth-user-tools">
             <el-input
               v-model="searchKeyword"
-              placeholder="用户名 / 姓名 / 手机号"
+              :placeholder="$tr('用户名 / 姓名 / 手机号')"
               clearable
               @clear="searchUsers"
               @keyup.enter="searchUsers"
             />
             <el-select
               v-model="selectedGroupId"
-              placeholder="全部部门"
+              :placeholder="$tr('全部部门')"
               filterable
               clearable
               @change="onSelectGroup"
@@ -894,7 +894,7 @@
               />
             </el-select>
             <el-button type="primary" :icon="Search" :loading="candidateLoading" @click="searchUsers">
-              搜索
+              {{ $tr('搜索') }}
             </el-button>
           </div>
           <el-table
@@ -903,11 +903,11 @@
             border
             size="small"
             height="330"
-            empty-text="输入条件搜索用户"
+            :empty-text="$tr('输入条件搜索用户')"
           >
-            <el-table-column prop="userName" label="用户名" min-width="90" />
-            <el-table-column prop="realName" label="姓名" min-width="80" />
-            <el-table-column label="操作" width="70" align="center">
+            <el-table-column prop="userName" :label="$tr('用户名')" min-width="90" />
+            <el-table-column prop="realName" :label="$tr('姓名')" min-width="80" />
+            <el-table-column :label="$tr('操作')" width="70" align="center">
               <template #default="{ row }">
                 <el-button
                   link
@@ -915,7 +915,7 @@
                   :disabled="isGranted(row)"
                   @click="addSingleUser(row)"
                 >
-                  {{ isGranted(row) ? '已加入' : '加入' }}
+                  {{ $tr(isGranted(row) ? '已加入' : '加入') }}
                 </el-button>
               </template>
             </el-table-column>
@@ -923,18 +923,18 @@
         </div>
         <div class="auth-right">
           <div class="auth-section-title">
-            已授权用户
-            <span class="auth-hint">可用=只读；写数据=增改删行；改结构=建删改表；建库仅所有者</span>
+            {{ $tr('已授权用户') }}
+            <span class="auth-hint">{{ $tr('可用=只读；写数据=增改删行；改结构=建删改表；建库仅所有者') }}</span>
           </div>
           <el-table :data="grants" border size="small" max-height="420">
-            <el-table-column prop="userName" label="用户名" min-width="100" />
-            <el-table-column prop="realName" label="姓名" min-width="90" />
-            <el-table-column label="可用" width="70" align="center">
+            <el-table-column prop="userName" :label="$tr('用户名')" min-width="100" />
+            <el-table-column prop="realName" :label="$tr('姓名')" min-width="90" />
+            <el-table-column :label="$tr('可用')" width="70" align="center">
               <template #default="{ row }">
                 <el-switch v-model="row.canUse" :active-value="1" :inactive-value="0" />
               </template>
             </el-table-column>
-            <el-table-column label="写数据" width="80" align="center">
+            <el-table-column :label="$tr('写数据')" width="80" align="center">
               <template #default="{ row }">
                 <el-switch
                   v-model="row.canWriteData"
@@ -944,7 +944,7 @@
                 />
               </template>
             </el-table-column>
-            <el-table-column label="改结构" width="80" align="center">
+            <el-table-column :label="$tr('改结构')" width="80" align="center">
               <template #default="{ row }">
                 <el-switch
                   v-model="row.canWriteSchema"
@@ -954,7 +954,7 @@
                 />
               </template>
             </el-table-column>
-            <el-table-column label="可改画布" width="90" align="center">
+            <el-table-column :label="$tr('可改画布')" width="90" align="center">
               <template #default="{ row }">
                 <el-switch
                   v-model="row.canEditCanvas"
@@ -964,10 +964,10 @@
                 />
               </template>
             </el-table-column>
-            <el-table-column label="操作" width="70" align="center">
+            <el-table-column :label="$tr('操作')" width="70" align="center">
               <template #default="{ row }">
                 <el-button link type="danger" @click="removeGrant(row.memberUserId)">
-                  移除
+                  {{ $tr('移除') }}
                 </el-button>
               </template>
             </el-table-column>
@@ -975,8 +975,8 @@
         </div>
       </div>
       <template #footer>
-        <el-button @click="authVisible = false">取消</el-button>
-        <el-button type="primary" :loading="authSaving" @click="saveAuth">保存授权</el-button>
+        <el-button @click="authVisible = false">{{ $tr('取消') }}</el-button>
+        <el-button type="primary" :loading="authSaving" @click="saveAuth">{{ $tr('保存授权') }}</el-button>
       </template>
     </el-dialog>
   </div>

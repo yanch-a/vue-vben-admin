@@ -16,27 +16,37 @@ import {
   listQueryResultOpLogs,
   syncQueryResultContent,
 } from '#/api/visual/queryResultFile';
+import { translateUiText } from '#/locales/ui-text';
 
 import { LocaleType, mergeLocales, Univer } from '@univerjs/core';
 import { FUniver } from '@univerjs/core/facade';
+import DesignEnUS from '@univerjs/design/locale/en-US';
 import DesignZhCN from '@univerjs/design/locale/zh-CN';
 import { UniverDocsPlugin } from '@univerjs/docs';
 import { UniverDocsUIPlugin } from '@univerjs/docs-ui';
+import DocsUIEnUS from '@univerjs/docs-ui/locale/en-US';
 import DocsUIZhCN from '@univerjs/docs-ui/locale/zh-CN';
 import { UniverFormulaEnginePlugin } from '@univerjs/engine-formula';
 import { UniverRenderEnginePlugin } from '@univerjs/engine-render';
 import { UniverSheetsPlugin } from '@univerjs/sheets';
 import { UniverSheetsFormulaPlugin } from '@univerjs/sheets-formula';
+import SheetsFormulaEnUS from '@univerjs/sheets-formula/locale/en-US';
+import SheetsFormulaZhCN from '@univerjs/sheets-formula/locale/zh-CN';
 import { UniverSheetsFormulaUIPlugin } from '@univerjs/sheets-formula-ui';
+import SheetsFormulaUIEnUS from '@univerjs/sheets-formula-ui/locale/en-US';
 import SheetsFormulaUIZhCN from '@univerjs/sheets-formula-ui/locale/zh-CN';
 import { UniverSheetsNumfmtPlugin } from '@univerjs/sheets-numfmt';
 import { UniverSheetsNumfmtUIPlugin } from '@univerjs/sheets-numfmt-ui';
+import SheetsNumfmtUIEnUS from '@univerjs/sheets-numfmt-ui/locale/en-US';
 import SheetsNumfmtUIZhCN from '@univerjs/sheets-numfmt-ui/locale/zh-CN';
 import { UniverSheetsUIPlugin } from '@univerjs/sheets-ui';
+import SheetsUIEnUS from '@univerjs/sheets-ui/locale/en-US';
 import SheetsUIZhCN from '@univerjs/sheets-ui/locale/zh-CN';
+import SheetsEnUS from '@univerjs/sheets/locale/en-US';
 import SheetsZhCN from '@univerjs/sheets/locale/zh-CN';
 import { UniverUIPlugin } from '@univerjs/ui';
 import { UniverVue3AdapterPlugin } from '@univerjs/ui-adapter-vue3';
+import UIEnUS from '@univerjs/ui/locale/en-US';
 import UIZhCN from '@univerjs/ui/locale/zh-CN';
 
 import '@univerjs/engine-formula/facade';
@@ -55,10 +65,10 @@ import '@univerjs/sheets-formula-ui/lib/index.css';
 import '@univerjs/sheets-numfmt-ui/lib/index.css';
 
 const route = useRoute();
-const { isDark } = usePreferences();
+const { isDark, locale } = usePreferences();
 const univerContainer = ref(null);
 const loading = ref(true);
-const title = ref('共享查询结果');
+const title = ref(translateUiText('共享查询结果'));
 const drawerVisible = ref(false);
 const opLogs = ref([]);
 const syncing = ref(false);
@@ -87,19 +97,35 @@ function initUniver() {
     /* ignore */
   }
 
-  univerInstance = new Univer({
-    darkMode: !!isDark.value,
-    locale: LocaleType.ZH_CN,
-    locales: {
-      [LocaleType.ZH_CN]: mergeLocales(
+  const useEnglish = locale.value === 'en-US';
+  const univerLocale = useEnglish ? LocaleType.EN_US : LocaleType.ZH_CN;
+  const univerMessages = useEnglish
+    ? mergeLocales(
+        DesignEnUS,
+        UIEnUS,
+        DocsUIEnUS,
+        SheetsEnUS,
+        SheetsUIEnUS,
+        SheetsFormulaEnUS,
+        SheetsFormulaUIEnUS,
+        SheetsNumfmtUIEnUS,
+      )
+    : mergeLocales(
         DesignZhCN,
         UIZhCN,
         DocsUIZhCN,
         SheetsZhCN,
         SheetsUIZhCN,
+        SheetsFormulaZhCN,
         SheetsFormulaUIZhCN,
         SheetsNumfmtUIZhCN,
-      ),
+      );
+
+  univerInstance = new Univer({
+    darkMode: !!isDark.value,
+    locale: univerLocale,
+    locales: {
+      [univerLocale]: univerMessages,
     },
   });
   univerInstance.registerPlugin(UniverRenderEnginePlugin);
@@ -115,7 +141,7 @@ function initUniver() {
   univerInstance.registerPlugin(UniverSheetsNumfmtPlugin);
   univerInstance.registerPlugin(UniverSheetsNumfmtUIPlugin);
   univerAPI = FUniver.newAPI(univerInstance);
-  univerAPI.createWorkbook({ name: '共享结果' });
+  univerAPI.createWorkbook({ name: translateUiText('共享结果') });
 }
 
 watch(isDark, (dark) => {
@@ -379,18 +405,18 @@ onBeforeUnmount(() => {
     <header class="share-header">
       <h1>{{ title }}</h1>
       <div class="actions">
-        <el-tag v-if="!canWrite" type="info" size="small">只读分享</el-tag>
-        <el-tag v-else type="success" size="small">可编辑</el-tag>
-        <el-tag v-if="syncing" type="warning" size="small">同步中…</el-tag>
+        <el-tag v-if="!canWrite" type="info" size="small">{{ $tr('只读分享') }}</el-tag>
+        <el-tag v-else type="success" size="small">{{ $tr('可编辑') }}</el-tag>
+        <el-tag v-if="syncing" type="warning" size="small">{{ $tr('同步中…') }}</el-tag>
         <el-button size="small" type="primary" :loading="exporting" @click="exportExcel">
-          导出 Excel
+          {{ $tr('导出 Excel') }}
         </el-button>
-        <el-button size="small" @click="openDrawer">操作记录</el-button>
+        <el-button size="small" @click="openDrawer">{{ $tr('操作记录') }}</el-button>
       </div>
     </header>
     <div ref="univerContainer" class="share-univer"></div>
 
-    <el-drawer v-model="drawerVisible" title="用户操作记录" size="360px">
+    <el-drawer v-model="drawerVisible" :title="$tr('用户操作记录')" size="360px">
       <el-timeline v-if="opLogs.length">
         <el-timeline-item
           v-for="item in opLogs"
@@ -402,7 +428,7 @@ onBeforeUnmount(() => {
           <p class="op-cmd">{{ item.commandName || item.commandId }}</p>
         </el-timeline-item>
       </el-timeline>
-      <el-empty v-else description="暂无操作记录" />
+      <el-empty v-else :description="$tr('暂无操作记录')" />
     </el-drawer>
   </div>
 </template>

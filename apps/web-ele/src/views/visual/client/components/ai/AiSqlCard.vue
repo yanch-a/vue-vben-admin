@@ -86,18 +86,18 @@ async function onRun() {
 
 <template>
   <div class="ai-sql-card" :class="{ write: isWrite }">
-    <div v-if="isWrite" class="write-tip">写操作 / 危险语句 — 运行前需确认</div>
+    <div v-if="isWrite" class="write-tip">{{ $tr('写操作 / 危险语句 — 运行前需确认') }}</div>
     <pre class="sql">{{ sqlText || '（空 SQL）' }}</pre>
     <p v-if="explanation" class="exp">{{ explanation }}</p>
     <ul v-if="warnings?.length" class="warn">
       <li v-for="(w, i) in warnings" :key="i">{{ w }}</li>
     </ul>
     <div class="btns">
-      <ElButton size="small" :disabled="!canUse" @click="onInsert">插入</ElButton>
-      <ElButton size="small" :disabled="!canUse" @click="onReplace">替换</ElButton>
-      <ElButton size="small" :disabled="!canUse" @click="onOpenTab">新 Tab</ElButton>
-      <ElButton size="small" type="primary" :disabled="!canUse" @click="onRun">运行</ElButton>
-      <ElButton size="small" :disabled="!canUse" @click="copy">复制</ElButton>
+      <ElButton size="small" :disabled="!canUse" @click="onInsert">{{ $tr('插入') }}</ElButton>
+      <ElButton size="small" :disabled="!canUse" @click="onReplace">{{ $tr('替换') }}</ElButton>
+      <ElButton size="small" :disabled="!canUse" @click="onOpenTab">{{ $tr('新 Tab') }}</ElButton>
+      <ElButton size="small" type="primary" :disabled="!canUse" @click="onRun">{{ $tr('运行') }}</ElButton>
+      <ElButton size="small" :disabled="!canUse" @click="copy">{{ $tr('复制') }}</ElButton>
     </div>
   </div>
 </template>

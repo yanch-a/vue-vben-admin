@@ -108,6 +108,18 @@ class PreferenceManager {
   };
 
   /**
+   * 立即将当前偏好设置写入缓存。
+   *
+   * 页面刷新、窗口关闭等会中断防抖任务的场景，必须先等待此方法完成，
+   * 避免用户刚修改的语言、主题等设置尚未落盘就丢失。
+   *
+   * @author yanch
+   */
+  flushPreferences = async () => {
+    await this.saveToCache();
+  };
+
+  /**
    * 初始化偏好设置
    * @param options - 初始化配置项
    * @param options.namespace - 命名空间，用于隔离不同应用的配置

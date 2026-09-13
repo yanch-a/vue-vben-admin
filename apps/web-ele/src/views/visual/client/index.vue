@@ -2572,7 +2572,7 @@ onBeforeUnmount(() => {
         </aside>
         <div
           class="splitter-v"
-          title="拖拽调整对象树宽度"
+          :title="$tr('拖拽调整对象树宽度')"
           @mousedown.prevent="onLeftSplitterDown"
         />
 
@@ -2604,7 +2604,7 @@ onBeforeUnmount(() => {
           <div
             v-if="queryTabsPlacement === 'left'"
             class="splitter-v"
-            title="拖拽调整查询页签宽度"
+            :title="$tr('拖拽调整查询页签宽度')"
             @mousedown.prevent="onTabsLeftSplitterDown"
           />
           <QueryTabs
@@ -2645,7 +2645,7 @@ onBeforeUnmount(() => {
               :disabled="activeTab?.executing"
               @click="runSql"
             >
-              执行 (Ctrl+Enter / F9)
+              {{ $tr('执行 (Ctrl+Enter / F9)') }}
             </ElButton>
             <ElButton
               v-if="activeTab?.executing"
@@ -2653,28 +2653,28 @@ onBeforeUnmount(() => {
               size="small"
               @click="stopSql"
             >
-              停止
+              {{ $tr('停止') }}
             </ElButton>
             <ElButton
               size="small"
               :disabled="activeTab?.executing"
               @click="onFormatSql"
             >
-              格式化 (F12)
+              {{ $tr('格式化 (F12)') }}
             </ElButton>
             <ElButton
               size="small"
               :disabled="activeTab?.executing"
               @click="onSaveQuery"
             >
-              保存 (Ctrl+S)
+              {{ $tr('保存 (Ctrl+S)') }}
             </ElButton>
             <ElButton
               size="small"
               :disabled="activeTab?.executing"
               @click="onSaveQueryAs"
             >
-              另存为
+              {{ $tr('另存为') }}
             </ElButton>
             <ElButton
               size="small"
@@ -2682,12 +2682,12 @@ onBeforeUnmount(() => {
                 activeTab && (activeTab.resultVisible = !activeTab.resultVisible)
               "
             >
-              {{ activeTab?.resultVisible ? '隐藏结果' : '显示结果' }}
+              {{ $tr(activeTab?.resultVisible ? '隐藏结果' : '显示结果') }}
             </ElButton>
             <ElButton
               size="small"
               :icon="Aim"
-              title="在对象树中定位"
+              :title="$tr('在对象树中定位')"
               :disabled="!activeTab"
               @click="locateCurrentInTree"
             />
@@ -2717,7 +2717,7 @@ onBeforeUnmount(() => {
           <div
             v-if="activeTab?.resultVisible"
             class="splitter-h"
-            title="拖拽调整编辑器与结果区高度"
+            :title="$tr('拖拽调整编辑器与结果区高度')"
             @mousedown.prevent="onSplitterDown"
           />
 
@@ -2844,25 +2844,25 @@ onBeforeUnmount(() => {
         <ElFormItem :label="instanceLabel">
           <ElInput :model-value="activeTab?.instanceName" disabled />
         </ElFormItem>
-        <ElFormItem label="查询名称" required>
+        <ElFormItem :label="$tr('查询名称')" required>
           <ElInput
             v-model="saveDialog.queryName"
             clearable
             maxlength="100"
             show-word-limit
-            placeholder="例如：用户列表查询"
+            :placeholder="$tr('例如：用户列表查询')"
             @keyup.enter="confirmSaveQuery"
           />
         </ElFormItem>
       </ElForm>
       <template #footer>
-        <ElButton @click="saveDialog.visible = false">取消</ElButton>
+        <ElButton @click="saveDialog.visible = false">{{ $tr('取消') }}</ElButton>
         <ElButton
           type="primary"
           :loading="saveDialog.saving"
           @click="confirmSaveQuery"
         >
-          {{ saveDialog.mode === 'update' ? '更新' : '保存' }}
+          {{ $tr(saveDialog.mode === 'update' ? '更新' : '保存') }}
         </ElButton>
       </template>
     </ElDialog>
@@ -2874,14 +2874,14 @@ onBeforeUnmount(() => {
       destroy-on-close
     >
       <ElForm label-width="100px">
-        <ElFormItem label="表名">
+        <ElFormItem :label="$tr('表名')">
           <ElInput v-model="promptDialog.input" clearable />
         </ElFormItem>
       </ElForm>
       <template #footer>
-        <ElButton @click="promptDialog.visible = false">取消</ElButton>
+        <ElButton @click="promptDialog.visible = false">{{ $tr('取消') }}</ElButton>
         <ElButton type="primary" @click="confirmPromptDialog">
-          生成 SQL
+          {{ $tr('生成 SQL') }}
         </ElButton>
       </template>
     </ElDialog>

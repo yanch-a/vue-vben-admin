@@ -150,6 +150,44 @@ describe('preferences', () => {
     expect(preferenceManager.getPreferences().app.locale).toBe('en-US');
   });
 
+  it('keeps the updated locale after an immediate page reload', async () => {
+    const storage = new Map<string, string>();
+    vi.mocked(localStorage.getItem).mockImplementation(
+      (key) => storage.get(String(key)) ?? null,
+    );
+    vi.mocked(localStorage.setItem).mockImplementation((key, value) => {
+      storage.set(String(key), String(value));
+    });
+
+    await preferenceManager.initPreferences({
+      namespace: 'locale-flush',
+    });
+    vi.mocked(localStorage.setItem).mockClear();
+
+    preferenceManager.updatePreferences({
+      app: { locale: 'en-US' },
+    });
+    await preferenceManager.flushPreferences();
+
+    const localeCall = vi
+      .mocked(localStorage.setItem)
+      .mock.calls.find(([key]) => key === 'locale-flush-preferences-locale');
+
+    expect(localeCall).toBeDefined();
+    expect(JSON.parse(localeCall?.[1] ?? '{}')).toMatchObject({
+      value: 'en-US',
+    });
+
+    // 用新的管理器模拟刷新后重新初始化，确认无需等待 150ms 防抖也能恢复英文。
+    const reloadedPreferenceManager = new PreferenceManager();
+    await reloadedPreferenceManager.initPreferences({
+      namespace: 'locale-flush',
+    });
+    expect(reloadedPreferenceManager.getPreferences().app.locale).toBe(
+      'en-US',
+    );
+  });
+
   it('updates the sidebar width correctly', () => {
     preferenceManager.updatePreferences({
       sidebar: { width: 200 },

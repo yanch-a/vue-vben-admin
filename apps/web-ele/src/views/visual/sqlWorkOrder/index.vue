@@ -250,46 +250,46 @@ onBeforeUnmount(() => { if (refreshTimer) clearInterval(refreshTimer); });
   <Page auto-content-height content-class="!p-0">
     <div class="work-order-page">
       <header class="toolbar">
-        <ElButton :icon="ArrowLeft" circle title="返回数据库客户端" @click="router.back()" />
-        <h2>SQL 上线工单</h2>
+        <ElButton :icon="ArrowLeft" circle :title="$tr('返回数据库客户端')" @click="router.back()" />
+        <h2>{{ $tr('SQL 上线工单') }}</h2>
         <ElTag v-if="roleReady" :type="dba ? 'warning' : 'info'" effect="plain">
-          {{ dba ? 'DBA 审批台' : '开发提单台' }}
+          {{ $tr(dba ? 'DBA 审批台' : '开发提单台') }}
         </ElTag>
         <div class="filters">
-          <ElInput v-model="query.title" clearable placeholder="标题" :prefix-icon="Search" @keyup.enter="load" />
-          <ElSelect v-model="query.status" clearable placeholder="全部状态">
+          <ElInput v-model="query.title" clearable :placeholder="$tr('标题')" :prefix-icon="Search" @keyup.enter="load" />
+          <ElSelect v-model="query.status" clearable :placeholder="$tr('全部状态')">
             <ElOption v-for="item in statusOptions" :key="item[0]" :label="item[1]" :value="item[0]" />
           </ElSelect>
-          <ElButton :icon="Refresh" circle title="刷新" @click="load" />
-          <ElButton v-if="roleReady && !dba" type="primary" :icon="Plus" @click="createOrder">新建工单</ElButton>
+          <ElButton :icon="Refresh" circle :title="$tr('刷新')" @click="load" />
+          <ElButton v-if="roleReady && !dba" type="primary" :icon="Plus" @click="createOrder">{{ $tr('新建工单') }}</ElButton>
         </div>
       </header>
 
       <ElTable v-loading="loading" :data="rows" height="calc(100vh - 190px)" stripe>
-        <ElTableColumn prop="title" label="标题" min-width="220" show-overflow-tooltip />
-        <ElTableColumn prop="instanceName" label="目标实例" min-width="150" show-overflow-tooltip />
-        <ElTableColumn prop="dbType" label="数据库" width="130" />
-        <ElTableColumn label="状态" width="110">
+        <ElTableColumn prop="title" :label="$tr('标题')" min-width="220" show-overflow-tooltip />
+        <ElTableColumn prop="instanceName" :label="$tr('目标实例')" min-width="150" show-overflow-tooltip />
+        <ElTableColumn prop="dbType" :label="$tr('数据库')" width="130" />
+        <ElTableColumn :label="$tr('状态')" width="110">
           <template #default="{ row }"><ElTag :type="typeForStatus(row.status)">{{ statusLabel[row.status] || row.status }}</ElTag></template>
         </ElTableColumn>
-        <ElTableColumn label="风险" width="100">
+        <ElTableColumn :label="$tr('风险')" width="100">
           <template #default="{ row }"><ElTag v-if="row.riskLevel" :type="typeForRisk(row.riskLevel)" effect="plain">{{ row.riskLevel }}</ElTag><span v-else>-</span></template>
         </ElTableColumn>
-        <ElTableColumn prop="currentVersion" label="版本" width="72"><template #default="{ row }">v{{ row.currentVersion }}</template></ElTableColumn>
-        <ElTableColumn prop="submitterName" label="提交人" width="110" />
-        <ElTableColumn label="更新时间" width="170"><template #default="{ row }">{{ dateText(row.updateTime || row.createTime) }}</template></ElTableColumn>
-        <ElTableColumn label="操作" fixed="right" min-width="330">
+        <ElTableColumn prop="currentVersion" :label="$tr('版本')" width="72"><template #default="{ row }">v{{ row.currentVersion }}</template></ElTableColumn>
+        <ElTableColumn prop="submitterName" :label="$tr('提交人')" width="110" />
+        <ElTableColumn :label="$tr('更新时间')" width="170"><template #default="{ row }">{{ dateText(row.updateTime || row.createTime) }}</template></ElTableColumn>
+        <ElTableColumn :label="$tr('操作')" fixed="right" min-width="330">
           <template #default="{ row }">
-            <ElButton link type="primary" @click="openDetail(row)">详情</ElButton>
-            <ElButton v-if="!dba && ['DRAFT','REJECTED'].includes(row.status)" link @click="editOrder(row)">编辑</ElButton>
-            <ElButton v-if="!dba && ['DRAFT','REJECTED'].includes(row.status)" link type="primary" @click="submit(row)">提交</ElButton>
+            <ElButton link type="primary" @click="openDetail(row)">{{ $tr('详情') }}</ElButton>
+            <ElButton v-if="!dba && ['DRAFT','REJECTED'].includes(row.status)" link @click="editOrder(row)">{{ $tr('编辑') }}</ElButton>
+            <ElButton v-if="!dba && ['DRAFT','REJECTED'].includes(row.status)" link type="primary" @click="submit(row)">{{ $tr('提交') }}</ElButton>
             <template v-if="dba">
-              <ElButton v-if="['PENDING','APPROVED'].includes(row.status)" link type="primary" @click="openDetail(row).then(() => openAudit())">AI 审计</ElButton>
-              <ElButton v-if="row.status === 'PENDING'" link type="success" @click="review(row, true)">通过</ElButton>
-              <ElButton v-if="row.status === 'PENDING'" link type="danger" @click="review(row, false)">驳回</ElButton>
-              <ElButton v-if="row.status === 'APPROVED'" link type="warning" @click="execute(row)">执行</ElButton>
+              <ElButton v-if="['PENDING','APPROVED'].includes(row.status)" link type="primary" @click="openDetail(row).then(() => openAudit())">{{ $tr('AI 审计') }}</ElButton>
+              <ElButton v-if="row.status === 'PENDING'" link type="success" @click="review(row, true)">{{ $tr('通过') }}</ElButton>
+              <ElButton v-if="row.status === 'PENDING'" link type="danger" @click="review(row, false)">{{ $tr('驳回') }}</ElButton>
+              <ElButton v-if="row.status === 'APPROVED'" link type="warning" @click="execute(row)">{{ $tr('执行') }}</ElButton>
             </template>
-            <ElButton v-if="['EXECUTING','SUCCESS','FAILED'].includes(row.status)" link :icon="Download" @click="downloadRollback(row)">回滚脚本</ElButton>
+            <ElButton v-if="['EXECUTING','SUCCESS','FAILED'].includes(row.status)" link :icon="Download" @click="downloadRollback(row)">{{ $tr('回滚脚本') }}</ElButton>
           </template>
         </ElTableColumn>
       </ElTable>
@@ -298,32 +298,32 @@ onBeforeUnmount(() => { if (refreshTimer) clearInterval(refreshTimer); });
 
     <ElDialog v-model="editorVisible" :title="form.id ? '编辑工单并生成新版本' : '新建 SQL 工单'" width="820px" destroy-on-close>
       <ElForm label-position="top">
-        <ElFormItem label="标题"><ElInput v-model="form.title" maxlength="160" show-word-limit /></ElFormItem>
+        <ElFormItem :label="$tr('标题')"><ElInput v-model="form.title" maxlength="160" show-word-limit /></ElFormItem>
         <div class="target-row">
-          <ElFormItem label="数据库连接"><ElSelect v-model="form.dbConfigId" filterable @change="onConnectionChange"><ElOption v-for="item in sqlConnections" :key="item.id" :label="item.dbName || item.dbHost || String(item.id)" :value="item.id" /></ElSelect></ElFormItem>
-          <ElFormItem label="目标实例"><ElSelect v-model="form.instanceName" filterable :loading="instancesLoading" placeholder="请选择实例"><ElOption v-for="item in instances" :key="item" :label="item" :value="item" /></ElSelect></ElFormItem>
+          <ElFormItem :label="$tr('数据库连接')"><ElSelect v-model="form.dbConfigId" filterable @change="onConnectionChange"><ElOption v-for="item in sqlConnections" :key="item.id" :label="item.dbName || item.dbHost || String(item.id)" :value="item.id" /></ElSelect></ElFormItem>
+          <ElFormItem :label="$tr('目标实例')"><ElSelect v-model="form.instanceName" filterable :loading="instancesLoading" :placeholder="$tr('请选择实例')"><ElOption v-for="item in instances" :key="item" :label="item" :value="item" /></ElSelect></ElFormItem>
         </div>
-        <ElFormItem label="SQL 脚本"><ElInput v-model="form.scriptText" type="textarea" :rows="16" resize="vertical" class="sql-input" spellcheck="false" /></ElFormItem>
-        <ElFormItem label="版本说明"><ElInput v-model="form.changeNote" maxlength="500" /></ElFormItem>
+        <ElFormItem :label="$tr('SQL 脚本')"><ElInput v-model="form.scriptText" type="textarea" :rows="16" resize="vertical" class="sql-input" spellcheck="false" /></ElFormItem>
+        <ElFormItem :label="$tr('版本说明')"><ElInput v-model="form.changeNote" maxlength="500" /></ElFormItem>
       </ElForm>
-      <template #footer><ElButton @click="editorVisible = false">取消</ElButton><ElButton type="primary" :loading="editorSaving" @click="saveDraft">保存草稿</ElButton></template>
+      <template #footer><ElButton @click="editorVisible = false">{{ $tr('取消') }}</ElButton><ElButton type="primary" :loading="editorSaving" @click="saveDraft">{{ $tr('保存草稿') }}</ElButton></template>
     </ElDialog>
 
-    <ElDrawer v-model="detailVisible" title="工单详情" size="720px">
+    <ElDrawer v-model="detailVisible" :title="$tr('工单详情')" size="720px">
       <div v-loading="detailLoading" v-if="detail?.order" class="detail">
-        <div class="detail-head"><h3>{{ detail.order.title }}</h3><ElTag :type="typeForStatus(detail.order.status)">{{ statusLabel[detail.order.status] }}</ElTag><ElTag v-if="detail.order.riskLevel" :type="typeForRisk(detail.order.riskLevel)" effect="plain">风险 {{ detail.order.riskLevel }} / {{ detail.order.riskScore }}</ElTag></div>
-        <ElDescriptions :column="2" border size="small"><ElDescriptionsItem label="目标">{{ detail.order.dbType }} / {{ detail.order.instanceName }}</ElDescriptionsItem><ElDescriptionsItem label="版本">v{{ detail.order.currentVersion }}</ElDescriptionsItem><ElDescriptionsItem label="提交人">{{ detail.order.submitterName }}</ElDescriptionsItem><ElDescriptionsItem label="审批人">{{ detail.order.reviewerName || '-' }}</ElDescriptionsItem></ElDescriptions>
-        <h4>SQL 脚本</h4><pre class="code">{{ detail.order.scriptText }}</pre>
-        <template v-if="detail.order.aiAuditReport"><h4>审计报告</h4><div class="report">{{ detail.order.aiAuditReport }}</div></template>
-        <template v-if="detail.order.executionMessage"><h4>执行状态</h4><ElAlert :title="detail.order.executionMessage" :type="detail.order.status === 'FAILED' ? 'error' : 'info'" :closable="false" /></template>
-        <h4>版本记录</h4><ElTable :data="detail.versions" size="small"><ElTableColumn prop="versionNo" label="版本" width="70"><template #default="{ row }">v{{ row.versionNo }}</template></ElTableColumn><ElTableColumn prop="createdByName" label="修改人" width="110" /><ElTableColumn prop="changeNote" label="说明" /><ElTableColumn label="时间" width="170"><template #default="{ row }">{{ dateText(row.createTime) }}</template></ElTableColumn></ElTable>
-        <h4>审计轨迹</h4><ElTimeline><ElTimelineItem v-for="event in detail.events" :key="event.id" :timestamp="dateText(event.createTime)" placement="top"><strong>{{ event.action }}</strong> · {{ event.actorName }}<div>{{ event.commentText }}</div></ElTimelineItem></ElTimeline>
+        <div class="detail-head"><h3>{{ detail.order.title }}</h3><ElTag :type="typeForStatus(detail.order.status)">{{ statusLabel[detail.order.status] }}</ElTag><ElTag v-if="detail.order.riskLevel" :type="typeForRisk(detail.order.riskLevel)" effect="plain">{{ $tr('风险') }} {{ detail.order.riskLevel }} / {{ detail.order.riskScore }}</ElTag></div>
+        <ElDescriptions :column="2" border size="small"><ElDescriptionsItem :label="$tr('目标')">{{ detail.order.dbType }} / {{ detail.order.instanceName }}</ElDescriptionsItem><ElDescriptionsItem :label="$tr('版本')">v{{ detail.order.currentVersion }}</ElDescriptionsItem><ElDescriptionsItem :label="$tr('提交人')">{{ detail.order.submitterName }}</ElDescriptionsItem><ElDescriptionsItem :label="$tr('审批人')">{{ detail.order.reviewerName || '-' }}</ElDescriptionsItem></ElDescriptions>
+        <h4>{{ $tr('SQL 脚本') }}</h4><pre class="code">{{ detail.order.scriptText }}</pre>
+        <template v-if="detail.order.aiAuditReport"><h4>{{ $tr('审计报告') }}</h4><div class="report">{{ detail.order.aiAuditReport }}</div></template>
+        <template v-if="detail.order.executionMessage"><h4>{{ $tr('执行状态') }}</h4><ElAlert :title="detail.order.executionMessage" :type="detail.order.status === 'FAILED' ? 'error' : 'info'" :closable="false" /></template>
+        <h4>{{ $tr('版本记录') }}</h4><ElTable :data="detail.versions" size="small"><ElTableColumn prop="versionNo" :label="$tr('版本')" width="70"><template #default="{ row }">v{{ row.versionNo }}</template></ElTableColumn><ElTableColumn prop="createdByName" :label="$tr('修改人')" width="110" /><ElTableColumn prop="changeNote" :label="$tr('说明')" /><ElTableColumn :label="$tr('时间')" width="170"><template #default="{ row }">{{ dateText(row.createTime) }}</template></ElTableColumn></ElTable>
+        <h4>{{ $tr('审计轨迹') }}</h4><ElTimeline><ElTimelineItem v-for="event in detail.events" :key="event.id" :timestamp="dateText(event.createTime)" placement="top"><strong>{{ event.action }}</strong> · {{ event.actorName }}<div>{{ event.commentText }}</div></ElTimelineItem></ElTimeline>
       </div>
     </ElDrawer>
 
-    <ElDialog v-model="auditVisible" title="向 AI 询问 SQL 风险" width="620px">
-      <ElForm label-position="top"><ElFormItem label="审计模型"><ElSelect v-model="auditForm.modelId" filterable><ElOption v-for="model in models" :key="model.id" :label="`${model.providerName || ''} / ${model.modelName || model.modelCode}`" :value="model.id" /></ElSelect></ElFormItem><ElFormItem label="DBA 审计问题"><ElInput v-model="auditForm.question" type="textarea" :rows="5" /></ElFormItem></ElForm>
-      <template #footer><ElButton @click="auditVisible = false">取消</ElButton><ElButton type="primary" :loading="auditLoading" @click="runAudit">开始审计</ElButton></template>
+    <ElDialog v-model="auditVisible" :title="$tr('向 AI 询问 SQL 风险')" width="620px">
+      <ElForm label-position="top"><ElFormItem :label="$tr('审计模型')"><ElSelect v-model="auditForm.modelId" filterable><ElOption v-for="model in models" :key="model.id" :label="`${model.providerName || ''} / ${model.modelName || model.modelCode}`" :value="model.id" /></ElSelect></ElFormItem><ElFormItem :label="$tr('DBA 审计问题')"><ElInput v-model="auditForm.question" type="textarea" :rows="5" /></ElFormItem></ElForm>
+      <template #footer><ElButton @click="auditVisible = false">{{ $tr('取消') }}</ElButton><ElButton type="primary" :loading="auditLoading" @click="runAudit">{{ $tr('开始审计') }}</ElButton></template>
     </ElDialog>
   </Page>
 </template>

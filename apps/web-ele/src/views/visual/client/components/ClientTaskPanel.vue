@@ -108,34 +108,34 @@ async function onCancel(t: ClientTask) {
 </script>
 
 <template>
-  <div v-show="visible" class="task-float" role="dialog" aria-label="后台任务进度">
+  <div v-show="visible" class="task-float" role="dialog" :aria-label="$tr('后台任务进度')">
     <div class="head">
-      <strong>后台任务</strong>
+      <strong>{{ $tr('后台任务') }}</strong>
       <ElBadge :value="running.length" :hidden="!running.length" class="badge">
-        <span class="hint">进行中 {{ running.length }}</span>
+        <span class="hint">{{ $tr('进行中') }} {{ running.length }}</span>
       </ElBadge>
       <ElButton
         class="refresh"
         size="small"
         circle
         :icon="Refresh"
-        title="立即刷新进度"
+        :title="$tr('立即刷新进度')"
         :loading="refreshing"
         @click="emit('refresh')"
       />
-      <button class="close" type="button" title="收起" @click="visible = false">×</button>
+      <button class="close" type="button" :title="$tr('收起')" @click="visible = false">×</button>
     </div>
     <ElTabs v-model="activeTab" class="tabs" stretch>
       <ElTabPane name="running">
-        <template #label>进行中 ({{ running.length }})</template>
+        <template #label>{{ $tr('进行中 (') }}{{ running.length }})</template>
       </ElTabPane>
       <ElTabPane name="done">
-        <template #label>已完成 ({{ done.length }})</template>
+        <template #label>{{ $tr('已完成 (') }}{{ done.length }})</template>
       </ElTabPane>
     </ElTabs>
     <ElScrollbar max-height="360px">
       <div v-if="!list.length" class="empty">
-        {{ activeTab === 'running' ? '没有进行中的任务' : '近 7 天没有已完成任务' }}
+        {{ $tr(activeTab === 'running' ? '没有进行中的任务' : '近 7 天没有已完成任务') }}
       </div>
       <div v-for="t in list" :key="`${t.source}-${t.id}`" class="card">
         <div class="card-top">
@@ -149,23 +149,23 @@ async function onCancel(t: ClientTask) {
           :stroke-width="8"
         />
         <div v-if="t.message" class="step">
-          <span class="step-k">{{ isRunning(t) ? '正在' : '结果' }}</span>
+          <span class="step-k">{{ $tr(isRunning(t) ? '正在' : '结果') }}</span>
           <span>{{ t.message }}</span>
         </div>
         <div class="meta">
           <span v-if="t.total">{{ t.done }} / {{ t.total }}</span>
-          <span v-if="durationText(t.elapsedMs)">耗时 {{ durationText(t.elapsedMs) }}</span>
-          <span v-if="t.current && isRunning(t)">对象 {{ t.current }}</span>
+          <span v-if="durationText(t.elapsedMs)">{{ $tr('耗时') }} {{ durationText(t.elapsedMs) }}</span>
+          <span v-if="t.current && isRunning(t)">{{ $tr('对象') }} {{ t.current }}</span>
           <span class="time">{{ timeText(t.updateTime || t.createTime) }}</span>
         </div>
         <div v-if="t.errors.length" class="errs">
           <div v-for="(e, i) in t.errors.slice(0, 3)" :key="i">{{ e }}</div>
           <div v-if="(t.errorTotal || t.errors.length) > 3">
-            还有 {{ (t.errorTotal || t.errors.length) - 3 }} 条
+            {{ $tr('还有') }} {{ (t.errorTotal || t.errors.length) - 3 }} {{ $tr('条') }}
           </div>
         </div>
         <div v-if="canCancel(t)" class="actions">
-          <ElButton size="small" type="danger" plain @click="onCancel(t)">取消</ElButton>
+          <ElButton size="small" type="danger" plain @click="onCancel(t)">{{ $tr('取消') }}</ElButton>
         </div>
       </div>
     </ElScrollbar>

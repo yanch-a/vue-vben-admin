@@ -124,10 +124,10 @@
     <vab-query-form>
       <vab-query-form-left-panel :span="12">
         <el-button v-permissions="{ permission: ['UserManagement:add'] }" :icon="Plus" type="primary" @click="handleEdit($event)">
-          添加
+          {{ $tr('添加') }}
         </el-button>
         <el-button v-permissions="{ permission: ['UserManagement:delete'] }" :icon="Delete" type="danger" @click="handleDelete($event)">
-          批量删除
+          {{ $tr('批量删除') }}
         </el-button>
       </vab-query-form-left-panel>
       <vab-query-form-right-panel :span="12">
@@ -136,12 +136,12 @@
             <el-input
               v-model.trim="queryForm.userName"
               clearable
-              placeholder="请输入用户名"
+              :placeholder="$tr('请输入用户名')"
             />
           </el-form-item>
           <el-form-item>
             <el-button :icon="Search" type="primary" @click="queryData">
-              查询
+              {{ $tr('查询') }}
             </el-button>
           </el-form-item>
         </el-form>
@@ -155,7 +155,7 @@
       @selection-change="setSelectRows"
     >
       <el-table-column align="center" show-overflow-tooltip type="selection" />
-      <el-table-column align="center" label="序号" width="55">
+      <el-table-column align="center" :label="$tr('序号')" width="55">
         <template #default="{ $index }">
           {{ $index + 1 }}
         </template>
@@ -168,24 +168,24 @@
       />
       <el-table-column
         align="center"
-        label="用户名"
+        :label="$tr('用户名')"
         prop="userName"
         show-overflow-tooltip
       />
       <!-- <el-table-column
         align="center"
-        label="昵称"
+        :label="$tr('昵称')"
         prop="nickName"
         show-overflow-tooltip
       />
       <el-table-column
         align="center"
-        label="邮箱"
+        :label="$tr('邮箱')"
         prop="email"
         show-overflow-tooltip
       /> -->
 
-      <el-table-column align="center" label="角色" show-overflow-tooltip>
+      <el-table-column align="center" :label="$tr('角色')" show-overflow-tooltip>
         <template #default="{ row }">
           <el-tag v-for="(item, index) in row.roles" :key="index">
             {{ item.roleName }}
@@ -195,30 +195,30 @@
 
       <el-table-column
         align="center"
-        label="创建时间"
+        :label="$tr('创建时间')"
         prop="createTime"
         show-overflow-tooltip
       />
       <el-table-column
         align="center"
-        label="操作"
+        :label="$tr('操作')"
         show-overflow-tooltip
         width="300"
       >
         <template #default="{ row }">
           <el-button v-permissions="{ permission: ['UserManagement:update'] }" text type="primary" @click="handleEdit(row)">
-            编辑
+            {{ $tr('编辑') }}
           </el-button>
           <el-button v-permissions="{ permission: ['UserManagement:resetPwd'] }" text type="primary" @click="resetPassword(row)">
-            重置密码
+            {{ $tr('重置密码') }}
           </el-button>
           <el-button v-permissions="{ permission: ['UserManagement:delete'] }" text type="primary" @click="handleDelete(row)">
-            删除
+            {{ $tr('删除') }}
           </el-button>
         </template>
       </el-table-column>
       <template #empty>
-        <el-empty class="vab-data-empty" description="暂无数据" />
+        <el-empty class="vab-data-empty" :description="$tr('暂无数据')" />
       </template>
     </el-table>
     <el-pagination

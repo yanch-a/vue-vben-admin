@@ -85,16 +85,16 @@ onMounted(() => {
   <div v-loading="loading" class="system-setting-page p-4">
     <div class="mb-4 flex items-center gap-2">
       <ElButton type="primary" :loading="saving" @click="handleSave">
-        保存
+        {{ $tr('保存') }}
       </ElButton>
-      <ElButton @click="initData">刷新</ElButton>
+      <ElButton @click="initData">{{ $tr('刷新') }}</ElButton>
       <span class="text-muted text-sm text-gray-500">
-        图片类请上传后保存；文本留空表示前端保持本地默认。
+        {{ $tr('图片类请上传后保存；文本留空表示前端保持本地默认。') }}
       </span>
     </div>
 
     <ElTabs v-model="activeName">
-      <ElTabPane label="品牌与登录展示" name="brand">
+      <ElTabPane :label="$tr('品牌与登录展示')" name="brand">
         <ElRow :gutter="16">
           <ElCol
             v-for="item in brandConfigs"
@@ -139,11 +139,11 @@ onMounted(() => {
         </ElRow>
         <ElEmpty
           v-if="!brandConfigs.length"
-          description="暂无品牌配置，请先执行 doc/database/ui_brand_sys_setting.sql"
+          :description="$tr('暂无品牌配置，请先执行 doc/database/ui_brand_sys_setting.sql')"
         />
       </ElTabPane>
 
-      <ElTabPane label="其他系统配置" name="other">
+      <ElTabPane :label="$tr('其他系统配置')" name="other">
         <ElForm label-width="140px">
           <ElFormItem
             v-for="item in otherConfigs"
@@ -168,7 +168,7 @@ onMounted(() => {
           v-if="!otherConfigs.length"
           class="py-8 text-center text-gray-400"
         >
-          暂无其他 type=1 配置
+          {{ $tr('暂无其他 type=1 配置') }}
         </div>
       </ElTabPane>
     </ElTabs>

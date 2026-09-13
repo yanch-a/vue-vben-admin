@@ -176,14 +176,14 @@
   <div class="config-management-container">
     <vab-query-form>
       <vab-query-form-left-panel :span="8">
-        <el-button :icon="Plus" type="primary" @click="handleAdd">新增</el-button>
+        <el-button :icon="Plus" type="primary" @click="handleAdd">{{ $tr('新增') }}</el-button>
         <el-button
           :icon="EditPen"
           type="success"
           :disabled="single"
           @click="handleUpdate()"
         >
-          修改
+          {{ $tr('修改') }}
         </el-button>
         <el-button
           :icon="Delete"
@@ -191,7 +191,7 @@
           :disabled="multiple"
           @click="handleDelete()"
         >
-          删除
+          {{ $tr('删除') }}
         </el-button>
       </vab-query-form-left-panel>
       <vab-query-form-right-panel :span="16">
@@ -200,15 +200,15 @@
             <el-input
               v-model.trim="queryParams.groupName"
               clearable
-              placeholder="请输入组名称"
+              :placeholder="$tr('请输入组名称')"
               @keyup.enter="handleQuery"
             />
           </el-form-item>
           <el-form-item>
             <el-button :icon="Search" type="primary" @click="handleQuery">
-              查询
+              {{ $tr('查询') }}
             </el-button>
-            <el-button :icon="Refresh" @click="resetQuery">重置</el-button>
+            <el-button :icon="Refresh" @click="resetQuery">{{ $tr('重置') }}</el-button>
           </el-form-item>
         </el-form>
       </vab-query-form-right-panel>
@@ -221,28 +221,28 @@
       @selection-change="handleSelectionChange"
     >
       <el-table-column type="selection" width="55" align="center" />
-      <el-table-column label="组名称" align="center" prop="groupName" min-width="140" />
+      <el-table-column :label="$tr('组名称')" align="center" prop="groupName" min-width="140" />
       <el-table-column
-        label="描述"
+        :label="$tr('描述')"
         align="center"
         prop="description"
         min-width="200"
         show-overflow-tooltip
       />
-      <el-table-column label="排序" align="center" prop="orderNum" width="80" />
-      <el-table-column label="创建时间" align="center" prop="createTime" width="180">
+      <el-table-column :label="$tr('排序')" align="center" prop="orderNum" width="80" />
+      <el-table-column :label="$tr('创建时间')" align="center" prop="createTime" width="180">
         <template #default="scope">
           <span>{{ parseTime(scope.row.createTime, '{y}-{m}-{d} {h}:{i}:{s}') }}</span>
         </template>
       </el-table-column>
-      <el-table-column label="操作" align="center" width="220" fixed="right">
+      <el-table-column :label="$tr('操作')" align="center" width="220" fixed="right">
         <template #default="scope">
           <el-button
             circle
             text
             type="primary"
             :icon="User"
-            title="成员"
+            :title="$tr('成员')"
             @click="handleViewMembers(scope.row)"
           />
           <el-button
@@ -250,7 +250,7 @@
             text
             type="primary"
             :icon="EditIcon"
-            title="修改"
+            :title="$tr('修改')"
             @click="handleUpdate(scope.row)"
           />
           <el-button
@@ -258,13 +258,13 @@
             text
             type="danger"
             :icon="Delete"
-            title="删除"
+            :title="$tr('删除')"
             @click="handleDelete(scope.row)"
           />
         </template>
       </el-table-column>
       <template #empty>
-        <el-empty class="vab-data-empty" description="暂无数据" />
+        <el-empty class="vab-data-empty" :description="$tr('暂无数据')" />
       </template>
     </el-table>
 
@@ -282,36 +282,36 @@
 
     <el-dialog v-model="open" :title="title" width="520px" append-to-body>
       <el-form ref="formRef" :model="form" :rules="rules" label-width="90px">
-        <el-form-item label="组名称" prop="groupName">
-          <el-input v-model="form.groupName" maxlength="100" placeholder="请输入组名称" />
+        <el-form-item :label="$tr('组名称')" prop="groupName">
+          <el-input v-model="form.groupName" maxlength="100" :placeholder="$tr('请输入组名称')" />
         </el-form-item>
-        <el-form-item label="排序" prop="orderNum">
+        <el-form-item :label="$tr('排序')" prop="orderNum">
           <el-input-number v-model="form.orderNum" :min="0" :max="9999" style="width: 100%" />
         </el-form-item>
-        <el-form-item label="描述" prop="description">
+        <el-form-item :label="$tr('描述')" prop="description">
           <el-input
             v-model="form.description"
             type="textarea"
             :rows="3"
             maxlength="500"
             show-word-limit
-            placeholder="请输入描述"
+            :placeholder="$tr('请输入描述')"
           />
         </el-form-item>
       </el-form>
       <template #footer>
-        <el-button @click="open = false">取 消</el-button>
-        <el-button type="primary" @click="submitForm">确 定</el-button>
+        <el-button @click="open = false">{{ $tr('取 消') }}</el-button>
+        <el-button type="primary" @click="submitForm">{{ $tr('确 定') }}</el-button>
       </template>
     </el-dialog>
 
     <el-dialog v-model="membersVisible" :title="membersTitle" width="640px" append-to-body>
       <el-table v-loading="membersLoading" :data="members" max-height="420" border>
-        <el-table-column label="用户名" prop="userName" min-width="120" />
-        <el-table-column label="姓名" prop="realName" min-width="100" />
-        <el-table-column label="手机号" prop="phoneNumber" min-width="120" />
+        <el-table-column :label="$tr('用户名')" prop="userName" min-width="120" />
+        <el-table-column :label="$tr('姓名')" prop="realName" min-width="100" />
+        <el-table-column :label="$tr('手机号')" prop="phoneNumber" min-width="120" />
         <template #empty>
-          <el-empty description="该组暂无会员" />
+          <el-empty :description="$tr('该组暂无会员')" />
         </template>
       </el-table>
     </el-dialog>

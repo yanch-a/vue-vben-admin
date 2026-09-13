@@ -212,7 +212,7 @@
     <el-card shadow="never" class="info-card">
       <template #header>
         <div class="card-header">
-          <span>订单信息</span>
+          <span>{{ $tr('订单信息') }}</span>
           <div class="status-badges">
             <el-tag :type="getOrderStatusType(orderInfo.orderStatus)" size="large">
               {{ getOrderStatusName(orderInfo.orderStatus) }}
@@ -225,74 +225,74 @@
       </template>
 
       <el-descriptions :column="2" border>
-        <el-descriptions-item label="订单号">
+        <el-descriptions-item :label="$tr('订单号')">
           <el-text type="primary" size="large" style="font-weight: 600;">
             {{ orderInfo.orderNo }}
           </el-text>
         </el-descriptions-item>
-        <el-descriptions-item label="订单类型">
+        <el-descriptions-item :label="$tr('订单类型')">
           <el-tag :type="orderInfo.orderType === 1 ? 'success' : 'info'">
             {{ getOrderTypeName(orderInfo.orderType) }}
           </el-tag>
         </el-descriptions-item>
-        <el-descriptions-item label="订单描述" :span="2">
+        <el-descriptions-item :label="$tr('订单描述')" :span="2">
           {{ orderInfo.orderDesc }}
         </el-descriptions-item>
         
         <!-- 会员套餐订单信息 -->
         <template v-if="orderInfo.orderType === 1">
-          <el-descriptions-item label="会员等级">
+          <el-descriptions-item :label="$tr('会员等级')">
             {{ memberLevelName }}
           </el-descriptions-item>
-          <el-descriptions-item label="套餐类型">
+          <el-descriptions-item :label="$tr('套餐类型')">
             {{ getPackageTypeName(orderInfo.packageType) }}
           </el-descriptions-item>
         </template>
         
         <!-- 单次接口订单信息 -->
         <template v-if="orderInfo.orderType === 2">
-          <el-descriptions-item label="API调用次数">
-            {{ orderInfo.apiCount }} 次
+          <el-descriptions-item :label="$tr('API调用次数')">
+            {{ orderInfo.apiCount }} {{ $tr('次') }}
           </el-descriptions-item>
-          <el-descriptions-item label="单价">
-            ¥9.9/次
+          <el-descriptions-item :label="$tr('单价')">
+            {{ $tr('¥9.9/次') }}
           </el-descriptions-item>
         </template>
         
-        <el-descriptions-item label="订单金额">
+        <el-descriptions-item :label="$tr('订单金额')">
           <span class="amount-text">¥{{ orderInfo.orderAmount }}</span>
         </el-descriptions-item>
-        <el-descriptions-item label="优惠金额">
+        <el-descriptions-item :label="$tr('优惠金额')">
           <span class="discount-text">-¥{{ orderInfo.discountAmount || '0.00' }}</span>
         </el-descriptions-item>
-        <el-descriptions-item label="实付金额" :span="2">
+        <el-descriptions-item :label="$tr('实付金额')" :span="2">
           <span class="actual-amount">¥{{ orderInfo.actualAmount }}</span>
         </el-descriptions-item>
         
-        <el-descriptions-item label="创建时间">
+        <el-descriptions-item :label="$tr('创建时间')">
           {{ orderInfo.createTime }}
         </el-descriptions-item>
-        <el-descriptions-item label="支付时间">
+        <el-descriptions-item :label="$tr('支付时间')">
           {{ orderInfo.payTime || '-' }}
         </el-descriptions-item>
-        <el-descriptions-item label="过期时间">
+        <el-descriptions-item :label="$tr('过期时间')">
           {{ orderInfo.expireTime || '-' }}
         </el-descriptions-item>
-        <el-descriptions-item label="取消时间">
+        <el-descriptions-item :label="$tr('取消时间')">
           {{ orderInfo.cancelTime || '-' }}
         </el-descriptions-item>
         
-        <el-descriptions-item label="备注" :span="2">
+        <el-descriptions-item :label="$tr('备注')" :span="2">
           {{ orderInfo.remark || '-' }}
         </el-descriptions-item>
       </el-descriptions>
 
       <div class="action-buttons" v-if="orderInfo.orderStatus === 1">
         <el-button type="primary" :icon="Refresh" @click="refreshOrder">
-          刷新订单状态
+          {{ $tr('刷新订单状态') }}
         </el-button>
         <el-button type="warning" :icon="Close" @click="handleCancelOrder">
-          取消订单
+          {{ $tr('取消订单') }}
         </el-button>
       </div>
     </el-card>
@@ -301,45 +301,45 @@
     <el-card shadow="never" class="payment-card" v-if="paymentRecord">
       <template #header>
         <div class="card-header">
-          <span>支付记录</span>
+          <span>{{ $tr('支付记录') }}</span>
         </div>
       </template>
 
       <el-descriptions :column="2" border>
-        <el-descriptions-item label="支付流水号">
+        <el-descriptions-item :label="$tr('支付流水号')">
           <el-text type="primary" style="font-weight: 600;">
             {{ paymentRecord.paymentNo }}
           </el-text>
         </el-descriptions-item>
-        <el-descriptions-item label="支付状态">
+        <el-descriptions-item :label="$tr('支付状态')">
           <el-tag :type="getPayStatusType(paymentRecord.payStatus)">
             {{ getPayStatusName(paymentRecord.payStatus) }}
           </el-tag>
         </el-descriptions-item>
         
-        <el-descriptions-item label="支付方式">
+        <el-descriptions-item :label="$tr('支付方式')">
           {{ getPayMethodName(paymentRecord.payMethod) }}
         </el-descriptions-item>
-        <el-descriptions-item label="支付渠道">
+        <el-descriptions-item :label="$tr('支付渠道')">
           {{ getPayChannelName(paymentRecord.payChannel) }}
         </el-descriptions-item>
         
-        <el-descriptions-item label="支付金额">
+        <el-descriptions-item :label="$tr('支付金额')">
           <span class="amount-text">¥{{ paymentRecord.payAmount }}</span>
         </el-descriptions-item>
-        <el-descriptions-item label="JEEPAY订单ID">
+        <el-descriptions-item :label="$tr('JEEPAY订单ID')">
           {{ paymentRecord.jeepayOrderId || '-' }}
         </el-descriptions-item>
         
-        <el-descriptions-item label="支付时间">
+        <el-descriptions-item :label="$tr('支付时间')">
           {{ paymentRecord.payTime || '-' }}
         </el-descriptions-item>
-        <el-descriptions-item label="回调时间">
+        <el-descriptions-item :label="$tr('回调时间')">
           {{ paymentRecord.callbackTime || '-' }}
         </el-descriptions-item>
         
         <!-- 二维码URL -->
-        <el-descriptions-item label="二维码URL" :span="2" v-if="paymentRecord.qrCodeUrl">
+        <el-descriptions-item :label="$tr('二维码URL')" :span="2" v-if="paymentRecord.qrCodeUrl">
           <el-link :href="paymentRecord.qrCodeUrl" type="primary" target="_blank">
             {{ paymentRecord.qrCodeUrl }}
           </el-link>
@@ -347,7 +347,7 @@
         
         <!-- 错误信息 -->
         <el-descriptions-item 
-          label="错误信息" 
+          :label="$tr('错误信息')"
           :span="2" 
           v-if="paymentRecord.errorMsg"
         >
@@ -356,30 +356,30 @@
         
         <!-- 退款信息 -->
         <template v-if="paymentRecord.refundStatus > 0">
-          <el-descriptions-item label="退款状态">
+          <el-descriptions-item :label="$tr('退款状态')">
             <el-tag :type="getRefundStatusType(paymentRecord.refundStatus)">
               {{ getRefundStatusName(paymentRecord.refundStatus) }}
             </el-tag>
           </el-descriptions-item>
-          <el-descriptions-item label="退款金额">
+          <el-descriptions-item :label="$tr('退款金额')">
             <span class="refund-amount">¥{{ paymentRecord.refundAmount || '0.00' }}</span>
           </el-descriptions-item>
-          <el-descriptions-item label="退款时间" :span="2">
+          <el-descriptions-item :label="$tr('退款时间')" :span="2">
             {{ paymentRecord.refundTime || '-' }}
           </el-descriptions-item>
         </template>
         
-        <el-descriptions-item label="创建时间">
+        <el-descriptions-item :label="$tr('创建时间')">
           {{ paymentRecord.createTime }}
         </el-descriptions-item>
-        <el-descriptions-item label="更新时间">
+        <el-descriptions-item :label="$tr('更新时间')">
           {{ paymentRecord.updateTime || '-' }}
         </el-descriptions-item>
       </el-descriptions>
 
       <!-- JEEPAY响应数据 -->
       <div class="response-data" v-if="paymentRecord.jeepayResponse">
-        <el-divider content-position="left">JEEPAY响应数据</el-divider>
+        <el-divider content-position="left">{{ $tr('JEEPAY响应数据') }}</el-divider>
         <el-input
           v-model="paymentRecord.jeepayResponse"
           type="textarea"
@@ -390,7 +390,7 @@
 
       <!-- 回调数据 -->
       <div class="callback-data" v-if="paymentRecord.callbackData">
-        <el-divider content-position="left">支付回调数据</el-divider>
+        <el-divider content-position="left">{{ $tr('支付回调数据') }}</el-divider>
         <el-input
           v-model="paymentRecord.callbackData"
           type="textarea"
@@ -402,7 +402,7 @@
 
     <!-- 没有支付记录的提示 -->
     <el-card shadow="never" class="payment-card" v-else>
-      <el-empty description="暂无支付记录" />
+      <el-empty :description="$tr('暂无支付记录')" />
     </el-card>
   </div>
 </template>

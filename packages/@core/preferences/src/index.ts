@@ -13,6 +13,7 @@ export const {
   resetPreferences,
   clearCache,
   initPreferences,
+  flushPreferences,
 } = preferencesManager;
 
 export const preferences: Preferences = getPreferences();

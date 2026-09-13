@@ -125,10 +125,10 @@ onMounted(fetchData);
 </script>
 
 <template>
-  <Page auto-content-height title="模型管理">
+  <Page auto-content-height :title="$tr('模型管理')">
     <template #extra>
-      <ElButton type="primary" @click="openEdit()">新增模型</ElButton>
-      <ElButton @click="fetchData">刷新</ElButton>
+      <ElButton type="primary" @click="openEdit()">{{ $tr('新增模型') }}</ElButton>
+      <ElButton @click="fetchData">{{ $tr('刷新') }}</ElButton>
     </template>
 
     <div class="mb-3 flex flex-wrap gap-2">
@@ -136,24 +136,24 @@ onMounted(fetchData);
         v-model="queryForm.modelName"
         class="w-56"
         clearable
-        placeholder="模型名称"
+        :placeholder="$tr('模型名称')"
         @keyup.enter="handleQuery"
       />
-      <ElButton type="primary" @click="handleQuery">查询</ElButton>
+      <ElButton type="primary" @click="handleQuery">{{ $tr('查询') }}</ElButton>
     </div>
 
     <ElTable v-loading="loading" :data="list" border>
-      <ElTableColumn prop="id" label="主键" width="80" align="center" />
-      <ElTableColumn prop="modelName" label="模型名称" min-width="160" show-overflow-tooltip>
+      <ElTableColumn prop="id" :label="$tr('主键')" width="80" align="center" />
+      <ElTableColumn prop="modelName" :label="$tr('模型名称')" min-width="160" show-overflow-tooltip>
         <template #default="{ row }">
           <ElButton link type="primary" @click="openEdit(row)">
             {{ row.modelName }}
           </ElButton>
         </template>
       </ElTableColumn>
-      <ElTableColumn prop="modelPath" label="模型路径" min-width="160" show-overflow-tooltip />
-      <ElTableColumn prop="orderNum" label="排序" width="80" align="center" />
-      <ElTableColumn label="全站模型" width="100" align="center">
+      <ElTableColumn prop="modelPath" :label="$tr('模型路径')" min-width="160" show-overflow-tooltip />
+      <ElTableColumn prop="orderNum" :label="$tr('排序')" width="80" align="center" />
+      <ElTableColumn :label="$tr('全站模型')" width="100" align="center">
         <template #default="{ row }">
           <ElSwitch
             v-model="row.globalModel"
@@ -163,10 +163,10 @@ onMounted(fetchData);
           />
         </template>
       </ElTableColumn>
-      <ElTableColumn label="操作" width="140" fixed="right" align="center">
+      <ElTableColumn :label="$tr('操作')" width="140" fixed="right" align="center">
         <template #default="{ row }">
-          <ElButton link type="primary" @click="openEdit(row)">编辑</ElButton>
-          <ElButton link type="danger" @click="handleDelete(row)">删除</ElButton>
+          <ElButton link type="primary" @click="openEdit(row)">{{ $tr('编辑') }}</ElButton>
+          <ElButton link type="danger" @click="handleDelete(row)">{{ $tr('删除') }}</ElButton>
         </template>
       </ElTableColumn>
     </ElTable>
@@ -195,23 +195,23 @@ onMounted(fetchData);
       destroy-on-close
     >
       <ElForm label-width="100px">
-        <ElFormItem label="模型名称" required>
+        <ElFormItem :label="$tr('模型名称')" required>
           <ElInput v-model="form.modelName" maxlength="50" />
         </ElFormItem>
-        <ElFormItem label="模型路径">
-          <ElInput v-model="form.modelPath" maxlength="50" placeholder="模板文件名" />
+        <ElFormItem :label="$tr('模型路径')">
+          <ElInput v-model="form.modelPath" maxlength="50" :placeholder="$tr('模板文件名')" />
         </ElFormItem>
-        <ElFormItem label="排序">
+        <ElFormItem :label="$tr('排序')">
           <ElInputNumber v-model="form.orderNum" :min="0" :max="999" />
         </ElFormItem>
-        <ElFormItem label="全站模型">
+        <ElFormItem :label="$tr('全站模型')">
           <ElSwitch v-model="form.globalModel" :active-value="1" :inactive-value="0" />
         </ElFormItem>
       </ElForm>
       <template #footer>
-        <ElButton @click="dialogVisible = false">取消</ElButton>
+        <ElButton @click="dialogVisible = false">{{ $tr('取消') }}</ElButton>
         <ElButton type="primary" :loading="dialogLoading" @click="handleSave">
-          保存
+          {{ $tr('保存') }}
         </ElButton>
       </template>
     </ElDialog>

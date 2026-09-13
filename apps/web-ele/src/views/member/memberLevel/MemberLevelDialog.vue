@@ -121,23 +121,23 @@
       :rules="rules"
       size="large"
     >
-      <el-form-item label="等级名称" prop="levelName">
+      <el-form-item :label="$tr('等级名称')" prop="levelName">
         <el-input
           v-model="form.levelName"
           maxlength="50"
-          placeholder="请输入等级名称"
+          :placeholder="$tr('请输入等级名称')"
         />
       </el-form-item>
-      <el-form-item label="等级权重" prop="level">
+      <el-form-item :label="$tr('等级权重')" prop="level">
         <template #label>
-          <el-tooltip content="数值越大权重越高" placement="top">
+          <el-tooltip :content="$tr('数值越大权重越高')" placement="top">
             <el-icon style="height: 100%"><InfoFilled /></el-icon>
           </el-tooltip>
-          等级权重
+          {{ $tr('等级权重') }}
         </template>
         <el-select
           v-model="form.level"
-          placeholder="请选择权重"
+          :placeholder="$tr('请选择权重')"
           style="width: 100%"
         >
           <el-option
@@ -148,7 +148,7 @@
           />
         </el-select>
       </el-form-item>
-      <el-form-item label="所需积分" prop="minIntegral">
+      <el-form-item :label="$tr('所需积分')" prop="minIntegral">
         <div class="integral-range">
           <el-input-number
             v-model="form.minIntegral"
@@ -167,15 +167,15 @@
           />
         </div>
       </el-form-item>
-      <el-form-item label="等级权益" prop="discount">
+      <el-form-item :label="$tr('等级权益')" prop="discount">
         <template #label>
           <el-tooltip
-            content="折扣率范围0.0-9.9，例如: 9.8代表98折，0代表不折扣"
+            :content="$tr('折扣率范围0.0-9.9，例如: 9.8代表98折，0代表不折扣')"
             placement="top"
           >
             <el-icon style="height: 100%"><InfoFilled /></el-icon>
           </el-tooltip>
-          等级权益
+          {{ $tr('等级权益') }}
         </template>
         <el-input-number
           v-model="form.discount"
@@ -186,51 +186,51 @@
           style="width: 100%"
         />
       </el-form-item>
-      <el-form-item label="月费价格" prop="monthPrice">
+      <el-form-item :label="$tr('月费价格')" prop="monthPrice">
         <el-input-number
           v-model="form.monthPrice"
           :precision="2"
           :step="0.01"
           :max="999999"
           :min="0"
-          placeholder="请输入月费价格"
+          :placeholder="$tr('请输入月费价格')"
           style="width: 100%"
         />
       </el-form-item>
-      <el-form-item label="季费价格" prop="quarterPrice">
+      <el-form-item :label="$tr('季费价格')" prop="quarterPrice">
         <el-input-number
           v-model="form.quarterPrice"
           :precision="2"
           :step="0.01"
           :max="999999"
           :min="0"
-          placeholder="请输入季费价格"
+          :placeholder="$tr('请输入季费价格')"
           style="width: 100%"
         />
       </el-form-item>
-      <el-form-item label="半年费价格" prop="halfYearPrice">
+      <el-form-item :label="$tr('半年费价格')" prop="halfYearPrice">
         <el-input-number
           v-model="form.halfYearPrice"
           :precision="2"
           :step="0.01"
           :max="999999"
           :min="0"
-          placeholder="请输入半年费价格"
+          :placeholder="$tr('请输入半年费价格')"
           style="width: 100%"
         />
       </el-form-item>
-      <el-form-item label="年费价格" prop="yearPrice">
+      <el-form-item :label="$tr('年费价格')" prop="yearPrice">
         <el-input-number
           v-model="form.yearPrice"
           :precision="2"
           :step="0.01"
           :max="999999"
           :min="0"
-          placeholder="请输入年费价格"
+          :placeholder="$tr('请输入年费价格')"
           style="width: 100%"
         />
       </el-form-item>
-      <el-form-item label="排序" prop="orderNum">
+      <el-form-item :label="$tr('排序')" prop="orderNum">
         <el-input-number
           v-model="form.orderNum"
           :step="1"
@@ -238,16 +238,16 @@
           style="width: 100%"
         />
       </el-form-item>
-      <el-form-item label="备注" prop="remark">
+      <el-form-item :label="$tr('备注')" prop="remark">
         <el-input
           v-model="form.remark"
           type="textarea"
           :maxlength="500"
-          placeholder="请输入备注"
+          :placeholder="$tr('请输入备注')"
           :autosize="{ minRows: 4, maxRows: 4 }"
         />
       </el-form-item>
-      <el-form-item label="状态" prop="dataStatus">
+      <el-form-item :label="$tr('状态')" prop="dataStatus">
         <el-radio-group v-model="form.dataStatus">
           <el-radio
             v-for="item in dataStatusOptions"
@@ -261,8 +261,8 @@
       </el-form-item>
     </el-form>
     <template #footer>
-      <el-button @click="close">取 消</el-button>
-      <el-button type="primary" @click="save">确 定</el-button>
+      <el-button @click="close">{{ $tr('取 消') }}</el-button>
+      <el-button type="primary" @click="save">{{ $tr('确 定') }}</el-button>
     </template>
   </el-dialog>
 </template>

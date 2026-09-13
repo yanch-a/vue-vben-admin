@@ -193,7 +193,7 @@
   <div class="order-management-container">
     <vab-query-form>
       <vab-query-form-left-panel :span="4">
-        <el-button :icon="Refresh" @click="fetchData">刷新</el-button>
+        <el-button :icon="Refresh" @click="fetchData">{{ $tr('刷新') }}</el-button>
       </vab-query-form-left-panel>
       <vab-query-form-right-panel :span="20">
         <el-form inline :model="queryForm" @submit.prevent>
@@ -201,57 +201,57 @@
             <el-input
               v-model.trim="queryForm.orderNo"
               clearable
-              placeholder="请输入订单号"
+              :placeholder="$tr('请输入订单号')"
             />
           </el-form-item>
           <el-form-item>
             <el-input
               v-model.trim="queryForm.memberUserId"
               clearable
-              placeholder="会员用户ID"
+              :placeholder="$tr('会员用户ID')"
             />
           </el-form-item>
           <el-form-item>
             <el-select
               v-model="queryForm.orderType"
               clearable
-              placeholder="订单类型"
+              :placeholder="$tr('订单类型')"
             >
-              <el-option label="全部" :value="null" />
-              <el-option label="会员套餐" :value="1" />
-              <el-option label="单次接口" :value="2" />
+              <el-option :label="$tr('全部')" :value="null" />
+              <el-option :label="$tr('会员套餐')" :value="1" />
+              <el-option :label="$tr('单次接口')" :value="2" />
             </el-select>
           </el-form-item>
           <el-form-item>
             <el-select
               v-model="queryForm.orderStatus"
               clearable
-              placeholder="订单状态"
+              :placeholder="$tr('订单状态')"
             >
-              <el-option label="全部" :value="null" />
-              <el-option label="待支付" :value="1" />
-              <el-option label="已支付" :value="2" />
-              <el-option label="已取消" :value="3" />
-              <el-option label="已退款" :value="4" />
-              <el-option label="已过期" :value="5" />
+              <el-option :label="$tr('全部')" :value="null" />
+              <el-option :label="$tr('待支付')" :value="1" />
+              <el-option :label="$tr('已支付')" :value="2" />
+              <el-option :label="$tr('已取消')" :value="3" />
+              <el-option :label="$tr('已退款')" :value="4" />
+              <el-option :label="$tr('已过期')" :value="5" />
             </el-select>
           </el-form-item>
           <el-form-item>
             <el-select
               v-model="queryForm.payStatus"
               clearable
-              placeholder="支付状态"
+              :placeholder="$tr('支付状态')"
             >
-              <el-option label="全部" :value="null" />
-              <el-option label="未支付" :value="0" />
-              <el-option label="支付中" :value="1" />
-              <el-option label="支付成功" :value="2" />
-              <el-option label="支付失败" :value="3" />
+              <el-option :label="$tr('全部')" :value="null" />
+              <el-option :label="$tr('未支付')" :value="0" />
+              <el-option :label="$tr('支付中')" :value="1" />
+              <el-option :label="$tr('支付成功')" :value="2" />
+              <el-option :label="$tr('支付失败')" :value="3" />
             </el-select>
           </el-form-item>
           <el-form-item>
             <el-button :icon="Search" type="primary" @click="queryData">
-              查询
+              {{ $tr('查询') }}
             </el-button>
           </el-form-item>
         </el-form>
@@ -266,7 +266,7 @@
     >
       <el-table-column
         align="center"
-        label="订单号"
+        :label="$tr('订单号')"
         prop="orderNo"
         width="180"
         show-overflow-tooltip
@@ -279,7 +279,7 @@
       </el-table-column>
       <el-table-column
         align="center"
-        label="订单类型"
+        :label="$tr('订单类型')"
         prop="orderType"
         width="100"
       >
@@ -291,13 +291,13 @@
       </el-table-column>
       <el-table-column
         align="center"
-        label="订单描述"
+        :label="$tr('订单描述')"
         prop="orderDesc"
         show-overflow-tooltip
       />
       <el-table-column
         align="center"
-        label="订单金额"
+        :label="$tr('订单金额')"
         prop="orderAmount"
         width="100"
       >
@@ -307,7 +307,7 @@
       </el-table-column>
       <el-table-column
         align="center"
-        label="实付金额"
+        :label="$tr('实付金额')"
         prop="actualAmount"
         width="100"
       >
@@ -317,7 +317,7 @@
       </el-table-column>
       <el-table-column
         align="center"
-        label="订单状态"
+        :label="$tr('订单状态')"
         prop="orderStatus"
         width="100"
       >
@@ -329,7 +329,7 @@
       </el-table-column>
       <el-table-column
         align="center"
-        label="支付状态"
+        :label="$tr('支付状态')"
         prop="payStatus"
         width="100"
       >
@@ -341,26 +341,26 @@
       </el-table-column>
       <el-table-column
         align="center"
-        label="会员ID"
+        :label="$tr('会员ID')"
         prop="memberUserId"
         width="160"
         show-overflow-tooltip
       />
       <el-table-column
         align="center"
-        label="创建时间"
+        :label="$tr('创建时间')"
         prop="createTime"
         width="160"
         show-overflow-tooltip
       />
       <el-table-column
         align="center"
-        label="支付时间"
+        :label="$tr('支付时间')"
         prop="payTime"
         width="160"
         show-overflow-tooltip
       />
-      <el-table-column align="center" label="操作" width="150" fixed="right">
+      <el-table-column align="center" :label="$tr('操作')" width="150" fixed="right">
         <template #default="{ row }">
           <el-button
             :icon="View"
@@ -380,7 +380,7 @@
         </template>
       </el-table-column>
       <template #empty>
-        <el-empty class="vab-data-empty" description="暂无数据" />
+        <el-empty class="vab-data-empty" :description="$tr('暂无数据')" />
       </template>
     </el-table>
 

@@ -19,7 +19,7 @@ function onCtx(e: MouseEvent) {
 <template>
   <div v-if="state.visible && state.minimized" class="ai-dock">
     <button class="pill" @click="restore" @contextmenu="onCtx">
-      AI 助手
+      {{ $tr('AI 助手') }}
     </button>
   </div>
 </template>

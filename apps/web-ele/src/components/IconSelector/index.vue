@@ -195,7 +195,7 @@ function cellName(icon: string) {
     <ElInput
       :model-value="modelValue"
       clearable
-      placeholder="点击选择图标（支持原 Remix / 多图标库）"
+      :placeholder="$tr('点击选择图标（支持原 Remix / 多图标库）')"
       readonly
       @clear="clear"
       @click="open"
@@ -204,7 +204,7 @@ function cellName(icon: string) {
         <IconifyIcon :icon="displayIcon" class="icon-preview" />
       </template>
       <template #append>
-        <ElButton @click="open">选择</ElButton>
+        <ElButton @click="open">{{ $tr('选择') }}</ElButton>
       </template>
     </ElInput>
 
@@ -212,7 +212,7 @@ function cellName(icon: string) {
       v-model="visible"
       append-to-body
       destroy-on-close
-      title="选择图标"
+      :title="$tr('选择图标')"
       width="860px"
       :z-index="5000"
     >
@@ -251,10 +251,10 @@ function cellName(icon: string) {
       </div>
 
       <div class="hint">
-        当前：<b>{{ activeLib.label }}</b>
-        <template v-if="activeLib.offline">（本地内置，无需联网，与旧系统一致）</template>
-        <template v-else-if="activeLib.group === 'color'">（彩色图标）</template>
-        <template v-else>（需访问 Iconify，失败请用 Remix）</template>
+        {{ $tr('当前：') }}<b>{{ activeLib.label }}</b>
+        <template v-if="activeLib.offline">{{ $tr('（本地内置，无需联网，与旧系统一致）') }}</template>
+        <template v-else-if="activeLib.group === 'color'">{{ $tr('（彩色图标）') }}</template>
+        <template v-else>{{ $tr('（需访问 Iconify，失败请用 Remix）') }}</template>
       </div>
 
       <div v-loading="loading" class="icon-grid">
@@ -276,7 +276,7 @@ function cellName(icon: string) {
           <span class="icon-cell__name">{{ cellName(item) }}</span>
         </button>
         <div v-if="!loading && paged.length === 0" class="empty">
-          暂无图标
+          {{ $tr('暂无图标') }}
         </div>
       </div>
 

@@ -9,6 +9,7 @@ interface LemonDesktopBridge {
   getActiveServer: () => Promise<DesktopServer | null>;
   openServerSelector: () => Promise<void>;
   setAuthenticated: (authenticated: boolean) => Promise<void>;
+  setLocale: (locale: 'en-US' | 'zh-CN') => Promise<void>;
 }
 
 /** 当前由 Electron 主进程选中的服务端。 */
@@ -87,5 +88,15 @@ export async function setDesktopAuthenticated(
   } catch (error) {
     // 登录流程不能因客户端状态标记写入失败而中断。
     console.warn('[desktop] 登录状态同步失败', error);
+  }
+}
+
+/** 将右上角选择的语言同步给 Electron 原生菜单和服务端选择窗口。 */
+export async function setDesktopLocale(locale: 'en-US' | 'zh-CN'): Promise<void> {
+  try {
+    await window.lemonDesktop?.setLocale(locale);
+  } catch (error) {
+    // Web 端不存在该桥接；桌面菜单同步失败也不应阻断页面语言切换。
+    console.warn('[desktop] 语言同步失败', error);
   }
 }

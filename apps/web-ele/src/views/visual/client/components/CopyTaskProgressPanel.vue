@@ -63,16 +63,16 @@ const errors = computed(() => props.task?.errors || []);
 <template>
   <ElDialog
     v-model="visible"
-    title="复制任务进度"
+    :title="$tr('复制任务进度')"
     width="560px"
     append-to-body
     :close-on-click-modal="false"
     @close="emit('hide')"
   >
-    <div v-if="!task" class="empty">暂无任务</div>
+    <div v-if="!task" class="empty">{{ $tr('暂无任务') }}</div>
     <template v-else>
       <div v-if="tasks && tasks.length > 1" class="task-switch">
-        <span class="label">任务</span>
+        <span class="label">{{ $tr('任务') }}</span>
         <ElSelect
           :model-value="task.taskId"
           style="flex: 1"
@@ -91,7 +91,7 @@ const errors = computed(() => props.task?.errors || []);
         <div>
           {{ task.sourceInstance }} → {{ task.targetInstance }}
         </div>
-        <div class="status">状态：{{ statusText }}</div>
+        <div class="status">{{ $tr('状态：') }}{{ statusText }}</div>
       </div>
 
       <ElProgress
@@ -108,21 +108,21 @@ const errors = computed(() => props.task?.errors || []);
       />
 
       <div class="detail">
-        <div>表进度：{{ task.processedObjects }} / {{ task.totalObjects }}</div>
+        <div>{{ $tr('表进度：') }}{{ task.processedObjects }} / {{ task.totalObjects }}</div>
         <div v-if="task.currentObject">
-          当前：{{ task.currentObject }}
-          <span v-if="task.currentTableRows">（本表 {{ task.currentTableRows }} 行）</span>
+          {{ $tr('当前：') }}{{ task.currentObject }}
+          <span v-if="task.currentTableRows">{{ $tr('（本表') }} {{ task.currentTableRows }} {{ $tr('行）') }}</span>
         </div>
         <div>
-          成功 {{ task.successCount || 0 }}，失败 {{ task.failedCount || 0 }}，已写入
-          {{ task.copiedRows || 0 }} 行
+          {{ $tr('成功') }} {{ task.successCount || 0 }}{{ $tr('，失败') }} {{ task.failedCount || 0 }}{{ $tr('，已写入') }}
+          {{ task.copiedRows || 0 }} {{ $tr('行') }}
         </div>
-        <div v-if="task.truncated" class="trunc">部分表因行数上限被截断</div>
+        <div v-if="task.truncated" class="trunc">{{ $tr('部分表因行数上限被截断') }}</div>
         <div v-if="task.message" class="msg">{{ task.message }}</div>
       </div>
 
       <div v-if="errors.length" class="errors">
-        <div class="err-title">异常（最多显示 1000 条）</div>
+        <div class="err-title">{{ $tr('异常（最多显示 1000 条）') }}</div>
         <ElScrollbar max-height="160px">
           <div v-for="(e, i) in errors" :key="i" class="err-item">
             <strong>{{ e.objectName }}</strong>
@@ -135,9 +135,9 @@ const errors = computed(() => props.task?.errors || []);
 
     <template #footer>
       <ElButton v-if="canCancel" type="danger" plain @click="emit('cancel')">
-        取消任务
+        {{ $tr('取消任务') }}
       </ElButton>
-      <ElButton @click="emit('hide'); visible = false">隐藏</ElButton>
+      <ElButton @click="emit('hide'); visible = false">{{ $tr('隐藏') }}</ElButton>
     </template>
   </ElDialog>
 </template>

@@ -408,10 +408,10 @@ onBeforeUnmount(() => {
         />
         <strong>{{ branding.accountMark || 'lemonDbClient' }}</strong>
       </div>
-      <p class="lemon-login__hello">{{ branding.welcome || '欢迎回来' }}</p>
-      <h1 class="lemon-login__title">登录数据工作台</h1>
+      <p class="lemon-login__hello">{{ $tr(branding.welcome || '欢迎回来') }}</p>
+      <h1 class="lemon-login__title">{{ $tr('登录数据工作台') }}</h1>
       <p class="lemon-login__hint">
-        {{ loginType === 'admin' ? '管理员账号进入系统配置' : '会员账号进入查询与智能体' }}
+        {{ $tr(loginType === 'admin' ? '管理员账号进入系统配置' : '会员账号进入查询与智能体') }}
       </p>
 
       <div class="lemon-login__tabs" role="tablist">
@@ -420,14 +420,14 @@ onBeforeUnmount(() => {
           :class="{ active: loginType === 'member' }"
           @click="switchLoginType('member')"
         >
-          会员
+          {{ $tr('会员') }}
         </button>
         <button
           type="button"
           :class="{ active: loginType === 'admin' }"
           @click="switchLoginType('admin')"
         >
-          管理员
+          {{ $tr('管理员') }}
         </button>
       </div>
 
@@ -437,21 +437,21 @@ onBeforeUnmount(() => {
           :class="{ active: authMode === 'password' }"
           @click="switchAuthMode('password')"
         >
-          密码
+          {{ $tr('密码') }}
         </button>
         <button
           type="button"
           :class="{ active: authMode === 'sms' }"
           @click="switchAuthMode('sms')"
         >
-          验证码
+          {{ $tr('验证码') }}
         </button>
         <button
           type="button"
           :class="{ active: authMode === 'wechat' }"
           @click="switchAuthMode('wechat')"
         >
-          微信
+          {{ $tr('微信') }}
         </button>
       </div>
 
@@ -462,16 +462,16 @@ onBeforeUnmount(() => {
         <div v-if="wxScanError" class="error">
           <p>{{ wxScanError }}</p>
           <ElButton type="primary" link @click="initWxScanLogin">
-            重新获取
+            {{ $tr('重新获取') }}
           </ElButton>
         </div>
         <template v-else>
           <div class="qrcode-wrap">
-            <div v-if="wxScanLoading" class="loading">二维码加载中...</div>
+            <div v-if="wxScanLoading" class="loading">{{ $tr('二维码加载中...') }}</div>
             <div :id="WX_LOGIN_CONTAINER_ID" class="qrcode-box"></div>
           </div>
           <ElButton type="primary" link @click="initWxScanLogin">
-            刷新二维码
+            {{ $tr('刷新二维码') }}
           </ElButton>
         </template>
       </div>
@@ -488,7 +488,7 @@ onBeforeUnmount(() => {
           <ElFormItem prop="username">
             <ElInput
               v-model.trim="form.username"
-              placeholder="请输入用户名"
+              :placeholder="$tr('请输入用户名')"
               clearable
             />
           </ElFormItem>
@@ -496,7 +496,7 @@ onBeforeUnmount(() => {
             <ElInput
               v-model.trim="form.password"
               :type="passwordVisible ? 'text' : 'password'"
-              placeholder="请输入密码"
+              :placeholder="$tr('请输入密码')"
               clearable
               show-password
             />
@@ -508,7 +508,7 @@ onBeforeUnmount(() => {
             <ElInput
               v-model.trim="form.smsPhone"
               maxlength="11"
-              placeholder="请输入手机号"
+              :placeholder="$tr('请输入手机号')"
               clearable
             />
           </ElFormItem>
@@ -517,14 +517,14 @@ onBeforeUnmount(() => {
               <ElInput
                 v-model.trim="form.smsCode"
                 maxlength="6"
-                placeholder="请输入验证码"
+                :placeholder="$tr('请输入验证码')"
               />
               <ElButton
                 :disabled="smsCountdown > 0"
                 :loading="sendCodeLoading"
                 @click="handleSendSmsCode"
               >
-                {{ smsCountdown > 0 ? `${smsCountdown}s` : '获取验证码' }}
+                {{ smsCountdown > 0 ? `${smsCountdown}s` : $tr('获取验证码') }}
               </ElButton>
             </div>
           </ElFormItem>
@@ -535,16 +535,16 @@ onBeforeUnmount(() => {
           class="lemon-login__extra"
         >
           <ElButton type="primary" link @click="forgotDialogVisible = true">
-            忘记密码？
+            {{ $tr('忘记密码？') }}
           </ElButton>
         </div>
 
         <div class="privacy">
           <ElCheckbox v-model="privacyAgreed">
-            我已阅读并同意
-            <a @click.prevent="showPolicyDialog('privacy_policy')">隐私政策</a>
-            与
-            <a @click.prevent="showPolicyDialog('user_agreement')">用户协议</a>
+            {{ $tr('我已阅读并同意') }}
+            <a @click.prevent="showPolicyDialog('privacy_policy')">{{ $tr('隐私政策') }}</a>
+            {{ $tr('与') }}
+            <a @click.prevent="showPolicyDialog('user_agreement')">{{ $tr('用户协议') }}</a>
           </ElCheckbox>
         </div>
 
@@ -554,7 +554,7 @@ onBeforeUnmount(() => {
           :loading="loading || authStore.loginLoading"
           @click="handleLogin"
         >
-          进入工作台
+          {{ $tr('进入工作台') }}
         </ElButton>
       </ElForm>
     </div>
@@ -569,7 +569,7 @@ onBeforeUnmount(() => {
 
     <ElDialog
       v-model="forgotDialogVisible"
-      title="找回密码"
+      :title="$tr('找回密码')"
       width="420px"
       destroy-on-close
     >
@@ -579,10 +579,10 @@ onBeforeUnmount(() => {
         :rules="forgotRules"
         label-position="top"
       >
-        <ElFormItem label="手机号" prop="phoneNumber">
+        <ElFormItem :label="$tr('手机号')" prop="phoneNumber">
           <ElInput v-model.trim="forgotForm.phoneNumber" maxlength="11" />
         </ElFormItem>
-        <ElFormItem label="验证码" prop="code">
+        <ElFormItem :label="$tr('验证码')" prop="code">
           <div class="sms-row">
             <ElInput v-model.trim="forgotForm.code" maxlength="6" />
             <ElButton
@@ -590,18 +590,22 @@ onBeforeUnmount(() => {
               :loading="forgotSendCodeLoading"
               @click="handleSendForgotCode"
             >
-              {{ forgotCountdown > 0 ? `${forgotCountdown}s` : '获取验证码' }}
+              {{
+                forgotCountdown > 0
+                  ? `${forgotCountdown}s`
+                  : $tr('获取验证码')
+              }}
             </ElButton>
           </div>
         </ElFormItem>
-        <ElFormItem label="新密码" prop="newPassword">
+        <ElFormItem :label="$tr('新密码')" prop="newPassword">
           <ElInput
             v-model.trim="forgotForm.newPassword"
             type="password"
             show-password
           />
         </ElFormItem>
-        <ElFormItem label="确认密码" prop="confirmPassword">
+        <ElFormItem :label="$tr('确认密码')" prop="confirmPassword">
           <ElInput
             v-model.trim="forgotForm.confirmPassword"
             type="password"
@@ -610,13 +614,13 @@ onBeforeUnmount(() => {
         </ElFormItem>
       </ElForm>
       <template #footer>
-        <ElButton @click="forgotDialogVisible = false">取消</ElButton>
+        <ElButton @click="forgotDialogVisible = false">{{ $tr('取消') }}</ElButton>
         <ElButton
           type="primary"
           :loading="forgotSubmitting"
           @click="handleForgotSubmit"
         >
-          重置密码
+          {{ $tr('重置密码') }}
         </ElButton>
       </template>
     </ElDialog>

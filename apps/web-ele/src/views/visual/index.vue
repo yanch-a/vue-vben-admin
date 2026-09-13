@@ -15,6 +15,6 @@ onMounted(() => {
 
 <template>
   <div class="p-6 text-sm text-[var(--el-text-color-secondary)]">
-    正在进入数据库客户端…
+    {{ $tr('正在进入数据库客户端…') }}
   </div>
 </template>

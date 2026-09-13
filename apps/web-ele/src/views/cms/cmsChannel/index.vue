@@ -152,12 +152,12 @@ onMounted(async () => {
 </script>
 
 <template>
-  <Page auto-content-height title="栏目管理">
+  <Page auto-content-height :title="$tr('栏目管理')">
     <template #extra>
       <ElSelect
         v-model="siteId"
         class="mr-2 w-48"
-        placeholder="选择站点"
+        :placeholder="$tr('选择站点')"
         @change="onSiteChange"
       >
         <ElOption
@@ -167,8 +167,8 @@ onMounted(async () => {
           :value="item.id"
         />
       </ElSelect>
-      <ElButton type="primary" @click="openEdit()">新增栏目</ElButton>
-      <ElButton @click="loadTree">刷新</ElButton>
+      <ElButton type="primary" @click="openEdit()">{{ $tr('新增栏目') }}</ElButton>
+      <ElButton @click="loadTree">{{ $tr('刷新') }}</ElButton>
     </template>
 
     <ElTable
@@ -181,7 +181,7 @@ onMounted(async () => {
     >
       <ElTableColumn
         prop="channelName"
-        label="栏目名称"
+        :label="$tr('栏目名称')"
         min-width="200"
         show-overflow-tooltip
       >
@@ -189,18 +189,18 @@ onMounted(async () => {
           {{ row.channelName || row.label }}
         </template>
       </ElTableColumn>
-      <ElTableColumn prop="channelPath" label="栏目路径" min-width="140" show-overflow-tooltip />
-      <ElTableColumn prop="modelId" label="模型ID" width="90" align="center" />
-      <ElTableColumn prop="orderNum" label="排序" width="80" align="center" />
-      <ElTableColumn label="显示" width="80" align="center">
+      <ElTableColumn prop="channelPath" :label="$tr('栏目路径')" min-width="140" show-overflow-tooltip />
+      <ElTableColumn prop="modelId" :label="$tr('模型ID')" width="90" align="center" />
+      <ElTableColumn prop="orderNum" :label="$tr('排序')" width="80" align="center" />
+      <ElTableColumn :label="$tr('显示')" width="80" align="center">
         <template #default="{ row }">
-          {{ row.display === 1 ? '是' : '否' }}
+          {{ $tr(row.display === 1 ? '是' : '否') }}
         </template>
       </ElTableColumn>
-      <ElTableColumn label="操作" width="220" fixed="right" align="center">
+      <ElTableColumn :label="$tr('操作')" width="220" fixed="right" align="center">
         <template #default="{ row }">
           <ElButton link type="primary" @click="openEdit(undefined, row)">
-            新增子级
+            {{ $tr('新增子级') }}
           </ElButton>
           <ElButton
             v-if="row.id !== 'root'"
@@ -208,7 +208,7 @@ onMounted(async () => {
             type="primary"
             @click="openEdit(row)"
           >
-            编辑
+            {{ $tr('编辑') }}
           </ElButton>
           <ElButton
             v-if="row.id !== 'root'"
@@ -216,7 +216,7 @@ onMounted(async () => {
             type="danger"
             @click="handleDelete(row)"
           >
-            删除
+            {{ $tr('删除') }}
           </ElButton>
         </template>
       </ElTableColumn>
@@ -229,17 +229,17 @@ onMounted(async () => {
       destroy-on-close
     >
       <ElForm label-width="100px">
-        <ElFormItem label="上级栏目ID">
+        <ElFormItem :label="$tr('上级栏目ID')">
           <ElInputNumber v-model="form.parentId" :min="0" class="w-full" />
         </ElFormItem>
-        <ElFormItem label="栏目名称" required>
+        <ElFormItem :label="$tr('栏目名称')" required>
           <ElInput v-model="form.channelName" maxlength="50" />
         </ElFormItem>
-        <ElFormItem label="栏目路径">
+        <ElFormItem :label="$tr('栏目路径')">
           <ElInput v-model="form.channelPath" maxlength="30" />
         </ElFormItem>
-        <ElFormItem label="栏目模型">
-          <ElSelect v-model="form.modelId" clearable class="w-full" placeholder="请选择模型">
+        <ElFormItem :label="$tr('栏目模型')">
+          <ElSelect v-model="form.modelId" clearable class="w-full" :placeholder="$tr('请选择模型')">
             <ElOption
               v-for="item in modelOptions"
               :key="item.id"
@@ -248,23 +248,23 @@ onMounted(async () => {
             />
           </ElSelect>
         </ElFormItem>
-        <ElFormItem label="排序">
+        <ElFormItem :label="$tr('排序')">
           <ElInputNumber v-model="form.orderNum" :min="0" :max="999" />
         </ElFormItem>
-        <ElFormItem label="显示">
+        <ElFormItem :label="$tr('显示')">
           <ElSwitch v-model="form.display" :active-value="1" :inactive-value="0" />
         </ElFormItem>
-        <ElFormItem label="外部链接">
+        <ElFormItem :label="$tr('外部链接')">
           <ElInput v-model="form.link" maxlength="100" />
         </ElFormItem>
-        <ElFormItem label="描述">
+        <ElFormItem :label="$tr('描述')">
           <ElInput v-model="form.description" type="textarea" :rows="3" maxlength="500" />
         </ElFormItem>
       </ElForm>
       <template #footer>
-        <ElButton @click="dialogVisible = false">取消</ElButton>
+        <ElButton @click="dialogVisible = false">{{ $tr('取消') }}</ElButton>
         <ElButton type="primary" :loading="dialogLoading" @click="handleSave">
-          保存
+          {{ $tr('保存') }}
         </ElButton>
       </template>
     </ElDialog>

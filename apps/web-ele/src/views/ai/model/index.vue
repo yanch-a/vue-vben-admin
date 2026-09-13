@@ -308,10 +308,10 @@ async function onSelectProvider(row: any) {
   <Page auto-content-height>
     <div class="ai-model-page">
       <div class="bar">
-        <ElButton type="primary" @click="onInitBuiltin">初始化内置厂商</ElButton>
-        <ElButton @click="openProvider()">新增厂商</ElButton>
-        <ElButton :disabled="!current" @click="onFetchRemote">从厂商拉取模型列表</ElButton>
-        <ElButton :disabled="!current" @click="onTest()">测试连通</ElButton>
+        <ElButton type="primary" @click="onInitBuiltin">{{ $tr('初始化内置厂商') }}</ElButton>
+        <ElButton @click="openProvider()">{{ $tr('新增厂商') }}</ElButton>
+        <ElButton :disabled="!current" @click="onFetchRemote">{{ $tr('从厂商拉取模型列表') }}</ElButton>
+        <ElButton :disabled="!current" @click="onTest()">{{ $tr('测试连通') }}</ElButton>
       </div>
       <div class="body">
         <aside v-loading="loading" class="left">
@@ -325,20 +325,20 @@ async function onSelectProvider(row: any) {
             <div class="card-title">
               <strong>{{ p.providerName }}</strong>
               <ElTag size="small" :type="p.enabled === 1 ? 'success' : 'info'">
-                {{ p.enabled === 1 ? '启用' : '停用' }}
+                {{ $tr(p.enabled === 1 ? '启用' : '停用') }}
               </ElTag>
             </div>
             <div class="meta">
-              {{ p.providerCode }} · {{ p.modelCount || 0 }} 个模型
+              {{ p.providerCode }} · {{ p.modelCount || 0 }} {{ $tr('个模型') }}
               <span v-if="p.hasApiKey"> · Key {{ p.apiKeyMasked }}</span>
-              <span v-else class="warn"> · 未配置 Key</span>
+              <span v-else class="warn"> {{ $tr('· 未配置 Key') }}</span>
             </div>
             <div class="ops" @click.stop>
-              <ElButton link size="small" @click="openProvider(p)">编辑</ElButton>
+              <ElButton link size="small" @click="openProvider(p)">{{ $tr('编辑') }}</ElButton>
               <ElButton link size="small" @click="toggleProvider(p)">
-                {{ p.enabled === 1 ? '停用' : '启用' }}
+                {{ $tr(p.enabled === 1 ? '停用' : '启用') }}
               </ElButton>
-              <ElButton link size="small" @click="onTest(p)">测试</ElButton>
+              <ElButton link size="small" @click="onTest(p)">{{ $tr('测试') }}</ElButton>
               <ElButton
                 v-if="p.isBuiltin !== 1"
                 link
@@ -346,49 +346,49 @@ async function onSelectProvider(row: any) {
                 type="danger"
                 @click="onDelProvider(p)"
               >
-                删除
+                {{ $tr('删除') }}
               </ElButton>
             </div>
           </div>
-          <ElEmpty v-if="!providers.length" description="暂无厂商，请先初始化或新增" />
+          <ElEmpty v-if="!providers.length" :description="$tr('暂无厂商，请先初始化或新增')" />
         </aside>
         <section class="right">
           <div class="right-bar">
-            <span>{{ current?.providerName || '请选择厂商' }}</span>
+            <span>{{ $tr(current?.providerName || '请选择厂商') }}</span>
             <ElButton size="small" type="primary" :disabled="!current" @click="openModel()">
-              新增模型
+              {{ $tr('新增模型') }}
             </ElButton>
           </div>
           <ElTable :data="models" size="small" height="100%" border>
-            <ElTableColumn prop="modelCode" label="模型编码" min-width="160" />
-            <ElTableColumn prop="displayName" label="显示名" min-width="140" />
-            <ElTableColumn label="工具调用" width="90">
-              <template #default="{ row }">{{ row.supportsTools === 1 ? '是' : '否' }}</template>
+            <ElTableColumn prop="modelCode" :label="$tr('模型编码')" min-width="160" />
+            <ElTableColumn prop="displayName" :label="$tr('显示名')" min-width="140" />
+            <ElTableColumn :label="$tr('工具调用')" width="90">
+              <template #default="{ row }">{{ $tr(row.supportsTools === 1 ? '是' : '否') }}</template>
             </ElTableColumn>
-            <ElTableColumn label="思考模型" width="90">
-              <template #default="{ row }">{{ row.supportsReasoning === 1 ? '是' : '否' }}</template>
+            <ElTableColumn :label="$tr('思考模型')" width="90">
+              <template #default="{ row }">{{ $tr(row.supportsReasoning === 1 ? '是' : '否') }}</template>
             </ElTableColumn>
-            <ElTableColumn prop="contextWindow" label="上下文" width="100" />
-            <ElTableColumn label="默认" width="70">
+            <ElTableColumn prop="contextWindow" :label="$tr('上下文')" width="100" />
+            <ElTableColumn :label="$tr('默认')" width="70">
               <template #default="{ row }">
-                <ElTag v-if="row.isDefault === 1" type="success" size="small">默认</ElTag>
+                <ElTag v-if="row.isDefault === 1" type="success" size="small">{{ $tr('默认') }}</ElTag>
               </template>
             </ElTableColumn>
-            <ElTableColumn label="启用" width="70">
-              <template #default="{ row }">{{ row.enabled === 1 ? '是' : '否' }}</template>
+            <ElTableColumn :label="$tr('启用')" width="70">
+              <template #default="{ row }">{{ $tr(row.enabled === 1 ? '是' : '否') }}</template>
             </ElTableColumn>
-            <ElTableColumn label="操作" width="220" fixed="right">
+            <ElTableColumn :label="$tr('操作')" width="220" fixed="right">
               <template #default="{ row }">
-                <ElButton link size="small" @click="openModel(row)">编辑</ElButton>
+                <ElButton link size="small" @click="openModel(row)">{{ $tr('编辑') }}</ElButton>
                 <ElButton
                   v-if="row.isDefault !== 1"
                   link
                   size="small"
                   @click="onSetDefault(row)"
                 >
-                  设为默认
+                  {{ $tr('设为默认') }}
                 </ElButton>
-                <ElButton link size="small" type="danger" @click="onDelModel(row)">删除</ElButton>
+                <ElButton link size="small" type="danger" @click="onDelModel(row)">{{ $tr('删除') }}</ElButton>
               </template>
             </ElTableColumn>
           </ElTable>
@@ -398,14 +398,14 @@ async function onSelectProvider(row: any) {
 
     <ElDialog v-model="providerDlg.visible" :title="providerDlg.form.id ? '编辑厂商' : '新增厂商'" width="560px">
       <ElForm label-width="120px">
-        <ElFormItem label="编码" required>
+        <ElFormItem :label="$tr('编码')" required>
           <ElInput
             v-model="providerDlg.form.providerCode"
             :disabled="providerDlg.form.isBuiltin === 1 || !!providerDlg.form.id"
-            placeholder="如 qwen / custom_xxx"
+            :placeholder="$tr('如 qwen / custom_xxx')"
           />
         </ElFormItem>
-        <ElFormItem label="名称" required>
+        <ElFormItem :label="$tr('名称')" required>
           <ElInput v-model="providerDlg.form.providerName" />
         </ElFormItem>
         <ElFormItem label="Base URL" required>
@@ -419,87 +419,87 @@ async function onSelectProvider(row: any) {
             :placeholder="providerDlg.form.apiKeyMasked || '留空则不修改'"
           />
         </ElFormItem>
-        <ElFormItem label="额外 Header">
+        <ElFormItem :label="$tr('额外 Header')">
           <ElInput
             v-model="providerDlg.form.extraHeaders"
             type="textarea"
             :rows="2"
-            placeholder='JSON 对象，如 {"X-Foo":"bar"}'
+            :placeholder='$tr(`JSON 对象，如 {"X-Foo":"bar"}`)'
           />
         </ElFormItem>
-        <ElFormItem label="超时(秒)">
+        <ElFormItem :label="$tr('超时(秒)')">
           <ElInputNumber v-model="providerDlg.form.timeoutSeconds" :min="10" :max="600" />
         </ElFormItem>
         <ElFormItem label="stream usage">
           <ElSwitch v-model="streamUsage" />
         </ElFormItem>
-        <ElFormItem label="启用">
+        <ElFormItem :label="$tr('启用')">
           <ElSwitch v-model="providerEnabled" />
         </ElFormItem>
-        <ElFormItem label="可见范围">
+        <ElFormItem :label="$tr('可见范围')">
           <ElRadioGroup v-model="providerDlg.form.scope">
-            <ElRadio label="USER" value="USER">仅本人</ElRadio>
-            <ElRadio label="GLOBAL" value="GLOBAL">全局（需管理员）</ElRadio>
+            <ElRadio label="USER" value="USER">{{ $tr('仅本人') }}</ElRadio>
+            <ElRadio label="GLOBAL" value="GLOBAL">{{ $tr('全局（需管理员）') }}</ElRadio>
           </ElRadioGroup>
         </ElFormItem>
-        <ElFormItem label="排序">
+        <ElFormItem :label="$tr('排序')">
           <ElInputNumber v-model="providerDlg.form.orderNum" :min="0" />
         </ElFormItem>
       </ElForm>
       <template #footer>
-        <ElButton @click="providerDlg.visible = false">取消</ElButton>
-        <ElButton type="primary" :loading="providerDlg.saving" @click="saveProviderDlg">保存</ElButton>
+        <ElButton @click="providerDlg.visible = false">{{ $tr('取消') }}</ElButton>
+        <ElButton type="primary" :loading="providerDlg.saving" @click="saveProviderDlg">{{ $tr('保存') }}</ElButton>
       </template>
     </ElDialog>
 
     <ElDialog v-model="modelDlg.visible" :title="modelDlg.form.id ? '编辑模型' : '新增模型'" width="520px">
       <ElForm label-width="120px">
-        <ElFormItem label="模型编码" required>
+        <ElFormItem :label="$tr('模型编码')" required>
           <ElInput v-model="modelDlg.form.modelCode" :disabled="!!modelDlg.form.id" />
         </ElFormItem>
-        <ElFormItem label="显示名" required>
+        <ElFormItem :label="$tr('显示名')" required>
           <ElInput v-model="modelDlg.form.displayName" />
         </ElFormItem>
-        <ElFormItem label="支持工具调用">
+        <ElFormItem :label="$tr('支持工具调用')">
           <ElSwitch v-model="modelTools" />
         </ElFormItem>
-        <ElFormItem label="思考模型">
+        <ElFormItem :label="$tr('思考模型')">
           <ElSwitch v-model="modelReasoning" />
         </ElFormItem>
-        <ElFormItem label="上下文窗口">
+        <ElFormItem :label="$tr('上下文窗口')">
           <ElInputNumber v-model="modelDlg.form.contextWindow" :min="1000" :step="1000" />
         </ElFormItem>
-        <ElFormItem label="最大输出">
+        <ElFormItem :label="$tr('最大输出')">
           <ElInputNumber v-model="modelDlg.form.maxOutputTokens" :min="256" />
         </ElFormItem>
-        <ElFormItem label="温度">
+        <ElFormItem :label="$tr('温度')">
           <ElInputNumber v-model="modelDlg.form.defaultTemperature" :min="0" :max="2" :step="0.1" />
         </ElFormItem>
-        <ElFormItem label="启用">
+        <ElFormItem :label="$tr('启用')">
           <ElSwitch v-model="modelEnabled" />
         </ElFormItem>
-        <ElFormItem label="排序">
+        <ElFormItem :label="$tr('排序')">
           <ElInputNumber v-model="modelDlg.form.orderNum" :min="0" />
         </ElFormItem>
       </ElForm>
       <template #footer>
-        <ElButton @click="modelDlg.visible = false">取消</ElButton>
-        <ElButton type="primary" :loading="modelDlg.saving" @click="saveModelDlg">保存</ElButton>
+        <ElButton @click="modelDlg.visible = false">{{ $tr('取消') }}</ElButton>
+        <ElButton type="primary" :loading="modelDlg.saving" @click="saveModelDlg">{{ $tr('保存') }}</ElButton>
       </template>
     </ElDialog>
 
-    <ElDialog v-model="remoteVisible" title="从厂商拉取模型" width="480px">
+    <ElDialog v-model="remoteVisible" :title="$tr('从厂商拉取模型')" width="480px">
       <ElCheckboxGroup v-model="remotePicked">
         <div v-for="m in remoteModels" :key="m.modelCode" class="remote-row">
           <ElCheckbox :label="m.modelCode" :value="m.modelCode" :disabled="m.exists">
             {{ m.modelCode }}
-            <ElTag v-if="m.exists" size="small" type="info">已存在</ElTag>
+            <ElTag v-if="m.exists" size="small" type="info">{{ $tr('已存在') }}</ElTag>
           </ElCheckbox>
         </div>
       </ElCheckboxGroup>
       <template #footer>
-        <ElButton @click="remoteVisible = false">取消</ElButton>
-        <ElButton type="primary" :disabled="!remotePicked.length" @click="importRemote">导入所选</ElButton>
+        <ElButton @click="remoteVisible = false">{{ $tr('取消') }}</ElButton>
+        <ElButton type="primary" :disabled="!remotePicked.length" @click="importRemote">{{ $tr('导入所选') }}</ElButton>
       </template>
     </ElDialog>
   </Page>

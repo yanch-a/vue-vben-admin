@@ -1052,22 +1052,22 @@ export default defineComponent({
         <el-button-group>
           <el-button type="primary" @click="handleTestConnection">
             <vab-icon icon="donut-chart-line" />
-            测试连接
+            {{ $tr('测试连接') }}
           </el-button>
           <el-button type="primary" @click="handleRefresh">
             <vab-icon icon="refresh-line" />
-            刷新表
+            {{ $tr('刷新表') }}
           </el-button>
         </el-button-group>
         <el-button type="success" style="margin-left: 8px" @click="handleGoQueryView">
           <vab-icon icon="eye-line" />
-          查询视图
+          {{ $tr('查询视图') }}
         </el-button>
       </div>
       <div class="right">
         <el-button @click="handleBack">
           <vab-icon icon="arrow-left-line" />
-          返回
+          {{ $tr('返回') }}
         </el-button>
       </div>
     </div>
@@ -1079,24 +1079,24 @@ export default defineComponent({
         <el-card class="box-card el-card-padding-0">
           <el-tabs v-model="leftActiveTab" tab-position="top" class="left-tabs">
             <!-- 分组管理（默认） -->
-            <el-tab-pane label="分组" name="groups">
+            <el-tab-pane :label="$tr('分组')" name="groups">
               <div class="group-container">
                 <div class="tab-content" style="height: 400px;">
                   <div class="card-header">
                     <el-button type="primary" link @click="handleAddGroup">
                       <vab-icon icon="add-line" />
-                      新增分组
+                      {{ $tr('新增分组') }}
                     </el-button>
                     <el-tooltip
                       effect="dark"
-                      content="分组可跨多个数据库实例混入表；默认浏览库用于选中分组时自动切库"
+                      :content="$tr('分组可跨多个数据库实例混入表；默认浏览库用于选中分组时自动切库')"
                       placement="top"
                     >
                       <vab-icon icon="information-line" class="info-icon" />
                     </el-tooltip>
                   </div>
                   <el-alert
-                    title="先选分组，再切库勾选表/字段即可自动写入分组；可点「查询视图」用该分组配查询"
+                    :title="$tr('先选分组，再切库勾选表/字段即可自动写入分组；可点「查询视图」用该分组配查询')"
                     type="info"
                     :closable="false"
                     show-icon
@@ -1120,7 +1120,7 @@ export default defineComponent({
                               {{ data.schemaName }}
                             </el-tag>
                             <el-tag v-if="data.isPublic === 0" size="small" type="warning" class="schema-tag">
-                              私有
+                              {{ $tr('私有') }}
                             </el-tag>
                           </span>
                           <span class="actions">
@@ -1134,7 +1134,7 @@ export default defineComponent({
                         </div>
                       </template>
                     </el-tree>
-                    <el-empty v-if="groupList.length === 0" description="暂无分组，请先新增" :image-size="60" />
+                    <el-empty v-if="groupList.length === 0" :description="$tr('暂无分组，请先新增')" :image-size="60" />
                   </div>
                 </div>
 
@@ -1142,9 +1142,9 @@ export default defineComponent({
                   <h4>
                     {{ selectedGroup.groupName }}
                     <el-tag v-if="selectedGroup.schemaName" size="small" type="warning" style="margin-left: 6px;">
-                      默认：{{ selectedGroup.schemaName }}
+                      {{ $tr('默认：') }}{{ selectedGroup.schemaName }}
                     </el-tag>
-                    <small>已选项（可含多库）</small>
+                    <small>{{ $tr('已选项（可含多库）') }}</small>
                   </h4>
                   <el-tree
                     :data="groupSelectedTables"
@@ -1172,26 +1172,26 @@ export default defineComponent({
                           size="small"
                           class="delete-btn"
                           @click.stop="handleRemoveFromGroup(data, node)"
-                          title="移除"
+                          :title="$tr('移除')"
                         >
                           <vab-icon icon="delete-bin-line" />
                         </el-button>
                       </div>
                     </template>
                   </el-tree>
-                  <el-empty v-if="groupSelectedTables.length === 0" description="暂无数据" />
+                  <el-empty v-if="groupSelectedTables.length === 0" :description="$tr('暂无数据')" />
                 </div>
-                <el-empty v-else description="请选择一个分组" style="margin-top: 20px;" />
+                <el-empty v-else :description="$tr('请选择一个分组')" style="margin-top: 20px;" />
               </div>
             </el-tab-pane>
 
             <!-- 数据库实例（浏览/切换源库） -->
-            <el-tab-pane label="数据库" name="database">
+            <el-tab-pane :label="$tr('数据库')" name="database">
               <div class="tab-content">
                 <div class="card-header">
                   <el-input
                     v-model="dbSearchKeyword"
-                    placeholder="搜索数据库"
+                    :placeholder="$tr('搜索数据库')"
                     clearable
                     style="width: 100%"
                   >
@@ -1202,15 +1202,15 @@ export default defineComponent({
                 </div>
                 <div class="tip-container">
                   <div class="tip-header" @click="toggleTipVisible">
-                    <span>操作提示</span>
+                    <span>{{ $tr('操作提示') }}</span>
                     <vab-icon :icon="tipVisible ? 'arrow-up-s-line' : 'arrow-down-s-line'" />
                   </div>
                   <el-collapse-transition>
                     <div v-show="tipVisible" class="tip-content">
-                      <p>1. 在「分组」中选择或新建分组（可跨多库混入表）</p>
-                      <p>2. 在「数据库」中切换实例，勾选表/字段会自动写入当前分组</p>
-                      <p>3. 左侧可移除表/字段，会立即同步到数据库</p>
-                      <p>4. 配好分组后点顶部「查询视图」，用该分组做可视化查询</p>
+                      <p>{{ $tr('1. 在「分组」中选择或新建分组（可跨多库混入表）') }}</p>
+                      <p>{{ $tr('2. 在「数据库」中切换实例，勾选表/字段会自动写入当前分组') }}</p>
+                      <p>{{ $tr('3. 左侧可移除表/字段，会立即同步到数据库') }}</p>
+                      <p>{{ $tr('4. 配好分组后点顶部「查询视图」，用该分组做可视化查询') }}</p>
                     </div>
                   </el-collapse-transition>
                 </div>
@@ -1246,15 +1246,15 @@ export default defineComponent({
           <template #header>
             <div class="card-header">
               <div class="header-title">
-                <span>数据表</span>
+                <span>{{ $tr('数据表') }}</span>
                 <el-tag v-if="selectedGroup" size="small" type="success" style="margin-left: 8px;">
-                  支持多库表
+                  {{ $tr('支持多库表') }}
                 </el-tag>
                 <el-tag v-if="selectedGroup?.schemaName" size="small" type="warning" style="margin-left: 8px;">
-                  默认浏览：{{ selectedGroup.schemaName }}
+                  {{ $tr('默认浏览：') }}{{ selectedGroup.schemaName }}
                 </el-tag>
                 <el-tag v-else-if="selectedInstance?.instanceName" size="small" type="info" style="margin-left: 8px;">
-                  当前浏览：{{ selectedInstance.instanceName }}
+                  {{ $tr('当前浏览：') }}{{ selectedInstance.instanceName }}
                 </el-tag>
                 <el-button 
                   type="primary" 
@@ -1264,13 +1264,13 @@ export default defineComponent({
                   class="direct-add-btn"
                 >
                   <vab-icon icon="database-2-line" />
-                  保存分组
+                  {{ $tr('保存分组') }}
                 </el-button>
               </div>
               <div class="header-actions">
                 <el-input
                   v-model="searchKeyword"
-                  placeholder="搜索表名"
+                  :placeholder="$tr('搜索表名')"
                   clearable
                   style="width: 200px"
                 >
@@ -1281,11 +1281,11 @@ export default defineComponent({
                 <el-button-group>
                   <el-button type="primary" @click="handleSelectAll">
                     <vab-icon icon="checkbox-circle-line" />
-                    全选
+                    {{ $tr('全选') }}
                   </el-button>
                   <el-button type="primary" @click="handleUnselectAll">
                     <vab-icon icon="checkbox-blank-circle-line" />
-                    取消全选
+                    {{ $tr('取消全选') }}
                   </el-button>
                 </el-button-group>
               </div>
@@ -1318,7 +1318,7 @@ export default defineComponent({
                 
                 <!-- 表节点的操作按钮 -->
                 <div class="node-actions" v-if="data.isTable">
-                  <el-button type="primary" link @click.stop="handleViewDDL(data)" title="查看DDL">
+                  <el-button type="primary" link @click.stop="handleViewDDL(data)" :title="$tr('查看DDL')">
                     <vab-icon icon="code-line" />
                   </el-button>
                 </div>
@@ -1328,7 +1328,7 @@ export default defineComponent({
                   <el-tag size="small" :type="data.isPrimary ? 'danger' : ''">
                     {{ data.dataType }}
                   </el-tag>
-                  <el-tag v-if="data.isPrimary" size="small" type="warning" style="margin-left: 4px;">主键</el-tag>
+                  <el-tag v-if="data.isPrimary" size="small" type="warning" style="margin-left: 4px;">{{ $tr('主键') }}</el-tag>
                 </div>
               </div>
             </template>
@@ -1350,13 +1350,13 @@ export default defineComponent({
         :rules="groupRules"
         label-width="80px"
       >
-        <el-form-item label="分组名称" prop="groupName">
-          <el-input v-model="groupForm.groupName" placeholder="请输入分组名称" />
+        <el-form-item :label="$tr('分组名称')" prop="groupName">
+          <el-input v-model="groupForm.groupName" :placeholder="$tr('请输入分组名称')" />
         </el-form-item>
-        <el-form-item label="默认浏览库" prop="schemaName">
+        <el-form-item :label="$tr('默认浏览库')" prop="schemaName">
           <el-select
             v-model="groupForm.schemaName"
-            placeholder="选中分组时自动切换到该库（可选，仍可跨库加表）"
+            :placeholder="$tr('选中分组时自动切换到该库（可选，仍可跨库加表）')"
             clearable
             style="width: 100%"
           >
@@ -1367,34 +1367,34 @@ export default defineComponent({
               :value="item.instanceName"
             />
           </el-select>
-          <div class="form-tip">仅影响打开分组时的默认浏览库，分组内可包含多个实例的表</div>
+          <div class="form-tip">{{ $tr('仅影响打开分组时的默认浏览库，分组内可包含多个实例的表') }}</div>
         </el-form-item>
-        <el-form-item label="可见范围">
+        <el-form-item :label="$tr('可见范围')">
           <el-switch
             v-model="groupForm.isPublic"
             :active-value="1"
             :inactive-value="0"
-            active-text="公开"
-            inactive-text="仅自己"
+            :active-text="$tr('公开')"
+            :inactive-text="$tr('仅自己')"
           />
         </el-form-item>
-        <el-form-item label="描述" prop="description">
-          <el-input v-model="groupForm.description" type="textarea" :rows="3" placeholder="请输入描述" />
+        <el-form-item :label="$tr('描述')" prop="description">
+          <el-input v-model="groupForm.description" type="textarea" :rows="3" :placeholder="$tr('请输入描述')" />
         </el-form-item>
-        <el-form-item label="排序" prop="orderNum">
+        <el-form-item :label="$tr('排序')" prop="orderNum">
           <el-input-number v-model="groupForm.orderNum" :min="0" :max="9999" />
         </el-form-item>
       </el-form>
       <template #footer>
-        <el-button @click="groupDialogVisible = false">取消</el-button>
-        <el-button type="primary" @click="handleGroupSubmit">确定</el-button>
+        <el-button @click="groupDialogVisible = false">{{ $tr('取消') }}</el-button>
+        <el-button type="primary" @click="handleGroupSubmit">{{ $tr('确定') }}</el-button>
       </template>
     </el-dialog>
 
     <!-- DDL查看对话框 -->
     <el-dialog
       v-model="ddlDialogVisible"
-      title="表结构"
+      :title="$tr('表结构')"
       width="800px"
       destroy-on-close
     >
@@ -1405,8 +1405,8 @@ export default defineComponent({
         readonly
       />
       <template #footer>
-        <el-button @click="ddlDialogVisible = false">关闭</el-button>
-        <el-button type="primary" @click="handleCopyDDL">复制</el-button>
+        <el-button @click="ddlDialogVisible = false">{{ $tr('关闭') }}</el-button>
+        <el-button type="primary" @click="handleCopyDDL">{{ $tr('复制') }}</el-button>
       </template>
     </el-dialog>
   </div>

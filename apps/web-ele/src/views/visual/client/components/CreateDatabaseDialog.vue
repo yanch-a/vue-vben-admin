@@ -169,7 +169,7 @@ async function onSubmit() {
 
       <!-- MySQL 族 -->
       <template v-if="family === 'MYSQL_LIKE'">
-        <ElFormItem label="字符集">
+        <ElFormItem :label="$tr('字符集')">
           <ElSelect v-model="form.charset" filterable allow-create class="w-full">
             <ElOption
               v-for="c in MYSQL_CHARSETS"
@@ -179,14 +179,14 @@ async function onSubmit() {
             />
           </ElSelect>
         </ElFormItem>
-        <ElFormItem label="排序规则">
+        <ElFormItem :label="$tr('排序规则')">
           <ElSelect
             v-model="form.collation"
             filterable
             allow-create
             clearable
             class="w-full"
-            placeholder="可选"
+            :placeholder="$tr('可选')"
           >
             <ElOption
               v-for="c in collationOptions"
@@ -207,7 +207,7 @@ async function onSubmit() {
           <ElInput
             v-model="form.owner"
             clearable
-            placeholder="留空则使用当前用户"
+            :placeholder="$tr('留空则使用当前用户')"
           />
         </ElFormItem>
         <ElFormItem label="Encoding">
@@ -229,61 +229,61 @@ async function onSubmit() {
               :value="t"
             />
           </ElSelect>
-          <div class="tip">自定义 Encoding / Locale 时请用 template0</div>
+          <div class="tip">{{ $tr('自定义 Encoding / Locale 时请用 template0') }}</div>
         </ElFormItem>
         <ElFormItem label="LC_COLLATE">
           <ElInput
             v-model="form.lcCollate"
             clearable
-            placeholder="如 C、en_US.UTF-8、zh_CN.UTF-8"
+            :placeholder="$tr('如 C、en_US.UTF-8、zh_CN.UTF-8')"
           />
         </ElFormItem>
         <ElFormItem label="LC_CTYPE">
           <ElInput
             v-model="form.lcCtype"
             clearable
-            placeholder="如 C、en_US.UTF-8、zh_CN.UTF-8"
+            :placeholder="$tr('如 C、en_US.UTF-8、zh_CN.UTF-8')"
           />
         </ElFormItem>
         <ElFormItem label="Tablespace">
           <ElInput
             v-model="form.tablespace"
             clearable
-            placeholder="留空使用默认表空间"
+            :placeholder="$tr('留空使用默认表空间')"
           />
         </ElFormItem>
-        <ElFormItem label="连接数限制">
+        <ElFormItem :label="$tr('连接数限制')">
           <ElInputNumber
             v-model="form.connectionLimit"
             :min="-1"
             controls-position="right"
             clearable
           />
-          <span class="tip">留空不限制；-1 也表示不限制</span>
+          <span class="tip">{{ $tr('留空不限制；-1 也表示不限制') }}</span>
         </ElFormItem>
       </template>
 
       <!-- Oracle / 达梦：创建用户 -->
       <template v-else-if="family === 'ORACLE_LIKE'">
-        <ElFormItem label="密码" required>
+        <ElFormItem :label="$tr('密码')" required>
           <ElInput
             v-model="form.password"
             type="password"
             show-password
-            placeholder="新用户登录密码"
+            :placeholder="$tr('新用户登录密码')"
           />
         </ElFormItem>
-        <ElFormItem label="默认表空间">
+        <ElFormItem :label="$tr('默认表空间')">
           <ElInput v-model="form.defaultTablespace" clearable placeholder="USERS" />
         </ElFormItem>
-        <ElFormItem label="临时表空间">
+        <ElFormItem :label="$tr('临时表空间')">
           <ElInput
             v-model="form.temporaryTablespace"
             clearable
             placeholder="TEMP"
           />
         </ElFormItem>
-        <ElFormItem label="配额">
+        <ElFormItem :label="$tr('配额')">
           <ElSelect v-model="form.quota" filterable allow-create class="w-full">
             <ElOption label="UNLIMITED" value="UNLIMITED" />
             <ElOption label="100M" value="100M" />
@@ -291,25 +291,25 @@ async function onSubmit() {
             <ElOption label="1G" value="1G" />
           </ElSelect>
         </ElFormItem>
-        <ElFormItem label="授权">
+        <ElFormItem :label="$tr('授权')">
           <ElCheckbox v-model="form.grantConnect">CONNECT</ElCheckbox>
           <ElCheckbox v-model="form.grantResource">RESOURCE</ElCheckbox>
         </ElFormItem>
         <div class="tip block">
-          Oracle / 达梦的「库」对应为用户 Schema，需当前连接具备 CREATE USER 权限。
+          {{ $tr('Oracle / 达梦的「库」对应为用户 Schema，需当前连接具备 CREATE USER 权限。') }}
         </div>
       </template>
 
       <!-- SQL Server -->
       <template v-else-if="family === 'SQLSERVER_LIKE'">
-        <ElFormItem label="排序规则">
+        <ElFormItem :label="$tr('排序规则')">
           <ElSelect
             v-model="form.sqlServerCollation"
             filterable
             allow-create
             clearable
             class="w-full"
-            placeholder="留空使用服务器默认"
+            :placeholder="$tr('留空使用服务器默认')"
           >
             <ElOption
               v-for="c in SQLSERVER_COLLATIONS"
@@ -327,25 +327,25 @@ async function onSubmit() {
           <ElInput
             v-model="form.authorization"
             clearable
-            placeholder="留空则当前用户"
+            :placeholder="$tr('留空则当前用户')"
           />
         </ElFormItem>
       </template>
 
-      <ElFormItem v-if="sqlPreview" label="SQL 预览">
+      <ElFormItem v-if="sqlPreview" :label="$tr('SQL 预览')">
         <pre class="sql-preview">{{ sqlPreview }}</pre>
       </ElFormItem>
     </ElForm>
 
     <template #footer>
-      <ElButton @click="visible = false">取消</ElButton>
+      <ElButton @click="visible = false">{{ $tr('取消') }}</ElButton>
       <ElButton
         type="primary"
         :loading="submitting"
         :disabled="!!meta.unsupportedHint"
         @click="onSubmit"
       >
-        确定创建
+        {{ $tr('确定创建') }}
       </ElButton>
     </template>
   </ElDialog>
