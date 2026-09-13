@@ -13,14 +13,19 @@ import { useDateFormat, useNow } from '@vueuse/core';
 
 interface Props {
   avatar?: string;
+  /** 当前用户个性签名。 */
+  signature?: string;
+  /** 使用当前登录账号密码时，由业务应用提供服务端校验函数。 */
+  verifyPassword?: (password: string) => boolean | Promise<boolean>;
 }
 
 defineOptions({
   name: 'LockScreen',
 });
 
-withDefaults(defineProps<Props>(), {
+const props = withDefaults(defineProps<Props>(), {
   avatar: '',
+  signature: '',
 });
 
 defineEmits<{ toLogin: [] }>();
@@ -35,6 +40,7 @@ const minute = useDateFormat(now, 'mm');
 const date = useDateFormat(now, 'YYYY-MM-DD dddd', { locales: locale.value });
 
 const showUnlockForm = ref(false);
+const submitting = ref(false);
 const { lockScreenPassword } = storeToRefs(accessStore);
 
 const [Form, { getFieldComponentRef, getRawValues, setFieldError, validate }] =
@@ -48,7 +54,9 @@ const [Form, { getFieldComponentRef, getRawValues, setFieldError, validate }] =
         {
           component: 'VbenInputPassword' as const,
           componentProps: {
-            placeholder: $t('ui.widgets.lockScreen.placeholder'),
+            placeholder: props.verifyPassword
+              ? $t('ui.widgets.lockScreen.accountPasswordPlaceholder')
+              : $t('ui.widgets.lockScreen.placeholder'),
           },
           fieldName: 'password',
           label: $t('authentication.password'),
@@ -62,13 +70,28 @@ const [Form, { getFieldComponentRef, getRawValues, setFieldError, validate }] =
   );
 
 async function handleSubmit() {
+  if (submitting.value) {
+    return;
+  }
   const { valid } = await validate();
   if (valid) {
     const { password } = await getRawValues();
-    if (lockScreenPassword?.value === password) {
-      accessStore.unlockScreen();
-    } else {
+    try {
+      submitting.value = true;
+      // 业务应用传入校验函数时使用服务端账号密码；未传时兼容原有本地锁屏。
+      const passwordMatched = props.verifyPassword
+        ? await props.verifyPassword(password)
+        : lockScreenPassword?.value === password;
+      if (passwordMatched) {
+        accessStore.unlockScreen();
+        return;
+      }
       await setFieldError('password', $t('authentication.passwordErrorTip'));
+    } catch {
+      // 请求层会展示后台返回的具体错误，这里同时在密码框下保留通用提示。
+      await setFieldError('password', $t('authentication.passwordErrorTip'));
+    } finally {
+      submitting.value = false;
     }
   }
 }
@@ -130,10 +153,21 @@ useScrollLock();
       >
         <div class="mb-10 flex-col-center w-[90%] max-w-75 px-4">
           <VbenAvatar :src="avatar" class="enter-x mb-6 size-20" />
+          <p
+            v-if="signature"
+            class="enter-x mb-5 max-w-full truncate text-center text-sm text-muted-foreground"
+            :title="signature"
+          >
+            {{ signature }}
+          </p>
           <div class="enter-x mb-2 w-full items-center">
             <Form />
           </div>
-          <VbenButton class="enter-x w-full" @click="handleSubmit">
+          <VbenButton
+            :loading="submitting"
+            class="enter-x w-full"
+            @click="handleSubmit"
+          >
             {{ $t('ui.widgets.lockScreen.entry') }}
           </VbenButton>
           <VbenButton

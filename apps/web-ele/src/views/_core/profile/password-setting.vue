@@ -1,62 +1,77 @@
 <script setup lang="ts">
 import type { VbenFormSchema } from '#/adapter/form';
 
-import { computed } from 'vue';
+import { computed, ref } from 'vue';
 
 import { ProfilePasswordSetting, z } from '@vben/common-ui';
 
 import { ElMessage } from 'element-plus';
 
-const formSchema = computed((): VbenFormSchema[] => {
-  return [
-    {
-      fieldName: 'oldPassword',
-      label: '旧密码',
-      component: 'VbenInputPassword',
-      componentProps: {
-        placeholder: '请输入旧密码',
-      },
-    },
-    {
-      fieldName: 'newPassword',
-      label: '新密码',
-      component: 'VbenInputPassword',
-      componentProps: {
-        passwordStrength: true,
-        placeholder: '请输入新密码',
-      },
-    },
-    {
-      fieldName: 'confirmPassword',
-      label: '确认密码',
-      component: 'VbenInputPassword',
-      componentProps: {
-        passwordStrength: true,
-        placeholder: '请再次输入新密码',
-      },
-      dependencies: {
-        rules(values) {
-          const { newPassword } = values;
-          return z
-            .string({ error: '请再次输入新密码' })
-            .min(1, { message: '请再次输入新密码' })
-            .refine((value) => value === newPassword, {
-              message: '两次输入的密码不一致',
-            });
-        },
-        triggerFields: ['newPassword'],
-      },
-    },
-  ];
-});
+import { changePersonalPasswordApi } from '#/api';
+import { $t } from '#/locales';
 
-function handleSubmit() {
-  ElMessage.success('密码修改成功');
+const passwordSettingRef = ref();
+
+const formSchema = computed((): VbenFormSchema[] => [
+  {
+    fieldName: 'oldPassword',
+    label: $t('page.profile.oldPassword'),
+    component: 'VbenInputPassword',
+    componentProps: { placeholder: $t('page.profile.oldPasswordPlaceholder') },
+    rules: z
+      .string()
+      .min(1, { message: $t('page.profile.oldPasswordPlaceholder') }),
+  },
+  {
+    fieldName: 'newPassword',
+    label: $t('page.profile.newPassword'),
+    component: 'VbenInputPassword',
+    componentProps: {
+      passwordStrength: true,
+      placeholder: $t('page.profile.newPasswordPlaceholder'),
+    },
+    rules: z
+      .string()
+      .min(6, { message: $t('page.profile.passwordMin') })
+      .max(50),
+  },
+  {
+    fieldName: 'confirmPassword',
+    label: $t('page.profile.confirmPassword'),
+    component: 'VbenInputPassword',
+    componentProps: {
+      passwordStrength: true,
+      placeholder: $t('page.profile.confirmPasswordPlaceholder'),
+    },
+    dependencies: {
+      rules(values) {
+        return z
+          .string({ error: $t('page.profile.confirmPasswordPlaceholder') })
+          .min(1, { message: $t('page.profile.confirmPasswordPlaceholder') })
+          .refine((value) => value === values.newPassword, {
+            message: $t('page.profile.passwordMismatch'),
+          });
+      },
+      triggerFields: ['newPassword'],
+    },
+  },
+]);
+
+/** 验证旧密码后更新当前账号密码。 */
+async function handleSubmit(values: Record<string, any>) {
+  await changePersonalPasswordApi({
+    newPassword: values.newPassword,
+    password: values.oldPassword,
+  });
+  await passwordSettingRef.value?.getFormApi().resetForm();
+  ElMessage.success($t('page.profile.passwordUpdated'));
 }
 </script>
+
 <template>
   <ProfilePasswordSetting
-    class="w-1/3"
+    ref="passwordSettingRef"
+    class="max-w-xl"
     :form-schema="formSchema"
     @submit="handleSubmit"
   />

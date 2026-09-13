@@ -152,6 +152,7 @@
       "screenButton": "Lock",
       "password": "Password",
       "placeholder": "Please enter password",
+      "accountPasswordPlaceholder": "Enter your current account password",
       "unlock": "Click to unlock",
       "errorPasswordTip": "Password error, please re-enter",
       "backToLogin": "Back to login",

@@ -9,7 +9,12 @@ import { reactive, readonly } from 'vue';
 
 import { updatePreferences } from '@vben/preferences';
 
-import { baseURL, isPublicBrandAsset, publicAssetUrl } from '#/config';
+import {
+  baseURL,
+  isPublicBrandAsset,
+  publicAssetUrl,
+  resolveBackendAssetUrl,
+} from '#/config';
 
 /** 后台配置编码 */
 export const BRAND_CONFIG_KEYS = {
@@ -99,11 +104,7 @@ export function resolveAssetUrl(url?: null | string): string {
   if (viteBase !== '/' && trimmed.startsWith(viteBase)) {
     return trimmed;
   }
-  if (trimmed.startsWith('/')) {
-    return trimmed;
-  }
-  const prefix = baseURL.endsWith('/') ? baseURL.slice(0, -1) : baseURL;
-  return `${prefix}/${trimmed.replace(/^\//, '')}`;
+  return resolveBackendAssetUrl(trimmed);
 }
 
 function pick(
@@ -112,7 +113,7 @@ function pick(
   fallback: string,
 ): string {
   const raw = map[key];
-  if (raw == null) return fallback;
+  if (raw === null || raw === undefined) return fallback;
   const value = String(raw).trim();
   // 空串表示「保持默认」，不覆盖
   return value === '' ? fallback : value;

@@ -69,9 +69,25 @@ export const useAccessStore = defineStore('core-access', {
       }
       return findMenu(this.accessMenus, path);
     },
-    lockScreen(password: string) {
+    /**
+     * 进入锁屏状态。
+     *
+     * account 模式不传密码，避免把用户账号密码或临时密码保存在客户端；
+     * password 参数仅为其他应用原有的本地锁屏模式保留兼容。
+     *
+     * @author yanch
+     */
+    lockScreen(password?: string) {
       this.isLockScreen = true;
       this.lockScreenPassword = password;
+    },
+    /**
+     * 清理旧版本遗留的本地锁屏密码。
+     *
+     * @author yanch
+     */
+    clearLockScreenPassword() {
+      this.lockScreenPassword = undefined;
     },
     setAccessCodes(codes: string[]) {
       this.accessCodes = codes;

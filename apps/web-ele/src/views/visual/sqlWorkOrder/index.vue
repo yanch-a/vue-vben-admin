@@ -1,6 +1,8 @@
 <script lang="ts" setup>
-import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue';
-import { useRouter } from 'vue-router';
+import type { SqlWorkOrder } from '#/api/visual/sqlWorkOrder';
+
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
+import { useRoute, useRouter } from 'vue-router';
 
 import { Page } from '@vben/common-ui';
 
@@ -15,7 +17,6 @@ import {
   executeWorkOrder,
   reviewWorkOrder,
   saveWorkOrder,
-  type SqlWorkOrder,
   submitWorkOrder,
   workOrderCapabilities,
   workOrderDetail,
@@ -28,6 +29,7 @@ import { normalizeInstanceNames } from './instanceOptions';
 defineOptions({ name: 'SqlWorkOrder' });
 
 const router = useRouter();
+const route = useRoute();
 const loading = ref(false);
 const rows = ref<SqlWorkOrder[]>([]);
 const total = ref(0);
@@ -166,6 +168,12 @@ async function openDetail(row: SqlWorkOrder) {
   finally { detailLoading.value = false; }
 }
 
+/** 从站内通知进入页面时，直接打开对应工单详情。 */
+async function openOrderFromNotification(orderId: unknown) {
+  if (orderId === undefined || orderId === null || orderId === '') return;
+  await openDetail({ id: String(orderId) } as SqlWorkOrder);
+}
+
 async function submit(row: SqlWorkOrder) {
   await ElMessageBox.confirm('提交后脚本将锁定，修改需驳回后生成新版本。确认提交？', '提交 DBA 审批', { type: 'warning' });
   await submitWorkOrder(row.id);
@@ -175,7 +183,7 @@ async function submit(row: SqlWorkOrder) {
 async function openAudit(row?: SqlWorkOrder) {
   const order = row || detail.value?.order;
   if (!order) return;
-  if (!models.value.length) {
+  if (models.value.length === 0) {
     const groups = unbox(await listSelectableModels()) || [];
     models.value = groups.flatMap((group: any) => (group.models || []).map((model: any) => ({ ...model, providerName: group.providerName || group.name })));
     auditForm.modelId = models.value.find((m: any) => m.isDefault === 1)?.id || models.value[0]?.id;
@@ -235,6 +243,7 @@ onMounted(async () => {
   await loadCapabilities();
   if (!dba.value) await loadConnections();
   await load();
+  await openOrderFromNotification(route.query.orderId);
   refreshTimer = setInterval(async () => {
     if (!rows.value.some((item) => ['EXECUTING', 'PREPARING'].includes(item.status))) return;
     await load();
@@ -244,6 +253,13 @@ onMounted(async () => {
   }, 3000);
 });
 onBeforeUnmount(() => { if (refreshTimer) clearInterval(refreshTimer); });
+
+watch(
+  () => route.query.orderId,
+  (orderId, previousId) => {
+    if (orderId !== previousId) openOrderFromNotification(orderId);
+  },
+);
 </script>
 
 <template>

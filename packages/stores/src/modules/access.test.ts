@@ -30,6 +30,25 @@ describe('useAccessStore', () => {
     expect(store.accessToken).toBe('xyz789');
   });
 
+  it('locks in account mode without storing a password', () => {
+    const store = useAccessStore();
+    store.lockScreen('legacy-local-password');
+
+    store.lockScreen();
+
+    expect(store.isLockScreen).toBe(true);
+    expect(store.lockScreenPassword).toBeUndefined();
+  });
+
+  it('clears a password left by the legacy local lock mode', () => {
+    const store = useAccessStore();
+    store.lockScreen('legacy-local-password');
+
+    store.clearLockScreenPassword();
+
+    expect(store.lockScreenPassword).toBeUndefined();
+  });
+
   // 测试设置空的访问菜单列表
   it('handles empty accessMenus correctly', () => {
     const store = useAccessStore();

@@ -223,6 +223,13 @@
         </template>
       </el-table-column>
       <el-table-column align="center" :label="$tr('真实名称')" prop="realName" />
+      <el-table-column
+        align="center"
+        :label="$tr('邮箱')"
+        min-width="180"
+        prop="email"
+        show-overflow-tooltip
+      />
       <el-table-column align="center" :label="$tr('会员分组')" min-width="120">
         <template #default="{ row }">
           {{ groupNameOf(row.userGroup) }}

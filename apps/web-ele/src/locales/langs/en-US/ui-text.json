@@ -1280,5 +1280,9 @@
   "向 AI 询问 SQL 风险": "Ask AI about SQL risks",
   "DBA 审计问题": "DBA audit question",
   "去补关系画布": "Configure relation canvas",
-  "仅自己": "Only me"
+  "仅自己": "Only me",
+  "头像地址": "Avatar URL",
+  "请输入头像地址": "Enter an avatar URL",
+  "个性签名": "Signature",
+  "请输入个性签名": "Enter a signature"
 }

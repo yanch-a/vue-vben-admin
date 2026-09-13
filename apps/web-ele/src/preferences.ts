@@ -1,6 +1,4 @@
-import {
-  defineOverridesPreferences,
-} from '@vben/preferences';
+import { defineOverridesPreferences } from '@vben/preferences';
 
 import { publicAssetUrl } from './config';
 
@@ -63,8 +61,8 @@ export const overridesPreferences = defineOverridesPreferences({
     loading: false,
     progress: false,
   },
-  // 隐藏顶栏通知铃铛
+  // SQL 工单站内通知使用顶栏铃铛展示。
   widget: {
-    notification: false,
+    notification: true,
   },
 });

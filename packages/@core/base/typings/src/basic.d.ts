@@ -13,6 +13,12 @@ interface BasicUserInfo {
    * 头像
    */
   avatar: string;
+  /** 用户邮箱 */
+  email?: string;
+  /** 手机号 */
+  phoneNumber?: string;
+  /** 个性签名 */
+  personalSignature?: string;
   /**
    * 用户昵称
    */

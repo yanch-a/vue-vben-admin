@@ -93,6 +93,9 @@
           userName: [
             { required: true, trigger: 'blur', validator: userNameValidator },
           ],
+          email: [
+            { type: 'email', trigger: 'blur', message: '邮箱格式不正确' },
+          ],
           password: [
             { required: true, trigger: 'blur', validator: passwordValidator },
           ],
@@ -201,6 +204,24 @@
           </el-form-item>
         </el-col>
         <el-col :span="12">
+          <el-form-item :label="$tr('邮箱')" prop="email">
+            <el-input
+              v-model.trim="form.email"
+              maxlength="50"
+              :placeholder="$tr('请输入邮箱')"
+            />
+          </el-form-item>
+        </el-col>
+        <el-col :span="12">
+          <el-form-item :label="$tr('头像地址')" prop="avatar">
+            <el-input
+              v-model.trim="form.avatar"
+              maxlength="500"
+              :placeholder="$tr('请输入头像地址')"
+            />
+          </el-form-item>
+        </el-col>
+        <el-col :span="12">
           <el-form-item :label="$tr('密码')" prop="password">
             <el-input
               v-model="form.password"
@@ -268,6 +289,18 @@
                 {{ key }}
               </el-radio>
             </el-radio-group>
+          </el-form-item>
+        </el-col>
+        <el-col :span="24">
+          <el-form-item :label="$tr('个性签名')" prop="personalSignature">
+            <el-input
+              v-model="form.personalSignature"
+              maxlength="500"
+              :placeholder="$tr('请输入个性签名')"
+              :rows="3"
+              show-word-limit
+              type="textarea"
+            />
           </el-form-item>
         </el-col>
       </el-row>

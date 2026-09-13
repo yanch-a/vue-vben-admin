@@ -72,6 +72,8 @@ interface Props {
    * 标签文本
    */
   tagText?: string;
+  /** 锁屏验证模式：account 点击后直接锁屏，解锁交给业务服务端校验。 */
+  lockScreenMode?: 'account' | 'local';
   /**
    * 文本
    */
@@ -89,6 +91,7 @@ defineOptions({
 const props = withDefaults(defineProps<Props>(), {
   avatar: '',
   description: '',
+  lockScreenMode: 'local',
   menus: () => [],
   tagText: '',
   text: '',
@@ -220,6 +223,12 @@ const enableLockScreenShortcutKey = computed(() => {
 });
 
 function handleOpenLock() {
+  if (props.lockScreenMode === 'account') {
+    // 账号密码模式不在客户端采集或保存密码，点击后直接进入锁屏页。
+    accessStore.lockScreen();
+    openPopover.value = false;
+    return;
+  }
   lockModalApi.open();
 }
 
@@ -308,7 +317,7 @@ if (preferences.shortcutKeys.enable) {
 
 <template>
   <LockModal
-    v-if="showLockInDropdown"
+    v-if="showLockInDropdown && props.lockScreenMode === 'local'"
     :avatar="avatar"
     :text="text"
     @submit="handleSubmitLock"

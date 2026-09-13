@@ -31,6 +31,8 @@ interface Props {
    * 头像
    */
   avatar?: string;
+  /** 锁屏验证模式：account 点击后直接锁屏，解锁交给业务服务端校验。 */
+  lockScreenMode?: 'account' | 'local';
   /**
    * Logo 主题
    */
@@ -45,8 +47,9 @@ defineOptions({
   name: 'LayoutHeader',
 });
 
-withDefaults(defineProps<Props>(), {
+const props = withDefaults(defineProps<Props>(), {
   avatar: '',
+  lockScreenMode: 'local',
   theme: 'light',
   text: '',
 });
@@ -92,6 +95,11 @@ const [LogoutModal, logoutModalApi] = useVbenModal({
 });
 
 function handleOpenLock() {
+  if (props.lockScreenMode === 'account') {
+    // 账号密码模式不在客户端采集或保存密码，点击后直接进入锁屏页。
+    accessStore.lockScreen();
+    return;
+  }
   lockModalApi.open();
 }
 
@@ -246,7 +254,7 @@ function clearPreferencesAndLogout() {
 
 <template>
   <LockModal
-    v-if="showLockInHeader"
+    v-if="showLockInHeader && props.lockScreenMode === 'local'"
     :avatar="avatar"
     :text="text"
     @submit="handleSubmitLock"

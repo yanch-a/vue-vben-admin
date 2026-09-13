@@ -40,6 +40,7 @@ defineOptions({ name: 'BasicLayout' });
 
 withDefaults(defineProps<Props>(), {
   avatar: '',
+  lockScreenMode: 'local',
   text: '',
 });
 
@@ -51,6 +52,8 @@ const emit = defineEmits<{
 
 interface Props {
   avatar?: string;
+  /** local 为框架原有临时密码模式，account 为业务账号密码模式。 */
+  lockScreenMode?: 'account' | 'local';
   text?: string;
 }
 
@@ -341,6 +344,7 @@ const headerSlots = computed(() => {
     <template #header>
       <LayoutHeader
         :avatar="avatar"
+        :lock-screen-mode="lockScreenMode"
         :theme="theme"
         :text="text"
         @clear-preferences-and-logout="clearPreferencesAndLogout"
