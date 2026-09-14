@@ -1,7 +1,13 @@
 <script lang="ts" setup>
 import type { NotificationItem } from './types';
 
-import { Bell, CircleCheckBig, CircleX, MailCheck } from '@vben/icons';
+import {
+  Bell,
+  CircleCheckBig,
+  CircleX,
+  MailCheck,
+  RotateCw,
+} from '@vben/icons';
 import { $t } from '@vben/locales';
 
 import {
@@ -21,10 +27,13 @@ withDefaults(
     dot?: boolean;
     /** 消息列表 */
     notifications?: NotificationItem[];
+    /** 是否正在刷新通知 */
+    refreshing?: boolean;
   }>(),
   {
     dot: false,
     notifications: () => [],
+    refreshing: false,
   },
 );
 
@@ -33,6 +42,7 @@ const emit = defineEmits<{
   makeAll: [];
   onClick: [NotificationItem];
   read: [NotificationItem];
+  refresh: [];
   remove: [NotificationItem];
   viewAll: [];
 }>();
@@ -56,6 +66,10 @@ function handleClear() {
   emit('clear');
 }
 
+function handleRefresh() {
+  emit('refresh');
+}
+
 defineExpose({ toggle });
 </script>
 <template>
@@ -75,13 +89,25 @@ defineExpose({ toggle });
     <div class="relative">
       <div class="flex items-center justify-between p-4 py-3">
         <div class="text-foreground">{{ $t('ui.widgets.notifications') }}</div>
-        <VbenIconButton
-          :disabled="notifications.length <= 0"
-          :tooltip="$t('ui.widgets.markAllAsRead')"
-          @click="handleMakeAll"
-        >
-          <MailCheck class="size-4" />
-        </VbenIconButton>
+        <div class="flex items-center gap-1">
+          <VbenIconButton
+            :disabled="refreshing"
+            :tooltip="$t('common.refresh')"
+            @click="handleRefresh"
+          >
+            <RotateCw
+              class="size-4"
+              :class="{ 'animate-spin': refreshing }"
+            />
+          </VbenIconButton>
+          <VbenIconButton
+            :disabled="notifications.length <= 0"
+            :tooltip="$t('ui.widgets.markAllAsRead')"
+            @click="handleMakeAll"
+          >
+            <MailCheck class="size-4" />
+          </VbenIconButton>
+        </div>
       </div>
       <VbenScrollbar v-if="notifications.length > 0">
         <ul class="flex! max-h-90 w-full flex-col">

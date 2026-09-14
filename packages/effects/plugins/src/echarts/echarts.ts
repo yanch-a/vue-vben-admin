@@ -1,4 +1,4 @@
-import { BarChart, LineChart, PieChart, RadarChart } from 'echarts/charts';
+import { BarChart, LineChart, PieChart, RadarChart, ScatterChart } from 'echarts/charts';
 import {
   DatasetComponent,
   GridComponent,
@@ -20,6 +20,7 @@ echarts.use([
   TitleComponent,
   PieChart,
   RadarChart,
+  ScatterChart,
   TooltipComponent,
   GridComponent,
   DatasetComponent,

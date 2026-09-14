@@ -5,6 +5,31 @@ import type { RouteRecordRaw } from 'vue-router';
  * 列表页通过 name 跳转；backend 菜单若未配置隐藏子页会兜底
  */
 const routes: RouteRecordRaw[] = [
+  /**
+   * 图表资产、大屏列表与编辑器共用唯一可见入口。
+   * @author yanch
+   */
+  {
+    name: 'VisualDashboardWorkbench',
+    path: '/visual/dashboard',
+    component: () => import('#/views/visual/dashboard/index.vue'),
+    meta: {
+      title: '数据大屏工作台',
+    },
+  },
+  {
+    name: 'VisualDashboardView',
+    path: '/visual/dashboard/view/:id',
+    component: () => import('#/views/visual/dashboard/view.vue'),
+    meta: {
+      title: '数据大屏',
+      hideInMenu: true,
+      hideInTab: true,
+      hideInBreadcrumb: true,
+      noBasicLayout: true,
+      activePath: '/visual/dashboard',
+    },
+  },
   {
     name: 'VisualClient',
     path: '/visual/client',

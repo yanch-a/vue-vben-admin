@@ -3,13 +3,10 @@
  * AI 图表卡片
  * @author yanch
  */
-import type { EchartsUIType } from '@vben/plugins/echarts';
-
-import { EchartsUI, useEcharts } from '@vben/plugins/echarts';
 import { ElMessage } from 'element-plus';
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 
 import { saveChart } from '#/api/ai/agent';
+import ChartRenderer from '../../../dashboard/components/ChartRenderer.vue';
 
 import { chartSpecToOption, type ChartSpec } from '../../utils/chartSpecToOption';
 
@@ -28,33 +25,6 @@ const props = defineProps<{
 const emit = defineEmits<{
   openSql: [string];
 }>();
-
-const chartRef = ref<EchartsUIType>();
-const { renderEcharts } = useEcharts(chartRef);
-const wrap = ref<HTMLElement | null>(null);
-let ro: ResizeObserver | null = null;
-
-const isKpi = computed(() => props.spec?.chartType === 'kpi');
-const isTable = computed(() => props.spec?.chartType === 'table');
-const kpiValue = computed(() => {
-  const y = props.spec?.yFields?.[0];
-  return y && props.rows?.[0] ? props.rows[0][y] : '';
-});
-
-function render() {
-  if (isKpi.value || isTable.value) return;
-  renderEcharts(chartSpecToOption(props.spec, props.columns, props.rows) as any);
-}
-
-onMounted(() => {
-  nextTick(render);
-  if (wrap.value && typeof ResizeObserver !== 'undefined') {
-    ro = new ResizeObserver(() => render());
-    ro.observe(wrap.value);
-  }
-});
-onBeforeUnmount(() => ro?.disconnect());
-watch(() => [props.spec, props.rows], () => nextTick(render), { deep: true });
 
 async function onSave() {
   if (!props.dbConfigId) {
@@ -79,7 +49,7 @@ async function copyOption() {
 </script>
 
 <template>
-  <div ref="wrap" class="ai-chart">
+  <div class="ai-chart">
     <div class="head">
       <strong>{{ title }}</strong>
       <div class="btns">
@@ -88,12 +58,8 @@ async function copyOption() {
         <ElButton size="small" @click="copyOption">{{ $tr('复制 option') }}</ElButton>
       </div>
     </div>
-    <div v-if="isKpi" class="kpi">{{ kpiValue }}</div>
-    <ElTable v-else-if="isTable" :data="rows.slice(0, 50)" size="small" max-height="280" border>
-      <ElTableColumn v-for="c in columns" :key="c" :prop="c" :label="c" min-width="90" />
-    </ElTable>
-    <div v-else class="chart-box">
-      <EchartsUI ref="chartRef" />
+    <div class="chart-box">
+      <ChartRenderer :spec="spec" :result="{ columns, rows, rowCount: rows.length }" />
     </div>
   </div>
 </template>
@@ -111,12 +77,6 @@ async function copyOption() {
   align-items: center;
   gap: 8px;
   font-size: var(--vc-ai-font-size, 13px);
-}
-.kpi {
-  font-size: calc(var(--vc-ai-font-size, 13px) * 2.75);
-  font-weight: 700;
-  padding: 16px 0;
-  text-align: center;
 }
 .chart-box {
   height: 320px;

@@ -46,8 +46,12 @@ const authStore = useAuthStore();
 const accessStore = useAccessStore();
 const { destroyWatermark, updateWatermark } = useWatermark();
 const { isDark } = usePreferences();
+/** 站内通知轮询间隔：10 分钟 */
+const NOTIFICATION_POLL_MS = 10 * 60 * 1000;
+
 const notifications = ref<NotificationItem[]>([]);
 const unreadNotificationCount = ref(0);
+const notificationRefreshing = ref(false);
 let notificationTimer: ReturnType<typeof setInterval> | undefined;
 
 // 清除旧版本曾持久化的临时锁屏密码；新模式只保存“是否锁屏”。
@@ -121,7 +125,10 @@ function toNotificationItem(item: WorkOrderNotification): NotificationItem {
 }
 
 /** 拉取通知和未读数；轮询失败由请求层处理，不中断主界面。 */
-async function loadNotifications() {
+async function loadNotifications(options?: { manual?: boolean }) {
+  if (options?.manual) {
+    notificationRefreshing.value = true;
+  }
   try {
     const [items, unread] = await Promise.all([
       listWorkOrderNotificationsApi(),
@@ -131,7 +138,16 @@ async function loadNotifications() {
     unreadNotificationCount.value = Number(unread || 0);
   } catch {
     // 保留上一次成功结果，避免临时网络抖动造成通知列表闪空。
+  } finally {
+    if (options?.manual) {
+      notificationRefreshing.value = false;
+    }
   }
+}
+
+/** 手动刷新通知列表。 */
+async function handleNotificationRefresh() {
+  await loadNotifications({ manual: true });
 }
 
 async function handleNotificationRead(item: NotificationItem) {
@@ -167,7 +183,7 @@ async function handleNotificationClear() {
 
 onMounted(() => {
   loadNotifications();
-  notificationTimer = setInterval(loadNotifications, 30_000);
+  notificationTimer = setInterval(loadNotifications, NOTIFICATION_POLL_MS);
   window.addEventListener('focus', loadNotifications);
 });
 
@@ -256,10 +272,12 @@ watch(
         class="mr-1"
         :dot="unreadNotificationCount > 0"
         :notifications="notifications"
+        :refreshing="notificationRefreshing"
         @clear="handleNotificationClear"
         @make-all="handleNotificationReadAll"
         @on-click="handleNotificationClick"
         @read="handleNotificationRead"
+        @refresh="handleNotificationRefresh"
         @remove="handleNotificationRemove"
         @view-all="router.push({ name: 'SqlWorkOrder' })"
       />

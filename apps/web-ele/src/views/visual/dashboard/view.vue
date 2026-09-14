@@ -1,0 +1,67 @@
+<script lang="ts" setup>
+/**
+ * 已发布大屏查看页：不显示管理布局，按设计尺寸等比缩放到当前窗口。
+ * @author yanch
+ */
+import type { ChartSpec, QueryResult } from '#/api/visual/dashboard';
+
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
+import { useRoute } from 'vue-router';
+import { ElMessage } from 'element-plus';
+
+import { runtimeScreen } from '#/api/visual/dashboard';
+import ChartRenderer from './components/ChartRenderer.vue';
+
+defineOptions({ name: 'VisualDashboardView' });
+
+const route = useRoute();
+const loading = ref(false);
+const bundle = ref<any>();
+const viewport = ref({ width: window.innerWidth, height: window.innerHeight });
+const config = computed(() => bundle.value?.config || { width: 1200, height: 675, widgets: [] });
+const scale = computed(() => Math.min(viewport.value.width / config.value.width, viewport.value.height / config.value.height));
+
+function resultFor(widgetId: string): QueryResult | undefined {
+  const key = bundle.value?.widgetData?.[widgetId] || widgetId;
+  return bundle.value?.datasets?.[key];
+}
+
+function widgetStyle(widget: any) {
+  return { left: `${widget.x}px`, top: `${widget.y}px`, width: `${widget.w}px`, height: `${widget.h}px` };
+}
+
+async function load() {
+  loading.value = true;
+  try { bundle.value = (await runtimeScreen(String(route.params.id)))?.data; }
+  catch (error: any) { ElMessage.error(error?.msg || error?.message || '大屏加载失败'); }
+  finally { loading.value = false; }
+}
+
+function resize() { viewport.value = { width: window.innerWidth, height: window.innerHeight }; }
+onMounted(() => { window.addEventListener('resize', resize); void load(); });
+onBeforeUnmount(() => window.removeEventListener('resize', resize));
+</script>
+
+<template>
+  <div class="viewer" v-loading="loading" :style="{ background: config.background || '#0b1220' }">
+    <div v-if="bundle" class="screen" :style="{ width: `${config.width}px`, height: `${config.height}px`, transform: `translate(-50%, -50%) scale(${scale})` }">
+      <article v-for="widget in config.widgets" :key="widget.id" class="widget" :style="widgetStyle(widget)">
+        <header>{{ widget.title }}</header>
+        <div class="body"><ChartRenderer :spec="widget.chartSpec as ChartSpec" :result="resultFor(widget.id)" /></div>
+      </article>
+    </div>
+    <div class="status">
+      <span>{{ bundle?.refreshMode === 'LIVE' ? '实时数据' : `快照：${bundle?.generatedAt || '—'}` }}</span>
+      <span v-if="bundle?.stale" class="warning" :title="bundle?.lastRefreshError">刷新失败，正在展示上一份数据</span>
+      <button @click="load">{{ bundle?.refreshMode === 'LIVE' ? '刷新数据' : '重新加载' }}</button>
+    </div>
+  </div>
+</template>
+
+<style scoped>
+.viewer { position: fixed; inset: 0; overflow: hidden; color: #dbeafe; }
+.screen { position: absolute; top: 50%; left: 50%; transform-origin: center center; }
+.widget { position: absolute; display: flex; flex-direction: column; overflow: hidden; background: #101b2dcc; border: 1px solid #30435f; border-radius: 5px; }
+.widget header { flex: 0 0 34px; padding: 8px 12px; font-weight: 600; background: #16243a; }.body { flex: 1; min-height: 0; padding: 5px; }
+.status { position: fixed; right: 12px; bottom: 10px; display: flex; align-items: center; gap: 10px; padding: 5px 8px; color: #94a3b8; background: #0008; border-radius: 5px; font-size: 11px; }.status button { color: #bfdbfe; cursor: pointer; background: transparent; border: 0; }.warning { color: #fbbf24; }
+</style>
