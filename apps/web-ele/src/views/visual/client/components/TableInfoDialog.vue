@@ -5,37 +5,42 @@
  *
  * @author yanch
  */
-import { computed } from 'vue';
+import { computed, ref, watch } from 'vue';
 
 defineOptions({ name: 'TableInfoDialog' });
 
-const props = defineProps<{
-  modelValue: boolean;
-  loading?: boolean;
-  info?: {
-    tableName?: string;
-    instanceName?: string;
-    schemaName?: string;
-    description?: string;
-    tableType?: string;
-    ddl?: string;
-    columns?: Array<{
-      fieldName?: string;
-      dataType?: string;
-      isPrimary?: boolean;
-      isNullable?: boolean;
-      defaultValue?: string;
+const props = withDefaults(
+  defineProps<{
+    modelValue: boolean;
+    loading?: boolean;
+    /** 打开时默认激活的页签：basic / columns / indexes / ddl */
+    defaultTab?: 'basic' | 'columns' | 'ddl' | 'indexes';
+    info?: {
+      tableName?: string;
+      instanceName?: string;
+      schemaName?: string;
       description?: string;
-    }>;
-    indexes?: Array<{
-      indexName?: string;
-      unique?: boolean;
-      indexType?: string;
-      columns?: string;
-    }>;
-    properties?: Record<string, string>;
-  } | null;
-}>();
+      tableType?: string;
+      ddl?: string;
+      columns?: Array<{
+        fieldName?: string;
+        dataType?: string;
+        isPrimary?: boolean;
+        isNullable?: boolean;
+        defaultValue?: string;
+        description?: string;
+      }>;
+      indexes?: Array<{
+        indexName?: string;
+        unique?: boolean;
+        indexType?: string;
+        columns?: string;
+      }>;
+      properties?: Record<string, string>;
+    } | null;
+  }>(),
+  { defaultTab: 'basic' },
+);
 
 const emit = defineEmits<{
   'update:modelValue': [boolean];
@@ -45,6 +50,16 @@ const visible = computed({
   get: () => props.modelValue,
   set: (v) => emit('update:modelValue', v),
 });
+
+const activeTab = ref(props.defaultTab);
+
+/** 每次打开弹窗时按调用方指定的默认页签重置，关闭后再打开不会残留上次选择。 */
+watch(
+  () => props.modelValue,
+  (open) => {
+    if (open) activeTab.value = props.defaultTab || 'basic';
+  },
+);
 
 const title = computed(() => {
   const t = props.info?.tableName || '';
@@ -67,8 +82,8 @@ const propertyRows = computed(() => {
     class="table-info-dialog"
   >
     <div v-loading="loading">
-      <ElTabs v-if="info">
-        <ElTabPane :label="$tr('基本信息')">
+      <ElTabs v-if="info" v-model="activeTab">
+        <ElTabPane :label="$tr('基本信息')" name="basic">
           <ElDescriptions :column="2" border size="small">
             <ElDescriptionsItem :label="$tr('表名')">
               {{ info.tableName }}
@@ -95,7 +110,7 @@ const propertyRows = computed(() => {
           </ElDescriptions>
         </ElTabPane>
 
-        <ElTabPane :label="`字段 (${info.columns?.length || 0})`">
+        <ElTabPane :label="`字段 (${info.columns?.length || 0})`" name="columns">
           <ElTable
             :data="info.columns || []"
             size="small"
@@ -120,7 +135,7 @@ const propertyRows = computed(() => {
           </ElTable>
         </ElTabPane>
 
-        <ElTabPane :label="`索引 (${info.indexes?.length || 0})`">
+        <ElTabPane :label="`索引 (${info.indexes?.length || 0})`" name="indexes">
           <ElEmpty
             v-if="!(info.indexes && info.indexes.length)"
             :description="$tr('无索引信息')"
@@ -144,7 +159,7 @@ const propertyRows = computed(() => {
           </ElTable>
         </ElTabPane>
 
-        <ElTabPane label="DDL">
+        <ElTabPane label="DDL" name="ddl">
           <pre class="ddl-block">{{ info.ddl || '-- 无 DDL' }}</pre>
         </ElTabPane>
       </ElTabs>

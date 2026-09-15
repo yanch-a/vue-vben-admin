@@ -269,6 +269,8 @@ const selectedTreeTable = ref<{
 const tableInfoDialog = reactive({
   visible: false,
   loading: false,
+  /** 打开时默认页签；编辑器入口为 columns，对象树入口为 basic */
+  defaultTab: 'basic' as 'basic' | 'columns' | 'ddl' | 'indexes',
   info: null as any,
 });
 
@@ -808,11 +810,14 @@ function onSelectTreeTable(payload: {
 async function showTableInfo(payload: {
   instanceName: string;
   tableName: string;
+  /** 默认页签；SQL 编辑器右键进字段页 */
+  defaultTab?: 'basic' | 'columns' | 'ddl' | 'indexes';
 }) {
   if (!activeConnection.value) {
     ElMessage.warning('请先打开数据库连接');
     return;
   }
+  tableInfoDialog.defaultTab = payload.defaultTab || 'basic';
   tableInfoDialog.visible = true;
   tableInfoDialog.loading = true;
   tableInfoDialog.info = null;
@@ -829,6 +834,14 @@ async function showTableInfo(payload: {
   } finally {
     tableInfoDialog.loading = false;
   }
+}
+
+/** SQL 编辑器右键「查看表信息」：复用对象树同一接口，默认落在字段页。 */
+function onViewTableInfoFromEditor(payload: {
+  instanceName: string;
+  tableName: string;
+}) {
+  void showTableInfo({ ...payload, defaultTab: 'columns' });
 }
 
 /** 双击左侧已保存查询：打开/激活编辑器 */
@@ -2707,6 +2720,7 @@ onBeforeUnmount(() => {
               @save="onSaveQuery"
               @import-file="onImportSqlFile"
               @ask-ai="onAskAiFromEditor"
+              @view-table-info="onViewTableInfoFromEditor"
             />
           </div>
 
@@ -2812,6 +2826,7 @@ onBeforeUnmount(() => {
       v-model="tableInfoDialog.visible"
       :loading="tableInfoDialog.loading"
       :info="tableInfoDialog.info"
+      :default-tab="tableInfoDialog.defaultTab"
     />
 
     <CopyDatabaseDialog

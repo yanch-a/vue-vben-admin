@@ -428,6 +428,44 @@ export function resolveTableRefByAlias(
 }
 
 /**
+ * 从 SQL 编辑器选区或光标处标识符解析「查看表信息」目标。
+ * 支持 schema.table、引号标识符；若是别名则按当前 SQL 的 FROM/JOIN 还原真表。
+ */
+export function resolveTableTargetFromEditor(
+  fullSql: string,
+  rawToken: string,
+): { schema?: string; table: string } | null {
+  let token = String(rawToken || '').trim();
+  if (!token) return null;
+  // 选区若带尾部分号/多余空白，只取首个标识片段
+  token = token.replace(/;+\s*$/, '').trim();
+  if (/\s/.test(token) && !/[.`"[\]]/.test(token)) {
+    token = token.split(/\s+/)[0] || '';
+  }
+  if (!token) return null;
+
+  const parts = token
+    .split('.')
+    .map((part) => stripIdentQuotes(part.trim()))
+    .filter(Boolean);
+  if (parts.length >= 2) {
+    const schema = parts[parts.length - 2];
+    const table = parts[parts.length - 1];
+    if (!schema || !table) return null;
+    return { schema, table };
+  }
+
+  const name = parts[0];
+  if (!name || !/^[\w$#@]+$/u.test(name)) return null;
+
+  const byAlias = resolveTableRefByAlias(fullSql, name);
+  if (byAlias.table) {
+    return { schema: byAlias.schema, table: byAlias.table };
+  }
+  return { table: name };
+}
+
+/**
  * 判断光标处是在补全表名还是字段名。
  */
 export function detectCompletionContext(

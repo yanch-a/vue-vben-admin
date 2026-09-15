@@ -26,6 +26,7 @@ import {
   getRememberedTables,
   matchColumnSuggestions,
   matchTableSuggestions,
+  resolveTableTargetFromEditor,
   setCachedColumns,
 } from '../../utils/sqlEditorAssist';
 import { formatSqlByDialect } from '../../utils/formatSql';
@@ -76,6 +77,8 @@ const emit = defineEmits<{
   importFile: [{ fileName: string; content: string }];
   /** Ctrl+K / 右键「AI 助手」：把选区与全文交给浮窗 */
   askAi: [{ selectedSql: string; editorSql: string }];
+  /** 右键「查看表信息」：把解析出的表交给父级弹窗 */
+  viewTableInfo: [{ instanceName: string; tableName: string }];
 }>();
 
 const { isDark } = usePreferences();
@@ -355,6 +358,14 @@ onMounted(() => {
     keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyK],
     run: () => emitAskAi(),
   });
+  // 右键：对选中/光标处表名打开「查看表信息」（默认字段页由父级控制）
+  editor.addAction({
+    id: 'lemon.viewTableInfo',
+    label: '查看表信息',
+    contextMenuGroupId: 'navigation',
+    contextMenuOrder: 1.5,
+    run: () => emitViewTableInfo(),
+  });
   registerCompletion();
 });
 
@@ -412,6 +423,51 @@ function emitAskAi() {
   const selected =
     sel && !sel.isEmpty() ? model.getValueInRange(sel) : '';
   emit('askAi', { selectedSql: selected, editorSql: model.getValue() });
+}
+
+/**
+ * 取选区文本；无选区时向外扩展，拿到 schema.table 或带引号的标识符。
+ */
+function readTableTokenAtCursor(): string {
+  if (!editor) return '';
+  const model = editor.getModel();
+  if (!model) return '';
+  const sel = editor.getSelection();
+  if (sel && !sel.isEmpty()) {
+    return model.getValueInRange(sel);
+  }
+  const pos = editor.getPosition();
+  if (!pos) return '';
+  const line = model.getLineContent(pos.lineNumber);
+  const idx = Math.max(0, pos.column - 1);
+  const isIdentChar = (ch: string) => /[\w$#@.`"[\]]/.test(ch);
+  let left = idx;
+  let right = idx;
+  while (left > 0 && isIdentChar(line[left - 1] || '')) left -= 1;
+  while (right < line.length && isIdentChar(line[right] || '')) right += 1;
+  return line.slice(left, right);
+}
+
+/** 解析选中/光标表名并通知父级打开表信息弹窗 */
+function emitViewTableInfo() {
+  if (!editor) return;
+  const model = editor.getModel();
+  if (!model) return;
+  const token = readTableTokenAtCursor();
+  const target = resolveTableTargetFromEditor(model.getValue(), token);
+  if (!target?.table) {
+    ElMessage.warning('请先选中或将光标放在表名上');
+    return;
+  }
+  const instanceName = (target.schema || props.instanceName || '').trim();
+  if (!instanceName) {
+    ElMessage.warning('请先选择数据库 / Schema');
+    return;
+  }
+  emit('viewTableInfo', {
+    instanceName,
+    tableName: target.table,
+  });
 }
 
 /** 有选区替换选区；否则替换光标所在语句；再无则整体替换 */
