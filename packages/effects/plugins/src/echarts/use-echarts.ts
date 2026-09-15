@@ -91,15 +91,15 @@ function useEcharts(chartRef: Ref<EchartsUIType>) {
     if (!unref(isActiveRef)) {
       return Promise.resolve(null);
     }
-    cacheOptions = options;
     const currentOptions = {
-      ...options,
+      // 主题提供默认值，用户显式设置的 option（例如 backgroundColor）优先。@author yanch
       ...getOptions.value,
+      ...options,
     };
-    return new Promise((resolve) => {
+    return new Promise((resolve, reject) => {
       if (chartRef.value?.offsetHeight === 0) {
         useTimeoutFn(async () => {
-          resolve(await renderEcharts(currentOptions));
+          renderEcharts(currentOptions).then(resolve, reject);
         }, 30);
         return;
       }
@@ -107,20 +107,27 @@ function useEcharts(chartRef: Ref<EchartsUIType>) {
         const el = getChartEl();
         if (isElHidden(el)) {
           useTimeoutFn(async () => {
-            resolve(await renderEcharts(currentOptions));
+            renderEcharts(currentOptions).then(resolve, reject);
           }, 30);
           return;
         }
         useTimeoutFn(() => {
-          if (!chartInstance || chartInstance?.getDom() !== el) {
-            chartInstance?.dispose();
-            const instance = initCharts();
-            if (!instance) return;
-            chartInstance = instance;
+          // 自定义 option 可能语义无效，将渲染异常交给调用页展示，而不是抛出未捕获异常。@author yanch
+          try {
+            if (!chartInstance || chartInstance?.getDom() !== el) {
+              chartInstance?.dispose();
+              const instance = initCharts();
+              if (!instance) return;
+              chartInstance = instance;
+            }
+            clear && chartInstance?.clear();
+            chartInstance?.setOption(currentOptions);
+            // 只缓存成功渲染的配置，非法编辑草稿不能污染主题切换后的重绘。@author yanch
+            cacheOptions = options;
+            resolve(chartInstance);
+          } catch (error) {
+            reject(error);
           }
-          clear && chartInstance?.clear();
-          chartInstance?.setOption(currentOptions);
-          resolve(chartInstance);
         }, 30);
       });
     });
@@ -141,8 +148,8 @@ function useEcharts(chartRef: Ref<EchartsUIType>) {
 
         // 合并你原有的全局配置（比如 backgroundColor）
         const finalOption = {
-          ...option,
           ...getOptions.value,
+          ...option,
         };
 
         chartInstance.setOption(finalOption, {

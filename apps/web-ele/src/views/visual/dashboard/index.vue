@@ -33,6 +33,7 @@ import { getInstances } from '#/api/visual/database';
 import { getDbConfigList } from '#/api/visual/vq';
 
 import ChartRenderer from './components/ChartRenderer.vue';
+import ChartAppearanceEditor from './components/ChartAppearanceEditor.vue';
 
 defineOptions({ name: 'VisualDashboardWorkbench' });
 
@@ -51,6 +52,7 @@ const selectedWidgetId = ref('');
 const canvasRef = ref<HTMLElement>();
 const dirty = ref(false);
 const focusCanvas = ref(false);
+const propertyTab = ref('appearance');
 const contextMenu = reactive({ visible: false, x: 0, y: 0, widgetId: '' });
 
 const screenForm = reactive({
@@ -65,6 +67,7 @@ const screenForm = reactive({
 const screenConfig = reactive<ScreenConfig>(emptyConfig());
 
 const chartDialog = ref(false);
+const chartEditorTab = ref('data');
 const chartSaving = ref(false);
 const chartPreview = ref<QueryResult>();
 const connections = ref<any[]>([]);
@@ -76,6 +79,11 @@ const chartForm = reactive<ChartAsset>({
 const chartSpecForm = reactive({
   chartType: 'bar', xField: '', yFields: '', seriesField: '',
   valueFormat: 'number', stack: false, sortBy: '', sortOrder: 'asc',
+});
+/** 图表资产通过字符串存储规格，外观编辑器使用对象；只在边界做序列化转换。 */
+const editableChartSpec = computed({
+  get: () => parseSpec(chartForm.chartSpec),
+  set: (spec: ChartSpec) => { chartForm.chartSpec = JSON.stringify(spec); },
 });
 
 const selectedWidget = computed(() =>
@@ -188,6 +196,8 @@ function updateDefaultParams(widget: ScreenWidget, value: string) {
 
 function fillChartSpec() {
   chartForm.chartSpec = JSON.stringify({
+    // 修改字段映射时保留 appearance、optionOverrides，避免保存把外观配置静默丢掉。
+    ...parseSpec(chartForm.chartSpec),
     chartType: chartSpecForm.chartType,
     xField: chartSpecForm.xField.trim() || undefined,
     yFields: chartSpecForm.yFields.split(',').map((item) => item.trim()).filter(Boolean),
@@ -212,6 +222,7 @@ async function openChartDialog(asset?: ChartAsset) {
     sortBy: spec.sortBy || '', sortOrder: spec.sortOrder || 'asc',
   });
   chartPreview.value = undefined;
+  chartEditorTab.value = 'data';
   chartDialog.value = true;
   if (chartForm.dbConfigId) await changeConnection();
   if (asset?.instanceName) chartForm.instanceName = asset.instanceName;
@@ -398,7 +409,8 @@ function onWorkbenchKeydown(event: KeyboardEvent) {
   const target = event.target;
   if (target instanceof HTMLElement) {
     const tag = target.tagName.toLowerCase();
-    if (target.isContentEditable || tag === 'input' || tag === 'textarea' || tag === 'select') return;
+    // option 弹窗挂载到 body，不在画布 DOM 内；弹窗中任何控件都不应触发画布删除。
+    if (target.closest('[role="dialog"], .el-dialog') || target.isContentEditable || tag === 'input' || tag === 'textarea' || tag === 'select') return;
   }
   event.preventDefault();
   removeSelectedWidget();
@@ -418,7 +430,11 @@ async function saveDraft(showMessage = true) {
 
 async function previewAll() {
   const bundle: any = unwrap(await previewScreen(screenConfig), {});
-  Object.assign(results, bundle.datasets || {});
+  // 后台对相同 SQL 去重，datasets 的键未必是组件 ID，按 widgetData 映射回画布。
+  for (const widget of screenConfig.widgets) {
+    const key = bundle.widgetData?.[widget.id] || widget.id;
+    if (bundle.datasets?.[key]) results[widget.id] = bundle.datasets[key];
+  }
   ElMessage.success(`已刷新 ${Object.keys(bundle.datasets || {}).length} 个图表`);
 }
 
@@ -436,9 +452,9 @@ function viewScreen(value: any) {
     ElMessage.error('大屏 ID 缺失，无法打开查看页，请刷新列表后重试');
     return;
   }
-  // 同时写入路径参数和 query。后台菜单路由与前端路由合并时即使动态参数丢失，查看页仍能从 query 恢复。
+  // 查看路由是静态路径，大屏 ID 统一放入 query，避免将 ID 拼入 pathname 后无法匹配路由。
   const target = router.resolve({
-    path: `/visual/dashboard/view/${encodeURIComponent(id)}`,
+    path: '/visual/dashboard/view',
     query: { screenId: id },
   });
   window.open(target.href, '_blank', 'noopener');
@@ -487,6 +503,8 @@ onMounted(() => {
   void loadConnections();
 });
 onBeforeUnmount(() => window.removeEventListener('keydown', onWorkbenchKeydown));
+// 字段映射改变后只重绘现有预览，不重复执行 SQL。
+watch(chartSpecForm, fillChartSpec, { deep: true });
 </script>
 
 <template>
@@ -574,7 +592,8 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onWorkbenchKeydown))
           <article v-for="widget in screenConfig.widgets" :key="widget.id" class="canvas-widget"
             :class="{ selected: selectedWidgetId === widget.id }" :style="widgetStyle(widget)"
             @click.stop="selectWidget(widget)" @contextmenu="openWidgetContextMenu($event, widget)">
-            <header @pointerdown="beginPointer($event, widget)"><span>{{ widget.title }}</span><i>拖动</i></header>
+            <header v-if="widget.chartSpec.appearance?.showTitle !== false" @pointerdown="beginPointer($event, widget)"><span>{{ widget.title }}</span><i>拖动</i></header>
+            <button v-else-if="selectedWidgetId === widget.id" class="widget-move-handle" @pointerdown="beginPointer($event, widget)">拖动</button>
             <div class="widget-body"><ChartRenderer :spec="widget.chartSpec" :result="results[widget.id]" /></div>
             <button class="resize-handle east" title="向右调整宽度" @pointerdown="beginPointer($event, widget, 'east')" />
             <button class="resize-handle south" title="向下调整高度" @pointerdown="beginPointer($event, widget, 'south')" />
@@ -594,6 +613,13 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onWorkbenchKeydown))
               <ElFormItem label="宽"><ElInputNumber v-model="selectedWidget.w" :min="160" :max="screenConfig.width - selectedWidget.x" controls-position="right" @change="dirty = true" /></ElFormItem>
               <ElFormItem label="高"><ElInputNumber v-model="selectedWidget.h" :min="110" :max="screenConfig.height - selectedWidget.y" controls-position="right" @change="dirty = true" /></ElFormItem>
             </div>
+            <ElTabs v-model="propertyTab">
+              <ElTabPane label="外观与 option" name="appearance">
+                <ChartAppearanceEditor :key="selectedWidget.id" :spec="selectedWidget.chartSpec" :result="results[selectedWidget.id]"
+                  :preview-width="selectedWidget.w" :preview-height="selectedWidget.h"
+                  @update:spec="selectedWidget.chartSpec = $event; dirty = true" />
+              </ElTabPane>
+              <ElTabPane label="数据与字段" name="data">
             <ElFormItem label="图表类型">
               <ElSelect v-model="selectedWidget.chartSpec.chartType" @change="dirty = true">
                 <ElOption v-for="item in ['bar','line','area','pie','scatter','kpi','table']" :key="item" :value="item" :label="item" />
@@ -636,6 +662,8 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onWorkbenchKeydown))
               <ElFormItem label="最大行数"><ElInputNumber v-model="selectedWidget.data.maxRows" :min="1" :max="5000" @change="dirty = true" /></ElFormItem>
               <ElFormItem label="超时(秒)"><ElInputNumber v-model="selectedWidget.data.timeoutSeconds" :min="1" :max="120" @change="dirty = true" /></ElFormItem>
             </div>
+              </ElTabPane>
+            </ElTabs>
           </ElForm>
         </template>
         <template v-else>
@@ -664,8 +692,10 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onWorkbenchKeydown))
       <button @click="removeWidget(contextMenu.widgetId)">删除组件</button>
     </div>
 
-    <ElDialog v-model="chartDialog" title="图表编辑器" width="900px" destroy-on-close>
+    <ElDialog v-model="chartDialog" title="图表编辑器" width="min(1100px, 94vw)" destroy-on-close>
       <div class="chart-editor">
+        <ElTabs v-model="chartEditorTab">
+          <ElTabPane label="数据与字段" name="data">
         <ElForm label-position="top">
           <div class="form-row">
             <ElFormItem label="图表名称"><ElInput v-model="chartForm.title" /></ElFormItem>
@@ -692,6 +722,11 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onWorkbenchKeydown))
             <ElFormItem label="堆叠"><ElSwitch v-model="chartSpecForm.stack" /></ElFormItem>
           </div>
         </ElForm>
+          </ElTabPane>
+          <ElTabPane label="外观与 option" name="appearance">
+            <ElForm label-position="top"><ChartAppearanceEditor v-model:spec="editableChartSpec" :result="chartPreview" /></ElForm>
+          </ElTabPane>
+        </ElTabs>
         <div class="dialog-preview"><ChartRenderer v-if="chartPreview" :spec="parseSpec(chartForm.chartSpec)" :result="chartPreview" /><ElEmpty v-else description="点击预览验证 SQL 和字段" /></div>
       </div>
       <template #footer><ElButton @click="doPreviewChart">运行预览</ElButton><ElButton type="primary" :loading="chartSaving" @click="doSaveChart">保存图表</ElButton></template>
@@ -713,5 +748,8 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onWorkbenchKeydown))
 .canvas-stage { display: grid; padding: 6px; overflow: auto; place-items: center; background: #cbd2dc; }.canvas { position: relative; width: min(100%,calc((100dvh - 142px) * 1.7778)); aspect-ratio: 16/9; overflow: hidden; box-shadow: 0 5px 18px #0005; }.drop-hint { display: grid; height: 100%; place-items: center; color: #94a3b8; }.canvas-widget { position: absolute; display: flex; flex-direction: column; overflow: hidden; color: #dbeafe; touch-action: none; user-select: none; background: #101b2dcc; border: 1px solid #30435f; border-radius: 5px; }.canvas-widget.selected { z-index: 2; outline: 2px solid #409eff; outline-offset: -1px; }.canvas-widget header { display: flex; flex: 0 0 30px; align-items: center; justify-content: space-between; padding: 0 9px; cursor: move; touch-action: none; background: #16243a; font-size: 12px; }.canvas-widget header i { color: #64748b; font-style: normal; }.widget-body { flex: 1; min-height: 0; padding: 4px; }.resize-handle { position: absolute; z-index: 4; padding: 0; touch-action: none; background: transparent; border: 0; }.resize-handle.east { top: 25%; right: -1px; width: 8px; height: 50%; cursor: ew-resize; border-right: 3px solid #409eff; }.resize-handle.south { bottom: -1px; left: 25%; width: 50%; height: 8px; cursor: ns-resize; border-bottom: 3px solid #409eff; }.resize-handle.southeast { right: 0; bottom: 0; width: 24px; height: 24px; cursor: nwse-resize; background: linear-gradient(135deg,transparent 52%,#409eff 53%); }
 .property-panel h3,.asset-panel h3 { margin: 0 0 10px; }.property-panel :deep(.el-select),.chart-editor :deep(.el-select) { width: 100%; }.form-row { align-items: flex-start; }.form-row > * { flex: 1; }.layout-fields { display: grid; grid-template-columns: repeat(4,minmax(0,1fr)); gap: 5px; }.layout-fields :deep(.el-input-number) { width: 100%; }.dialog-preview { height: 300px; padding: 8px; border: 1px dashed var(--el-border-color); border-radius: 6px; }
 .widget-context-menu { position: fixed; z-index: 4000; min-width: 136px; padding: 5px; background: var(--el-bg-color-overlay); border: 1px solid var(--el-border-color); border-radius: 6px; box-shadow: var(--el-box-shadow-light); }.widget-context-menu button { width: 100%; padding: 7px 10px; color: var(--el-color-danger); text-align: left; cursor: pointer; background: transparent; border: 0; border-radius: 4px; }.widget-context-menu button:hover { background: var(--el-color-danger-light-9); }
+.widget-move-handle { position: absolute; top: 3px; right: 3px; z-index: 3; padding: 2px 8px; cursor: move; color: #dbeafe; background: #16243acc; border: 1px solid #409eff; border-radius: 4px; font-size: 11px; }
+.chart-editor { display: grid; grid-template-columns: minmax(0,1.1fr) minmax(0,1fr); gap: 18px; max-height: 65vh; overflow: auto; }.chart-editor > * { min-width: 0; }.chart-editor .form-row { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); }.chart-editor .dialog-preview { position: sticky; top: 10px; margin-top: 40px; background: #101b2d; }
+@media (max-width: 760px) { .chart-editor { grid-template-columns: minmax(0,1fr); }.chart-editor .dialog-preview { position: static; margin-top: 0; } }
 @media (max-width: 1100px) { .editor { grid-template-columns: 180px minmax(390px,1fr) 250px; }.top-actions { flex-wrap: wrap; justify-content: flex-end; } }
 </style>

@@ -19,7 +19,8 @@ const routes: RouteRecordRaw[] = [
   },
   {
     name: 'VisualDashboardView',
-    path: '/visual/dashboard/view/:id',
+    // 查看页与后台菜单路由保持一致，具体大屏 ID 通过 screenId 查询参数传递。
+    path: '/visual/dashboard/view',
     component: () => import('#/views/visual/dashboard/view.vue'),
     meta: {
       title: '数据大屏',

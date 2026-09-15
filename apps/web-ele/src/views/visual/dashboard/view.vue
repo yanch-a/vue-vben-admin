@@ -19,6 +19,10 @@ const loading = ref(false);
 const bundle = ref<any>();
 const viewport = ref({ width: window.innerWidth, height: window.innerHeight });
 const loadError = ref('');
+/**
+ * 从查询参数读取当前大屏 ID，同时兼容历史动态路由链接中的 id 参数。
+ * @author yanch
+ */
 const screenId = computed(() => {
   const paramId = Array.isArray(route.params.id) ? route.params.id[0] : route.params.id;
   const queryId = Array.isArray(route.query.screenId) ? route.query.screenId[0] : route.query.screenId;
@@ -69,7 +73,7 @@ onBeforeUnmount(() => window.removeEventListener('resize', resize));
     </ElResult>
     <div v-if="bundle" class="screen" :style="{ width: `${config.width}px`, height: `${config.height}px`, transform: `translate(-50%, -50%) scale(${scale})` }">
       <article v-for="widget in config.widgets" :key="widget.id" class="widget" :style="widgetStyle(widget)">
-        <header>{{ widget.title }}</header>
+        <header v-if="widget.chartSpec.appearance?.showTitle !== false">{{ widget.title }}</header>
         <div class="body"><ChartRenderer :spec="widget.chartSpec as ChartSpec" :result="resultFor(widget.id)" /></div>
       </article>
     </div>
@@ -86,6 +90,6 @@ onBeforeUnmount(() => window.removeEventListener('resize', resize));
 .viewer :deep(.el-result) { position: relative; z-index: 2; padding: 32px; background: #ffffffee; border-radius: 10px; }
 .screen { position: absolute; top: 50%; left: 50%; transform-origin: center center; }
 .widget { position: absolute; display: flex; flex-direction: column; overflow: hidden; background: #101b2dcc; border: 1px solid #30435f; border-radius: 5px; }
-.widget header { flex: 0 0 34px; padding: 8px 12px; font-weight: 600; background: #16243a; }.body { flex: 1; min-height: 0; padding: 5px; }
+.widget header { display: flex; flex: 0 0 30px; align-items: center; padding: 0 9px; font-size: 12px; font-weight: 600; background: #16243a; }.body { flex: 1; min-height: 0; padding: 4px; }
 .status { position: fixed; right: 12px; bottom: 10px; display: flex; align-items: center; gap: 10px; padding: 5px 8px; color: #94a3b8; background: #0008; border-radius: 5px; font-size: 11px; }.status button { color: #bfdbfe; cursor: pointer; background: transparent; border: 0; }.warning { color: #fbbf24; }
 </style>
