@@ -31,9 +31,12 @@ import {
 } from '#/api/visual/dashboard';
 import { getInstances } from '#/api/visual/database';
 import { getDbConfigList } from '#/api/visual/vq';
+import { resolveBackendAssetUrl } from '#/config';
+import LemonUpload from '#/components/lemon-upload/index.vue';
 
 import ChartRenderer from './components/ChartRenderer.vue';
 import ChartAppearanceEditor from './components/ChartAppearanceEditor.vue';
+import { CHART_TYPE_OPTIONS, getFieldMappingHint } from './fieldMappingHints';
 
 defineOptions({ name: 'VisualDashboardWorkbench' });
 
@@ -78,17 +81,26 @@ const chartForm = reactive<ChartAsset>({
 });
 const chartSpecForm = reactive({
   chartType: 'bar', xField: '', yFields: '', seriesField: '',
-  valueFormat: 'number', stack: false, sortBy: '', sortOrder: 'asc',
+  textContent: '', valueFormat: 'number', stack: false, sortBy: '', sortOrder: 'asc',
+  fontSize: 24 as number | undefined,
 });
 /** 图表资产通过字符串存储规格，外观编辑器使用对象；只在边界做序列化转换。 */
 const editableChartSpec = computed({
   get: () => parseSpec(chartForm.chartSpec),
   set: (spec: ChartSpec) => { chartForm.chartSpec = JSON.stringify(spec); },
 });
-
 const selectedWidget = computed(() =>
   screenConfig.widgets.find((item) => item.id === selectedWidgetId.value),
 );
+/** 当前编辑中的图表类型对应的 SQL/字段映射说明。 */
+const chartFieldHint = computed(() => getFieldMappingHint(chartSpecForm.chartType));
+const widgetFieldHint = computed(() =>
+  selectedWidget.value
+    ? getFieldMappingHint(selectedWidget.value.chartSpec.chartType)
+    : getFieldMappingHint('bar'),
+);
+const isTextChartForm = computed(() => chartSpecForm.chartType === 'text');
+const isTextWidget = computed(() => selectedWidget.value?.chartSpec.chartType === 'text');
 /** 统计每个图表资产在当前画布中的使用次数，允许复用但必须给用户明确反馈。 */
 const usedChartCounts = computed(() => {
   const counts = new Map<string, number>();
@@ -113,7 +125,35 @@ function defaultSpec(): ChartSpec {
 }
 
 function emptyConfig(): ScreenConfig {
-  return { schemaVersion: 1, width: 1200, height: 675, background: '#0b1220', widgets: [] };
+  return {
+    schemaVersion: 1,
+    width: 1200,
+    height: 675,
+    background: '#0b1220',
+    backgroundImage: '',
+    widgets: [],
+  };
+}
+
+/** 画布背景：颜色 + 可选背景图（cover 铺满）。 */
+function canvasBackgroundStyle(config: ScreenConfig = screenConfig) {
+  const style: Record<string, string> = {
+    backgroundColor: config.background || '#0b1220',
+  };
+  const image = resolveBackendAssetUrl(config.backgroundImage);
+  if (image) {
+    style.backgroundImage = `url("${image}")`;
+    style.backgroundSize = 'cover';
+    style.backgroundPosition = 'center center';
+    style.backgroundRepeat = 'no-repeat';
+  }
+  return style;
+}
+
+/** 背景图上传或清除后同步写入配置并标记未保存。 */
+function onBackgroundImageChange(value: string) {
+  screenConfig.backgroundImage = value || '';
+  dirty.value = true;
 }
 
 function unwrap<T>(response: any, fallback: T): T {
@@ -131,7 +171,12 @@ function screenIdOf(value: any): string {
 function parseSpec(value?: string): ChartSpec {
   try {
     const parsed = JSON.parse(value || '{}') as Partial<ChartSpec>;
-    return { ...defaultSpec(), ...parsed, yFields: Array.isArray(parsed.yFields) ? parsed.yFields : [] };
+    return {
+      ...defaultSpec(),
+      ...parsed,
+      yFields: Array.isArray(parsed.yFields) ? parsed.yFields : [],
+      textContent: parsed.textContent,
+    };
   }
   catch { return defaultSpec(); }
 }
@@ -195,17 +240,28 @@ function updateDefaultParams(widget: ScreenWidget, value: string) {
 }
 
 function fillChartSpec() {
+  const prev = parseSpec(chartForm.chartSpec);
+  const isText = chartSpecForm.chartType === 'text';
   chartForm.chartSpec = JSON.stringify({
     // 修改字段映射时保留 appearance、optionOverrides，避免保存把外观配置静默丢掉。
-    ...parseSpec(chartForm.chartSpec),
+    ...prev,
     chartType: chartSpecForm.chartType,
-    xField: chartSpecForm.xField.trim() || undefined,
-    yFields: chartSpecForm.yFields.split(',').map((item) => item.trim()).filter(Boolean),
-    seriesField: chartSpecForm.seriesField.trim() || undefined,
+    xField: isText ? undefined : (chartSpecForm.xField.trim() || undefined),
+    yFields: isText
+      ? []
+      : chartSpecForm.yFields.split(',').map((item) => item.trim()).filter(Boolean),
+    seriesField: isText ? undefined : (chartSpecForm.seriesField.trim() || undefined),
+    textContent: isText ? chartSpecForm.textContent : undefined,
     valueFormat: chartSpecForm.valueFormat,
     stack: chartSpecForm.stack,
-    sortBy: chartSpecForm.sortBy.trim() || undefined,
+    sortBy: isText ? undefined : (chartSpecForm.sortBy.trim() || undefined),
     sortOrder: chartSpecForm.sortOrder,
+    appearance: {
+      ...prev.appearance,
+      ...(isText && chartSpecForm.fontSize
+        ? { fontSize: chartSpecForm.fontSize }
+        : {}),
+    },
   });
 }
 
@@ -218,8 +274,10 @@ async function openChartDialog(asset?: ChartAsset) {
   const spec = parseSpec(chartForm.chartSpec);
   Object.assign(chartSpecForm, {
     chartType: spec.chartType, xField: spec.xField || '', yFields: spec.yFields.join(', '),
-    seriesField: spec.seriesField || '', valueFormat: spec.valueFormat || 'number', stack: Boolean(spec.stack),
+    seriesField: spec.seriesField || '', textContent: spec.textContent || '',
+    valueFormat: spec.valueFormat || 'number', stack: Boolean(spec.stack),
     sortBy: spec.sortBy || '', sortOrder: spec.sortOrder || 'asc',
+    fontSize: spec.appearance?.fontSize || 24,
   });
   chartPreview.value = undefined;
   chartEditorTab.value = 'data';
@@ -230,11 +288,19 @@ async function openChartDialog(asset?: ChartAsset) {
 
 async function doPreviewChart() {
   fillChartSpec();
+  if (chartSpecForm.chartType === 'text') {
+    chartPreview.value = { columns: [], rows: [], rowCount: 0 };
+    return;
+  }
   chartPreview.value = unwrap(await previewChart(chartForm), undefined as any);
 }
 
 async function doSaveChart() {
   fillChartSpec();
+  if (chartSpecForm.chartType === 'text' && !chartSpecForm.textContent.trim()) {
+    ElMessage.warning('请填写文本内容');
+    return;
+  }
   chartSaving.value = true;
   try {
     await saveChartAsset(chartForm);
@@ -280,17 +346,42 @@ async function editScreen(value: any) {
 }
 
 function assetToWidget(asset: ChartAsset, x = 30, y = 30): ScreenWidget {
+  const spec = parseSpec(asset.chartSpec);
+  const isText = spec.chartType === 'text';
   return {
     id: `w_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
     chartId: asset.id,
     title: asset.title,
-    chartSpec: parseSpec(asset.chartSpec),
+    chartSpec: spec,
     data: {
       dbConfigId: asset.dbConfigId, instanceName: asset.instanceName,
-      sqlText: asset.sqlText, maxRows: asset.maxRows || 2000, timeoutSeconds: asset.timeoutSeconds || 30,
+      sqlText: isText ? '' : asset.sqlText,
+      maxRows: asset.maxRows || 2000, timeoutSeconds: asset.timeoutSeconds || 30,
     },
-    x, y, w: 420, h: 260,
+    x, y,
+    w: isText ? 220 : 420,
+    h: isText ? 48 : 260,
   };
+}
+
+/** 在画布上直接放置一个文本组件，无需 SQL。 */
+function addTextWidget(x = 40, y = 24) {
+  const widget: ScreenWidget = {
+    id: `w_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+    title: '文本',
+    chartSpec: {
+      chartType: 'text',
+      yFields: [],
+      textContent: '文本标题',
+      appearance: { fontSize: 28, showTitle: false, colors: ['#e2e8f0'] },
+    },
+    data: { sqlText: '', maxRows: 1, timeoutSeconds: 1 },
+    x, y, w: 220, h: 48,
+  };
+  screenConfig.widgets.push(widget);
+  selectedWidgetId.value = widget.id;
+  propertyTab.value = 'data';
+  dirty.value = true;
 }
 
 async function addChart(asset: ChartAsset, x?: number, y?: number) {
@@ -298,6 +389,7 @@ async function addChart(asset: ChartAsset, x?: number, y?: number) {
   screenConfig.widgets.push(widget);
   selectedWidgetId.value = widget.id;
   dirty.value = true;
+  if (widget.chartSpec.chartType === 'text') return;
   try { results[widget.id] = unwrap(await runChart(asset.id!), {} as QueryResult); }
   catch { /* 图表仍可加入画布，用户可在右侧修正 SQL 后统一预览。 */ }
 }
@@ -327,6 +419,12 @@ function widgetStyle(widget: ScreenWidget) {
 
 type PointerMode = 'east' | 'move' | 'south' | 'southeast';
 
+/** 文本组件允许更小区域；普通图表仍保留可操作的最小宽高。 */
+function widgetMinSize(widget: ScreenWidget) {
+  if (widget.chartSpec.chartType === 'text') return { w: 40, h: 24 };
+  return { w: 160, h: 110 };
+}
+
 /**
  * 统一处理组件移动及右、下、右下三个方向的缩放。
  * 坐标始终换算回逻辑画布尺寸，发布查看页因此能严格复现编辑比例。
@@ -338,6 +436,7 @@ function beginPointer(event: PointerEvent, widget: ScreenWidget, pointerMode: Po
   const startX = event.clientX;
   const startY = event.clientY;
   const initial = { x: widget.x, y: widget.y, w: widget.w, h: widget.h };
+  const minSize = widgetMinSize(widget);
   const scale = (canvasRef.value?.getBoundingClientRect().width || screenConfig.width) / screenConfig.width;
   const move = (moveEvent: PointerEvent) => {
     const dx = Math.round((moveEvent.clientX - startX) / scale);
@@ -347,10 +446,10 @@ function beginPointer(event: PointerEvent, widget: ScreenWidget, pointerMode: Po
       widget.y = Math.max(0, Math.min(screenConfig.height - widget.h, initial.y + dy));
     } else {
       if (pointerMode === 'east' || pointerMode === 'southeast') {
-        widget.w = Math.max(160, Math.min(screenConfig.width - widget.x, initial.w + dx));
+        widget.w = Math.max(minSize.w, Math.min(screenConfig.width - widget.x, initial.w + dx));
       }
       if (pointerMode === 'south' || pointerMode === 'southeast') {
-        widget.h = Math.max(110, Math.min(screenConfig.height - widget.y, initial.h + dy));
+        widget.h = Math.max(minSize.h, Math.min(screenConfig.height - widget.y, initial.h + dy));
       }
     }
     dirty.value = true;
@@ -394,6 +493,26 @@ function selectWidget(widget: ScreenWidget) {
     const trees: any[] = unwrap(response, []);
     instances.value = (trees[0]?.instances || []).map((item: any) => item.instanceName).filter(Boolean);
   }).catch(() => { instances.value = []; });
+}
+
+/** 切换组件图表类型时，文本组件补齐默认文案并关闭标题栏。 */
+function onWidgetChartTypeChange(type: string) {
+  dirty.value = true;
+  const widget = selectedWidget.value;
+  if (!widget) return;
+  if (type === 'text') {
+    widget.chartSpec.textContent =
+      widget.chartSpec.textContent || widget.title || '文本内容';
+    widget.chartSpec.yFields = [];
+    widget.chartSpec.appearance = {
+      ...widget.chartSpec.appearance,
+      showTitle: false,
+      fontSize: widget.chartSpec.appearance?.fontSize || 24,
+      colors: widget.chartSpec.appearance?.colors?.length
+        ? widget.chartSpec.appearance.colors
+        : ['#e2e8f0'],
+    };
+  }
 }
 
 function removeSelectedWidget() {
@@ -582,18 +701,29 @@ watch(chartSpecForm, fillChartSpec, { deep: true });
             <span>{{ parseSpec(asset.chartSpec).chartType }}</span>
           </div>
         </div>
-        <ElButton class="full" @click="openChartDialog()">+ 新建图表</ElButton>
+        <div class="asset-actions">
+          <ElButton class="full" @click="openChartDialog()">+ 新建图表</ElButton>
+          <ElButton class="full" @click="addTextWidget">+ 添加文本</ElButton>
+        </div>
       </aside>
 
       <section class="canvas-stage" @click="selectedWidgetId = ''">
-        <div ref="canvasRef" class="canvas" :style="{ background: screenConfig.background }"
+        <div ref="canvasRef" class="canvas" :style="canvasBackgroundStyle()"
           @dragover.prevent @drop.prevent="dropAsset">
-          <div v-if="!screenConfig.widgets.length" class="drop-hint">从左侧拖入图表，或双击图表快速添加</div>
+          <div v-if="!screenConfig.widgets.length" class="drop-hint">从左侧拖入图表，或双击图表快速添加；也可添加文本</div>
           <article v-for="widget in screenConfig.widgets" :key="widget.id" class="canvas-widget"
-            :class="{ selected: selectedWidgetId === widget.id }" :style="widgetStyle(widget)"
+            :class="{ selected: selectedWidgetId === widget.id, 'text-widget-card': widget.chartSpec.chartType === 'text' }"
+            :style="widgetStyle(widget)"
             @click.stop="selectWidget(widget)" @contextmenu="openWidgetContextMenu($event, widget)">
-            <header v-if="widget.chartSpec.appearance?.showTitle !== false" @pointerdown="beginPointer($event, widget)"><span>{{ widget.title }}</span><i>拖动</i></header>
-            <button v-else-if="selectedWidgetId === widget.id" class="widget-move-handle" @pointerdown="beginPointer($event, widget)">拖动</button>
+            <header
+              v-if="widget.chartSpec.chartType !== 'text' && widget.chartSpec.appearance?.showTitle !== false"
+              @pointerdown="beginPointer($event, widget)"
+            ><span>{{ widget.title }}</span><i>拖动</i></header>
+            <button
+              v-else-if="selectedWidgetId === widget.id || widget.chartSpec.chartType === 'text'"
+              class="widget-move-handle"
+              @pointerdown="beginPointer($event, widget)"
+            >拖动</button>
             <div class="widget-body"><ChartRenderer :spec="widget.chartSpec" :result="results[widget.id]" /></div>
             <button class="resize-handle east" title="向右调整宽度" @pointerdown="beginPointer($event, widget, 'east')" />
             <button class="resize-handle south" title="向下调整高度" @pointerdown="beginPointer($event, widget, 'south')" />
@@ -610,8 +740,8 @@ watch(chartSpecForm, fillChartSpec, { deep: true });
             <div class="layout-fields">
               <ElFormItem label="X"><ElInputNumber v-model="selectedWidget.x" :min="0" :max="screenConfig.width - selectedWidget.w" controls-position="right" @change="dirty = true" /></ElFormItem>
               <ElFormItem label="Y"><ElInputNumber v-model="selectedWidget.y" :min="0" :max="screenConfig.height - selectedWidget.h" controls-position="right" @change="dirty = true" /></ElFormItem>
-              <ElFormItem label="宽"><ElInputNumber v-model="selectedWidget.w" :min="160" :max="screenConfig.width - selectedWidget.x" controls-position="right" @change="dirty = true" /></ElFormItem>
-              <ElFormItem label="高"><ElInputNumber v-model="selectedWidget.h" :min="110" :max="screenConfig.height - selectedWidget.y" controls-position="right" @change="dirty = true" /></ElFormItem>
+              <ElFormItem label="宽"><ElInputNumber v-model="selectedWidget.w" :min="widgetMinSize(selectedWidget).w" :max="screenConfig.width - selectedWidget.x" controls-position="right" @change="dirty = true" /></ElFormItem>
+              <ElFormItem label="高"><ElInputNumber v-model="selectedWidget.h" :min="widgetMinSize(selectedWidget).h" :max="screenConfig.height - selectedWidget.y" controls-position="right" @change="dirty = true" /></ElFormItem>
             </div>
             <ElTabs v-model="propertyTab">
               <ElTabPane label="外观与 option" name="appearance">
@@ -620,11 +750,39 @@ watch(chartSpecForm, fillChartSpec, { deep: true });
                   @update:spec="selectedWidget.chartSpec = $event; dirty = true" />
               </ElTabPane>
               <ElTabPane label="数据与字段" name="data">
+            <ElAlert class="field-hint" type="info" :closable="false" :title="widgetFieldHint.summary">
+              <p>SQL 示例：{{ widgetFieldHint.sqlExample }}</p>
+              <ul>
+                <li v-for="item in widgetFieldHint.fields" :key="item.name">
+                  <b>{{ item.name }}</b>{{ item.required ? '（必填）' : '（可选）' }}：{{ item.desc }}
+                </li>
+              </ul>
+            </ElAlert>
             <ElFormItem label="图表类型">
-              <ElSelect v-model="selectedWidget.chartSpec.chartType" @change="dirty = true">
-                <ElOption v-for="item in ['bar','line','area','pie','scatter','kpi','table']" :key="item" :value="item" :label="item" />
+              <ElSelect v-model="selectedWidget.chartSpec.chartType" @change="onWidgetChartTypeChange">
+                <ElOption v-for="item in CHART_TYPE_OPTIONS" :key="item.value" :value="item.value" :label="item.label" />
               </ElSelect>
             </ElFormItem>
+            <template v-if="isTextWidget">
+              <ElFormItem label="文本内容">
+                <ElInput
+                  v-model="selectedWidget.chartSpec.textContent"
+                  type="textarea"
+                  :rows="5"
+                  @input="dirty = true"
+                />
+              </ElFormItem>
+              <ElFormItem label="字号">
+                <ElInputNumber
+                  :model-value="selectedWidget.chartSpec.appearance?.fontSize ?? 24"
+                  :min="12"
+                  :max="120"
+                  controls-position="right"
+                  @change="selectedWidget.chartSpec.appearance = { ...selectedWidget.chartSpec.appearance, fontSize: $event || 24 }; dirty = true"
+                />
+              </ElFormItem>
+            </template>
+            <template v-else>
             <ElFormItem label="X 字段"><ElInput v-model="selectedWidget.chartSpec.xField" @input="dirty = true" /></ElFormItem>
             <ElFormItem label="Y 字段（逗号分隔）">
               <ElInput :model-value="selectedWidget.chartSpec.yFields.join(', ')"
@@ -662,6 +820,7 @@ watch(chartSpecForm, fillChartSpec, { deep: true });
               <ElFormItem label="最大行数"><ElInputNumber v-model="selectedWidget.data.maxRows" :min="1" :max="5000" @change="dirty = true" /></ElFormItem>
               <ElFormItem label="超时(秒)"><ElInputNumber v-model="selectedWidget.data.timeoutSeconds" :min="1" :max="120" @change="dirty = true" /></ElFormItem>
             </div>
+            </template>
               </ElTabPane>
             </ElTabs>
           </ElForm>
@@ -671,7 +830,17 @@ watch(chartSpecForm, fillChartSpec, { deep: true });
           <ElForm label-position="top" size="small">
             <ElFormItem label="名称"><ElInput v-model="screenForm.name" @input="dirty = true" /></ElFormItem>
             <ElFormItem label="说明"><ElInput v-model="screenForm.description" type="textarea" :rows="2" @input="dirty = true" /></ElFormItem>
-            <ElFormItem label="背景"><ElColorPicker v-model="screenConfig.background" @change="dirty = true" /></ElFormItem>
+            <ElFormItem label="背景色"><ElColorPicker v-model="screenConfig.background" @change="dirty = true" /></ElFormItem>
+            <ElFormItem label="背景图">
+              <LemonUpload
+                :model-value="screenConfig.backgroundImage || ''"
+                :image-url="screenConfig.backgroundImage || ''"
+                attach-code="BiScreenBackground"
+                :limit="1"
+                @update:model-value="onBackgroundImageChange"
+              />
+              <p class="bg-hint">建议 16:9 图片，上传后铺满画布；清除图片后仅显示背景色。</p>
+            </ElFormItem>
             <ElFormItem label="数据更新策略">
               <ElRadioGroup v-model="screenForm.refreshMode" @change="dirty = true">
                 <ElRadio value="LIVE">每次查看实时查询</ElRadio>
@@ -699,22 +868,38 @@ watch(chartSpecForm, fillChartSpec, { deep: true });
         <ElForm label-position="top">
           <div class="form-row">
             <ElFormItem label="图表名称"><ElInput v-model="chartForm.title" /></ElFormItem>
-            <ElFormItem label="数据库连接"><ElSelect v-model="chartForm.dbConfigId" filterable @change="changeConnection">
+            <ElFormItem v-if="!isTextChartForm" label="数据库连接"><ElSelect v-model="chartForm.dbConfigId" filterable @change="changeConnection">
               <ElOption v-for="item in connections" :key="item.id" :value="item.id" :label="item.dbName || item.name || item.dbHost" />
             </ElSelect></ElFormItem>
-            <ElFormItem label="实例 / Schema"><ElSelect v-model="chartForm.instanceName" filterable allow-create>
+            <ElFormItem v-if="!isTextChartForm" label="实例 / Schema"><ElSelect v-model="chartForm.instanceName" filterable allow-create>
               <ElOption v-for="item in instances" :key="item" :value="item" :label="item" />
             </ElSelect></ElFormItem>
           </div>
-          <ElFormItem label="只读 SQL"><ElInput v-model="chartForm.sqlText" type="textarea" :rows="7" placeholder="SELECT category, amount FROM ..." /></ElFormItem>
+          <ElAlert class="field-hint" type="info" :closable="false" :title="chartFieldHint.summary">
+            <p>SQL 示例：{{ chartFieldHint.sqlExample }}</p>
+            <ul>
+              <li v-for="item in chartFieldHint.fields" :key="item.name">
+                <b>{{ item.name }}</b>{{ item.required ? '（必填）' : '（可选）' }}：{{ item.desc }}
+              </li>
+            </ul>
+          </ElAlert>
+          <ElFormItem v-if="!isTextChartForm" label="只读 SQL"><ElInput v-model="chartForm.sqlText" type="textarea" :rows="7" placeholder="SELECT category, amount FROM ..." /></ElFormItem>
           <div class="form-row">
             <ElFormItem label="图表类型"><ElSelect v-model="chartSpecForm.chartType">
-              <ElOption v-for="item in ['bar','line','area','pie','scatter','kpi','table']" :key="item" :value="item" :label="item" />
+              <ElOption v-for="item in CHART_TYPE_OPTIONS" :key="item.value" :value="item.value" :label="item.label" />
             </ElSelect></ElFormItem>
-            <ElFormItem label="X 字段"><ElInput v-model="chartSpecForm.xField" /></ElFormItem>
-            <ElFormItem label="Y 字段（逗号分隔）"><ElInput v-model="chartSpecForm.yFields" /></ElFormItem>
+            <template v-if="isTextChartForm">
+              <ElFormItem label="字号"><ElInputNumber v-model="chartSpecForm.fontSize" :min="12" :max="120" controls-position="right" /></ElFormItem>
+            </template>
+            <template v-else>
+              <ElFormItem label="X 字段"><ElInput v-model="chartSpecForm.xField" /></ElFormItem>
+              <ElFormItem label="Y 字段（逗号分隔）"><ElInput v-model="chartSpecForm.yFields" /></ElFormItem>
+            </template>
           </div>
-          <div class="form-row">
+          <ElFormItem v-if="isTextChartForm" label="文本内容">
+            <ElInput v-model="chartSpecForm.textContent" type="textarea" :rows="5" placeholder="显示在大屏上的文案" />
+          </ElFormItem>
+          <div v-if="!isTextChartForm" class="form-row">
             <ElFormItem label="系列字段"><ElInput v-model="chartSpecForm.seriesField" placeholder="可选" /></ElFormItem>
             <ElFormItem label="数值格式"><ElSelect v-model="chartSpecForm.valueFormat"><ElOption label="普通数字" value="number" /><ElOption label="百分比" value="percent" /><ElOption label="人民币" value="currency" /></ElSelect></ElFormItem>
             <ElFormItem label="排序"><ElInput v-model="chartSpecForm.sortBy" placeholder="字段名（可选）" /></ElFormItem>
@@ -744,11 +929,26 @@ watch(chartSpecForm, fillChartSpec, { deep: true });
 .card-grid { display: grid; grid-template-columns: repeat(auto-fill,minmax(280px,1fr)); gap: 16px; }.asset-card { position: relative; padding: 18px; min-height: 140px; overflow: hidden; background: var(--el-bg-color); border: 1px solid var(--el-border-color-light); border-radius: 10px; box-shadow: var(--el-box-shadow-lighter); }
 .asset-card h3 { margin: 12px 0 7px; }.asset-card p { height: 42px; overflow: hidden; color: var(--el-text-color-secondary); font-size: 12px; }.asset-card small { display: block; margin: 7px 0; color: var(--el-text-color-secondary); }.chart-badge { display: inline-block; padding: 2px 8px; background: var(--el-color-primary-light-9); color: var(--el-color-primary); border-radius: 20px; font-size: 11px; }.screen-cover { height: 76px; margin: -18px -18px 0; padding: 12px; background: linear-gradient(135deg,#15223a,#245ea8); color: #fff; }
 .screen-card .card-actions { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); margin-top: 10px; }.screen-card .card-actions :deep(.el-button) { width: 100%; margin: 0; }
-.editor { display: grid; grid-template-columns: 210px minmax(0,1fr) 286px; height: calc(100dvh - 126px); min-height: 560px; }.editor.focus-canvas { grid-template-columns: minmax(0,1fr); }.asset-panel,.property-panel { padding: 12px; overflow: auto; background: var(--el-bg-color); }.asset-panel { border-right: 1px solid var(--el-border-color-light); }.property-panel { border-left: 1px solid var(--el-border-color-light); }.asset-list { display: flex; flex-direction: column; gap: 7px; margin: 10px 0; }.drag-asset { display: flex; min-height: 43px; align-items: center; justify-content: space-between; padding: 7px 9px; cursor: grab; border: 1px solid var(--el-border-color); border-radius: 6px; }.drag-asset.used { border-color: var(--el-color-success); background: var(--el-color-success-light-9); }.drag-asset div { min-width: 0; }.drag-asset b { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }.drag-asset small { display: block; margin-top: 2px; color: var(--el-color-success); font-size: 10px; }.drag-asset span { flex: 0 0 auto; margin-left: 6px; color: var(--el-color-primary); font-size: 11px; }.full { width: 100%; }
+.editor { display: grid; grid-template-columns: 210px minmax(0,1fr) 286px; height: calc(100dvh - 126px); min-height: 560px; }.editor.focus-canvas { grid-template-columns: minmax(0,1fr); }.asset-panel,.property-panel { padding: 12px; overflow: auto; background: var(--el-bg-color); }.asset-panel { border-right: 1px solid var(--el-border-color-light); }.property-panel { border-left: 1px solid var(--el-border-color-light); }.asset-list { display: flex; flex-direction: column; gap: 7px; margin: 10px 0; }.drag-asset { display: flex; min-height: 43px; align-items: center; justify-content: space-between; padding: 7px 9px; cursor: grab; border: 1px solid var(--el-border-color); border-radius: 6px; }.drag-asset.used { border-color: var(--el-color-success); background: var(--el-color-success-light-9); }.drag-asset div { min-width: 0; }.drag-asset b { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }.drag-asset small { display: block; margin-top: 2px; color: var(--el-color-success); font-size: 10px; }.drag-asset span { flex: 0 0 auto; margin-left: 6px; color: var(--el-color-primary); font-size: 11px; }
+.asset-actions { display: flex; flex-direction: column; gap: 8px; width: 100%; }
+.asset-actions .full,
+.full { width: 100%; margin-left: 0 !important; }
 .canvas-stage { display: grid; padding: 6px; overflow: auto; place-items: center; background: #cbd2dc; }.canvas { position: relative; width: min(100%,calc((100dvh - 142px) * 1.7778)); aspect-ratio: 16/9; overflow: hidden; box-shadow: 0 5px 18px #0005; }.drop-hint { display: grid; height: 100%; place-items: center; color: #94a3b8; }.canvas-widget { position: absolute; display: flex; flex-direction: column; overflow: hidden; color: #dbeafe; touch-action: none; user-select: none; background: #101b2dcc; border: 1px solid #30435f; border-radius: 5px; }.canvas-widget.selected { z-index: 2; outline: 2px solid #409eff; outline-offset: -1px; }.canvas-widget header { display: flex; flex: 0 0 30px; align-items: center; justify-content: space-between; padding: 0 9px; cursor: move; touch-action: none; background: #16243a; font-size: 12px; }.canvas-widget header i { color: #64748b; font-style: normal; }.widget-body { flex: 1; min-height: 0; padding: 4px; }.resize-handle { position: absolute; z-index: 4; padding: 0; touch-action: none; background: transparent; border: 0; }.resize-handle.east { top: 25%; right: -1px; width: 8px; height: 50%; cursor: ew-resize; border-right: 3px solid #409eff; }.resize-handle.south { bottom: -1px; left: 25%; width: 50%; height: 8px; cursor: ns-resize; border-bottom: 3px solid #409eff; }.resize-handle.southeast { right: 0; bottom: 0; width: 24px; height: 24px; cursor: nwse-resize; background: linear-gradient(135deg,transparent 52%,#409eff 53%); }
 .property-panel h3,.asset-panel h3 { margin: 0 0 10px; }.property-panel :deep(.el-select),.chart-editor :deep(.el-select) { width: 100%; }.form-row { align-items: flex-start; }.form-row > * { flex: 1; }.layout-fields { display: grid; grid-template-columns: repeat(4,minmax(0,1fr)); gap: 5px; }.layout-fields :deep(.el-input-number) { width: 100%; }.dialog-preview { height: 300px; padding: 8px; border: 1px dashed var(--el-border-color); border-radius: 6px; }
 .widget-context-menu { position: fixed; z-index: 4000; min-width: 136px; padding: 5px; background: var(--el-bg-color-overlay); border: 1px solid var(--el-border-color); border-radius: 6px; box-shadow: var(--el-box-shadow-light); }.widget-context-menu button { width: 100%; padding: 7px 10px; color: var(--el-color-danger); text-align: left; cursor: pointer; background: transparent; border: 0; border-radius: 4px; }.widget-context-menu button:hover { background: var(--el-color-danger-light-9); }
 .widget-move-handle { position: absolute; top: 3px; right: 3px; z-index: 3; padding: 2px 8px; cursor: move; color: #dbeafe; background: #16243acc; border: 1px solid #409eff; border-radius: 4px; font-size: 11px; }
+.canvas-widget.text-widget-card { background: transparent; border-style: dashed; }
+.canvas-widget.text-widget-card .widget-body { padding: 0; }
+.canvas-widget.text-widget-card .widget-move-handle { top: 1px; right: 1px; padding: 1px 6px; font-size: 10px; opacity: 0.85; }
+.field-hint { margin-bottom: 12px; }
+.field-hint p, .field-hint ul { margin: 6px 0 0; padding: 0; font-size: 12px; line-height: 1.6; }
+.field-hint li { margin-left: 1.1em; list-style: disc; }
+.bg-hint { margin: 6px 0 0; color: var(--el-text-color-secondary); font-size: 12px; line-height: 1.5; }
+.property-panel :deep(.el-upload--picture-card),
+.property-panel :deep(.el-upload-list--picture-card .el-upload-list__item) {
+  width: 96px;
+  height: 72px;
+}
 .chart-editor { display: grid; grid-template-columns: minmax(0,1.1fr) minmax(0,1fr); gap: 18px; max-height: 65vh; overflow: auto; }.chart-editor > * { min-width: 0; }.chart-editor .form-row { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); }.chart-editor .dialog-preview { position: sticky; top: 10px; margin-top: 40px; background: #101b2d; }
 @media (max-width: 760px) { .chart-editor { grid-template-columns: minmax(0,1fr); }.chart-editor .dialog-preview { position: static; margin-top: 0; } }
 @media (max-width: 1100px) { .editor { grid-template-columns: 180px minmax(390px,1fr) 250px; }.top-actions { flex-wrap: wrap; justify-content: flex-end; } }

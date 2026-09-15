@@ -226,6 +226,19 @@ const HIDDEN_PAGE_ROUTES: RouteRecordStringComponent[] = [
     },
   },
   {
+    name: 'VisualDashboardView',
+    path: '/visual/dashboard/view',
+    component: '/visual/dashboard/view',
+    meta: {
+      hideInMenu: true,
+      hideInTab: true,
+      hideInBreadcrumb: true,
+      noBasicLayout: true,
+      title: '数据大屏',
+      activePath: '/visual/dashboard',
+    },
+  },
+  {
     name: 'AiModelManage',
     path: '/ai/model',
     component: '/ai/model/index',
@@ -254,7 +267,37 @@ function mergeHiddenPageRoutes(
     ...route,
     meta: route.meta ? { ...route.meta } : undefined,
   }));
-  return [...menus, ...extras];
+  // 后端菜单若已注册同名/同路径页面，仍强制补齐全屏 meta，避免查看页被顶栏遮挡。
+  const patched = patchFullscreenRouteMeta([...menus, ...extras]);
+  return patched;
+}
+
+/** 已知应脱离 BasicLayout 的页面：即使来自后端菜单也强制 noBasicLayout。 */
+const FULLSCREEN_ROUTE_KEYS = new Set([
+  'VisualDashboardView',
+  'QueryResultShare',
+  '/visual/dashboard/view',
+]);
+
+function patchFullscreenRouteMeta(
+  menus: RouteRecordStringComponent[],
+): RouteRecordStringComponent[] {
+  return mapTree(menus, (route) => {
+    const matched =
+      (route.name && FULLSCREEN_ROUTE_KEYS.has(String(route.name))) ||
+      (route.path && FULLSCREEN_ROUTE_KEYS.has(route.path));
+    if (!matched) return route;
+    return {
+      ...route,
+      meta: {
+        ...route.meta,
+        hideInMenu: true,
+        hideInTab: true,
+        hideInBreadcrumb: true,
+        noBasicLayout: true,
+      },
+    };
+  });
 }
 
 /**
@@ -296,6 +339,7 @@ const COMPONENT_ALIASES: Record<string, string> = {
   '/visual/dbConfig/relationCanvas': '/visual/dbConfig/relationCanvas',
   '/visual/client': '/visual/client/index',
   '/visual/client/savedQueries': '/visual/client/savedQueryManage',
+  '/visual/dashboard/view': '/visual/dashboard/view',
   '/visual/queryResult/share/:shareCode': '/visual/visualQuery/share',
   '/visual/index': '/visual/client/index',
   '/ai/model': '/ai/model/index',

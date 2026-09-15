@@ -10,10 +10,13 @@ import type {
   QueryResult,
 } from '#/api/visual/dashboard';
 
-import { computed, ref } from 'vue';
+import { computed, nextTick, ref } from 'vue';
 import { ElMessage } from 'element-plus';
 
-import { parseOptionOverrides } from '../../client/utils/chartSpecToOption';
+import {
+  chartSpecToOption,
+  parseOptionOverrides,
+} from '../../client/utils/chartSpecToOption';
 import ChartRenderer from './ChartRenderer.vue';
 
 const props = withDefaults(
@@ -28,13 +31,14 @@ const props = withDefaults(
 const emit = defineEmits<{ 'update:spec': [spec: ChartSpec] }>();
 const appearance = computed(() => props.spec.appearance || {});
 const supportsOption = computed(
-  () => !['kpi', 'table'].includes(props.spec.chartType),
+  () => !['kpi', 'table', 'text'].includes(props.spec.chartType),
 );
 const hasAxes = computed(
   () => supportsOption.value && props.spec.chartType !== 'pie',
 );
 const optionDialog = ref(false);
 const optionText = ref('{}');
+const optionEditorKey = ref(0);
 const syntaxError = ref('');
 const previewError = ref('');
 const previewPending = ref(false);
@@ -80,14 +84,62 @@ function updateColors(value: string) {
   updateAppearance('colors', colors);
 }
 
+/** 去掉 series.data，避免把 SQL 数据固化进增量 option。 */
+function stripSeriesData(option: Record<string, unknown>): Record<string, unknown> {
+  const cloned = JSON.parse(JSON.stringify(option)) as Record<string, unknown>;
+  const series = cloned.series;
+  if (Array.isArray(series)) {
+    cloned.series = series.map((item) => {
+      if (!item || typeof item !== 'object') return item;
+      const next = { ...(item as Record<string, unknown>) };
+      delete next.data;
+      return next;
+    });
+  }
+  return cloned;
+}
+
+/** 读取已保存的增量 option；没有时返回空对象。 */
+function resolveSavedOverrides(): Record<string, unknown> {
+  const existing = props.spec.optionOverrides;
+  if (
+    existing &&
+    typeof existing === 'object' &&
+    !Array.isArray(existing) &&
+    Object.keys(existing).length > 0
+  ) {
+    return existing;
+  }
+  return {};
+}
+
+/** 当前外观合成的 option（去掉 data），用于在现有样式基础上继续改。 */
+function resolveSynthesizedOption(): Record<string, unknown> {
+  try {
+    return stripSeriesData(
+      chartSpecToOption(props.spec, [], [], {
+        width: props.previewWidth,
+        height: props.previewHeight,
+      }) as Record<string, unknown>,
+    );
+  } catch {
+    return {};
+  }
+}
+
 /** 打开时创建独立草稿，取消弹窗不会把半成品写入大屏。 */
-function openOptionEditor() {
-  optionText.value = JSON.stringify(props.spec.optionOverrides || {}, null, 2);
+async function openOptionEditor() {
+  const draft = resolveSavedOverrides();
+  optionText.value = JSON.stringify(draft, null, 2);
   draftOverrides.value = parseOptionOverrides(optionText.value);
   syntaxError.value = '';
   previewError.value = '';
   previewPending.value = true;
+  optionEditorKey.value += 1;
   optionDialog.value = true;
+  // 等弹窗挂载后再写一次，避免 destroy-on-close 重建时仍显示空对象。
+  await nextTick();
+  optionText.value = JSON.stringify(draft, null, 2);
 }
 
 /** 合法 JSON 实时预览；非法文本保留编辑内容，并继续显示上一次有效预览。 */
@@ -115,6 +167,14 @@ function useCompactExample() {
       2,
     ),
   );
+}
+
+/** 优先载入已保存增量；若无则载入当前合成样式，便于在现有视觉效果上修改。 */
+function reloadExistingOption() {
+  const saved = resolveSavedOverrides();
+  const draft =
+    Object.keys(saved).length > 0 ? saved : resolveSynthesizedOption();
+  editOption(JSON.stringify(draft, null, 2));
 }
 
 /** 应用时再次校验，阻止无效 JSON 被保存或发布。 */
@@ -233,6 +293,25 @@ function applyOption() {
         时才覆盖。
       </p>
     </template>
+    <template v-else-if="spec.chartType === 'text'">
+      <ElFormItem label="文本字号">
+        <ElInputNumber
+          :model-value="appearance.fontSize ?? 24"
+          :min="12"
+          :max="120"
+          controls-position="right"
+          @change="updateAppearance('fontSize', $event)"
+        />
+      </ElFormItem>
+      <ElFormItem label="文字颜色（HEX）">
+        <ElInput
+          :model-value="appearance.colors?.[0] || ''"
+          placeholder="#e2e8f0"
+          @change="updateColors(String($event || '#e2e8f0'))"
+        />
+      </ElFormItem>
+      <p class="hint">文本内容请在「数据与字段」中编辑；不使用 ECharts option。</p>
+    </template>
     <p v-else class="hint">
       指标卡和表格不使用 ECharts option，请通过字段映射及数值格式配置。
     </p>
@@ -247,17 +326,20 @@ function applyOption() {
       <ElAlert
         type="info"
         :closable="false"
-        title="填写 JSON 对象即可覆盖图例、坐标轴、绘图区、配色和系列样式。series 按索引合并；不支持 JavaScript 函数。"
+        title="填写 JSON 对象即可覆盖图例、坐标轴、绘图区、配色和系列样式。series 按索引合并；不支持 JavaScript 函数。若已保存过 option，打开时会自动载入；也可点「载入现有」带入当前样式。"
       />
       <div class="option-layout">
         <section class="option-source">
           <div class="option-toolbar">
             <span>增量 option JSON</span
+            ><ElButton size="small" @click="reloadExistingOption"
+              >载入现有</ElButton
             ><ElButton size="small" @click="useCompactExample"
               >填入紧凑示例</ElButton
             ><ElButton size="small" @click="editOption('{}')">清空</ElButton>
           </div>
           <ElInput
+            :key="optionEditorKey"
             :model-value="optionText"
             type="textarea"
             :rows="19"

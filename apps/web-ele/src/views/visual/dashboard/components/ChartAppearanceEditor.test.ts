@@ -74,8 +74,13 @@ function button(text: string): HTMLButtonElement {
   return found;
 }
 
-async function mountEditor() {
-  spec.value = { chartType: 'bar', xField: 'category', yFields: ['amount'] };
+async function mountEditor(initial?: Partial<ChartSpec>) {
+  spec.value = {
+    chartType: 'bar',
+    xField: 'category',
+    yFields: ['amount'],
+    ...initial,
+  };
   container = document.createElement('div');
   document.body.append(container);
   app = createApp({
@@ -111,6 +116,17 @@ async function inputOption(text: string) {
 }
 
 describe('option 编辑操作', () => {
+  it('打开时自动载入已保存的 optionOverrides', async () => {
+    await mountEditor({
+      optionOverrides: { legend: { show: false }, series: [{ barWidth: 18 }] },
+    });
+    const text = document.querySelector<HTMLTextAreaElement>(
+      '.option-source textarea',
+    )?.value;
+    expect(text).toContain('"show": false');
+    expect(text).toContain('"barWidth": 18');
+  });
+
   it('JSON 草稿实时预览但取消不会修改保存配置', async () => {
     await mountEditor();
     await inputOption('{"legend":{"show":false}}');

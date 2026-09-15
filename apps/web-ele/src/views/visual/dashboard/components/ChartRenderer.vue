@@ -32,6 +32,7 @@ const columns = computed(() => props.result?.columns || []);
 const rows = computed(() => props.result?.rows || []);
 const isKpi = computed(() => props.spec.chartType === 'kpi');
 const isTable = computed(() => props.spec.chartType === 'table');
+const isText = computed(() => props.spec.chartType === 'text');
 const kpiValue = computed(() => {
   const field = props.spec.yFields?.[0];
   const value = field ? rows.value[0]?.[field] : undefined;
@@ -43,10 +44,23 @@ const kpiValue = computed(() => {
     return `¥${numeric.toLocaleString()}`;
   return numeric.toLocaleString();
 });
+/** 文本组件样式：字号与首个配色来自 appearance。 */
+const textStyle = computed(() => {
+  const appearance = props.spec.appearance || {};
+  const color = appearance.colors?.[0] || '#e2e8f0';
+  return {
+    color,
+    fontSize: `${appearance.fontSize || 24}px`,
+    fontWeight: 600,
+    lineHeight: 1.4,
+    whiteSpace: 'pre-wrap' as const,
+    wordBreak: 'break-word' as const,
+  };
+});
 
 /** 每次尺寸或配置变化均重算布局；高级 option 错误只影响当前图表，不阻断大屏。 */
 async function render() {
-  if (isKpi.value || isTable.value) return;
+  if (isKpi.value || isTable.value || isText.value) return;
   emit('rendering', true);
   try {
     await renderEcharts(
@@ -88,7 +102,10 @@ watch(
 
 <template>
   <div ref="rootRef" class="renderer">
-    <div v-if="isKpi" class="kpi">{{ kpiValue ?? '—' }}</div>
+    <div v-if="isText" class="text-widget" :style="textStyle">
+      {{ spec.textContent || '请输入文本内容' }}
+    </div>
+    <div v-else-if="isKpi" class="kpi">{{ kpiValue ?? '—' }}</div>
     <ElTable
       v-else-if="isTable"
       :data="rows.slice(0, 100)"
@@ -136,5 +153,16 @@ watch(
   font-size: clamp(28px, 4vw, 64px);
   font-weight: 700;
   color: var(--el-color-primary);
+}
+.text-widget {
+  display: flex;
+  width: 100%;
+  height: 100%;
+  align-items: center;
+  justify-content: center;
+  padding: 2px 4px;
+  box-sizing: border-box;
+  text-align: center;
+  overflow: hidden;
 }
 </style>

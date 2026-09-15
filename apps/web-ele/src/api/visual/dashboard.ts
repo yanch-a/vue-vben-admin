@@ -15,7 +15,8 @@ export type ChartType =
   | 'line'
   | 'pie'
   | 'scatter'
-  | 'table';
+  | 'table'
+  | 'text';
 
 export interface ChartSpec {
   /** 常用外观配置；缺省时由渲染器根据组件尺寸自动布局。 */
@@ -26,6 +27,8 @@ export interface ChartSpec {
   sortBy?: string;
   sortOrder?: 'asc' | 'desc';
   stack?: boolean;
+  /** 文本组件展示文案；仅 chartType=text 使用。 */
+  textContent?: string;
   valueFormat?: 'currency' | 'number' | 'percent';
   xAxisLabel?: string;
   xField?: string;
@@ -87,7 +90,10 @@ export interface ScreenWidget {
 }
 
 export interface ScreenConfig {
+  /** 背景色，缺省为深色底。 */
   background?: string;
+  /** 背景图 URL（附件上传后的相对或绝对路径），铺满画布。 */
+  backgroundImage?: string;
   height: number;
   schemaVersion: number;
   widgets: ScreenWidget[];
