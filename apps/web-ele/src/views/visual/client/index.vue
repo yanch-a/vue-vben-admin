@@ -174,6 +174,10 @@ const licenseHint = ref('');
 const licenseAllowed = ref(true);
 const sqlEditorRef = ref<InstanceType<typeof SqlEditor>>();
 const objectTreeRef = ref<InstanceType<typeof ObjectTree>>();
+const connectionTabsRef = ref<InstanceType<typeof ConnectionTabs>>();
+/** Electron 原生菜单订阅的取消函数 */
+let offDesktopSessionExport: (() => void) | undefined;
+let offDesktopSessionImport: (() => void) | undefined;
 const aiChatRef = ref<InstanceType<typeof AiChatWindow>>();
 const schemaDocVisible = ref(false);
 const historyVisible = ref(false);
@@ -206,6 +210,63 @@ const sessionPersist = setupClientSessionPersist({
   resultHeight,
 });
 sessionPersist.restore();
+
+/**
+ * 导出当前本地缓存中的已打开连接与 SQL Tab（不含密码、不含结果集）。
+ * Web / Electron 均走浏览器下载；Electron 会写入当前服务端隔离的会话键对应内容。
+ */
+function exportTemporarySession() {
+  try {
+    const snap = sessionPersist.exportSnapshot();
+    const stamp = new Date()
+      .toISOString()
+      .replace(/[:.]/g, '-')
+      .slice(0, 19);
+    const blob = new Blob([JSON.stringify(snap, null, 2)], {
+      type: 'application/json;charset=utf-8',
+    });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `lemon-temp-queries-${stamp}.json`;
+    link.click();
+    URL.revokeObjectURL(url);
+    ElMessage.success('临时查询记录已导出');
+  } catch (e: any) {
+    ElMessage.error(e?.message || '导出失败');
+  }
+}
+
+/**
+ * 导入另一台设备导出的临时查询 JSON，覆盖当前已打开连接与查询。
+ * 校验失败则拒绝写入；成功后落盘到当前环境的会话键（Electron 按服务端隔离）。
+ */
+async function importTemporarySession(file: File) {
+  try {
+    const text = await file.text();
+    let raw: unknown;
+    try {
+      raw = JSON.parse(text);
+    } catch {
+      ElMessage.error('导入失败：文件不是有效的 JSON');
+      return;
+    }
+    await ElMessageBox.confirm(
+      '导入将覆盖当前已打开的连接和临时查询，是否继续？',
+      '导入临时查询记录',
+      { type: 'warning', confirmButtonText: '继续导入', cancelButtonText: '取消' },
+    );
+    const snap = sessionPersist.importSnapshot(raw);
+    if (!snap) {
+      ElMessage.error('导入失败：会话数据格式不正确或版本不兼容');
+      return;
+    }
+    ElMessage.success('临时查询记录已导入');
+  } catch (e: any) {
+    if (e === 'cancel' || e?.action === 'cancel') return;
+    ElMessage.error(e?.message || '导入失败');
+  }
+}
 
 /** SQL / Tab 内容变更时增量落盘 */
 watch(
@@ -2294,6 +2355,13 @@ onMounted(() => {
     void bootstrapTasks();
   });
   window.addEventListener('keydown', onGlobalKeydown);
+  // Electron「文件」菜单：与连接栏空白右键共用同一套导入/导出逻辑
+  offDesktopSessionExport = window.lemonDesktop?.onExportTemporarySession?.(
+    () => exportTemporarySession(),
+  );
+  offDesktopSessionImport = window.lemonDesktop?.onImportTemporarySession?.(
+    () => connectionTabsRef.value?.openImportPicker(),
+  );
 });
 
 function onGlobalKeydown(e: KeyboardEvent) {
@@ -2505,6 +2573,10 @@ watch(
 onBeforeUnmount(() => {
   unbindClientFontScope?.();
   window.removeEventListener('keydown', onGlobalKeydown);
+  offDesktopSessionExport?.();
+  offDesktopSessionImport?.();
+  offDesktopSessionExport = undefined;
+  offDesktopSessionImport = undefined;
   onSplitterUp();
   onLeftSplitterUp();
   onTabsLeftSplitterUp();
@@ -2540,12 +2612,15 @@ onBeforeUnmount(() => {
         @history="onOpenHistory"
       />
       <ConnectionTabs
+        ref="connectionTabsRef"
         :connections="openConnections"
         :active-id="activeConnectionId"
         @change="setActiveConnection"
         @close="closeConnection"
         @refresh="refreshBrowseObjects"
         @open="onOpenConnection"
+        @export-session="exportTemporarySession"
+        @import-session="importTemporarySession"
       />
 
       <div

@@ -299,6 +299,39 @@ export function setupClientSessionPersist(h: PersistHandles): {
   return {
     restore,
     flushNow: flush,
+    /** 导出当前内存中的连接与查询快照（已 sanitize，不含密码）。 */
+    exportSnapshot: (): ClientSessionSnapshot => {
+      flush();
+      return buildSnapshot(h);
+    },
+    /**
+     * 导入快照并覆盖当前会话。
+     * Electron 下仍写入当前服务端隔离的 localStorage 键，避免串服。
+     */
+    importSnapshot: (raw: unknown): ClientSessionSnapshot | null => {
+      const snap = validateSessionSnapshot(raw);
+      if (!snap) return null;
+      restoring = true;
+      try {
+        h.openConnections.value = snap.connections.map(stripConnection);
+        h.activeConnectionId.value = snap.activeConnectionId;
+        h.applyTabsSnapshot({
+          tabsByConnection: snap.tabsByConnection,
+          activeTabByConnection: snap.activeTabByConnection,
+        });
+        if (snap.leftWidth != null) h.leftWidth.value = snap.leftWidth;
+        if (snap.resultHeight != null) h.resultHeight.value = snap.resultHeight;
+        writeSnapshot(snap);
+        return snap;
+      } catch (e) {
+        console.warn('[visual-client] session import aborted', e);
+        return null;
+      } finally {
+        setTimeout(() => {
+          restoring = false;
+        }, 0);
+      }
+    },
     stop: () => {
       stopped = true;
       bindClientSessionChangeNotifier(null);

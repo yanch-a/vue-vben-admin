@@ -442,15 +442,38 @@ function registerIpcHandlers() {
 
 /** 构建跨平台应用菜单，为运行中的客户端保留服务端切换入口。 */
 function installApplicationMenu() {
+  const fileSubmenu = [
+    {
+      label: desktopText('导出临时查询记录', 'Export Temporary Queries'),
+      click: () => {
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send('lemon-session:export');
+        }
+      },
+    },
+    {
+      label: desktopText('导入临时查询记录', 'Import Temporary Queries'),
+      click: () => {
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send('lemon-session:import');
+        }
+      },
+    },
+  ];
+  if (process.platform !== 'darwin') {
+    fileSubmenu.push({ type: 'separator' });
+    fileSubmenu.push({
+      role: 'quit',
+      label: desktopText('退出', 'Quit'),
+    });
+  }
+
   const template = [
-    ...(process.platform === 'darwin'
-      ? [{ role: 'appMenu' }]
-      : [
-          {
-            label: desktopText('文件', 'File'),
-            submenu: [{ role: 'quit', label: desktopText('退出', 'Quit') }],
-          },
-        ]),
+    ...(process.platform === 'darwin' ? [{ role: 'appMenu' }] : []),
+    {
+      label: desktopText('文件', 'File'),
+      submenu: fileSubmenu,
+    },
     {
       label: desktopText('服务端', 'Server'),
       submenu: [

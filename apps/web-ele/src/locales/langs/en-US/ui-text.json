@@ -1284,5 +1284,13 @@
   "头像地址": "Avatar URL",
   "请输入头像地址": "Enter an avatar URL",
   "个性签名": "Signature",
-  "请输入个性签名": "Enter a signature"
+  "请输入个性签名": "Enter a signature",
+  "导出临时查询记录": "Export Temporary Queries",
+  "导入临时查询记录": "Import Temporary Queries",
+  "临时查询记录已导出": "Temporary queries exported",
+  "临时查询记录已导入": "Temporary queries imported",
+  "导入将覆盖当前已打开的连接和临时查询，是否继续？": "Importing will overwrite currently open connections and temporary queries. Continue?",
+  "继续导入": "Continue Import",
+  "导入失败：文件不是有效的 JSON": "Import failed: the file is not valid JSON",
+  "导入失败：会话数据格式不正确或版本不兼容": "Import failed: invalid session format or incompatible version"
 }

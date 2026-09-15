@@ -2,10 +2,11 @@
 /**
  * 顶部已打开连接栏
  * - 单击切换；关闭按钮关闭页签
- * - 右键：刷新当前浏览对象 / 修改浏览对象颜色
+ * - 连接页签右键：刷新当前浏览对象 / 修改浏览对象颜色
+ * - 空白区域右键：导入 / 导出临时查询记录（本地会话缓存）
  * @author yanch
  */
-import { onBeforeUnmount, onMounted, reactive } from 'vue';
+import { onBeforeUnmount, onMounted, reactive, ref } from 'vue';
 
 import { Plus } from '@element-plus/icons-vue';
 
@@ -27,9 +28,14 @@ const emit = defineEmits<{
   open: [];
   /** 刷新该连接对应的左侧浏览对象 */
   refresh: [sessionId: number | string];
+  /** 导出本地临时连接与查询记录 */
+  exportSession: [];
+  /** 导入本地临时连接与查询记录文件内容 */
+  importSession: [file: File];
 }>();
 
 const { preferences, setConnectionColor } = useClientPreferences();
+const importInputRef = ref<HTMLInputElement>();
 
 const ctx = reactive({
   visible: false,
@@ -37,6 +43,8 @@ const ctx = reactive({
   y: 0,
   sessionId: '' as string,
   dbConfigId: '' as string,
+  /** tab：连接页签菜单；blank：栏空白区菜单 */
+  mode: 'tab' as 'blank' | 'tab',
 });
 
 const colorDialog = reactive({
@@ -71,8 +79,22 @@ function closeCtx() {
 function onTabContextMenu(e: MouseEvent, c: DbConnection) {
   e.preventDefault();
   e.stopPropagation();
+  ctx.mode = 'tab';
   ctx.sessionId = String(c.sessionId);
   ctx.dbConfigId = String(c.id);
+  ctx.x = e.clientX;
+  ctx.y = e.clientY;
+  ctx.visible = true;
+}
+
+/** 连接栏空白处右键：导入 / 导出临时查询（不点在页签或加号上）。 */
+function onBarContextMenu(e: MouseEvent) {
+  const target = e.target as HTMLElement | null;
+  if (target?.closest('.conn-tab, .add-connection, .conn-ctx-menu')) return;
+  e.preventDefault();
+  ctx.mode = 'blank';
+  ctx.sessionId = '';
+  ctx.dbConfigId = '';
   ctx.x = e.clientX;
   ctx.y = e.clientY;
   ctx.visible = true;
@@ -91,6 +113,23 @@ function onEditColor() {
   colorDialog.dbConfigId = id;
   colorDialog.color = preferences.connectionColors[id] || '#e6f4ff';
   colorDialog.visible = true;
+}
+
+function onExportSession() {
+  closeCtx();
+  emit('exportSession');
+}
+
+function onImportSession() {
+  closeCtx();
+  importInputRef.value?.click();
+}
+
+function onImportFileChange(event: Event) {
+  const input = event.target as HTMLInputElement;
+  const file = input.files?.[0];
+  input.value = '';
+  if (file) emit('importSession', file);
 }
 
 function applyColor() {
@@ -117,10 +156,15 @@ onBeforeUnmount(() => {
   document.removeEventListener('click', onDocClick);
   document.removeEventListener('scroll', closeCtx, true);
 });
+
+/** 供 Electron 原生菜单复用同一套文件选择器 */
+defineExpose({
+  openImportPicker: () => importInputRef.value?.click(),
+});
 </script>
 
 <template>
-  <div class="connection-tabs">
+  <div class="connection-tabs" @contextmenu="onBarContextMenu">
     <div
       v-for="c in connections"
       :key="c.sessionId"
@@ -149,6 +193,15 @@ onBeforeUnmount(() => {
       @click="emit('open')"
     />
     <div v-if="!connections.length" class="empty">{{ $tr('请新建或打开数据库连接') }}</div>
+    <div class="bar-spacer" aria-hidden="true" />
+
+    <input
+      ref="importInputRef"
+      class="hidden-file"
+      type="file"
+      accept="application/json,.json"
+      @change="onImportFileChange"
+    />
 
     <Teleport to="body">
       <div
@@ -158,8 +211,14 @@ onBeforeUnmount(() => {
         @click.stop
         @contextmenu.prevent
       >
-        <div class="item" @click="onRefreshBrowse">{{ $tr('刷新当前浏览对象') }}</div>
-        <div class="item" @click="onEditColor">{{ $tr('修改浏览对象颜色') }}</div>
+        <template v-if="ctx.mode === 'tab'">
+          <div class="item" @click="onRefreshBrowse">{{ $tr('刷新当前浏览对象') }}</div>
+          <div class="item" @click="onEditColor">{{ $tr('修改浏览对象颜色') }}</div>
+        </template>
+        <template v-else>
+          <div class="item" @click="onExportSession">{{ $tr('导出临时查询记录') }}</div>
+          <div class="item" @click="onImportSession">{{ $tr('导入临时查询记录') }}</div>
+        </template>
       </div>
     </Teleport>
 
@@ -213,6 +272,12 @@ onBeforeUnmount(() => {
   align-self: center;
   margin: 0 6px 0 4px;
 }
+/* 占满剩余空白，便于右键命中 */
+.bar-spacer {
+  flex: 1 1 auto;
+  min-width: 48px;
+  align-self: stretch;
+}
 .name {
   font-weight: 600;
 }
@@ -232,6 +297,9 @@ onBeforeUnmount(() => {
   padding: 8px 4px;
   color: var(--el-text-color-secondary);
   font-size: var(--vc-ui-font-size, 13px);
+}
+.hidden-file {
+  display: none;
 }
 .conn-ctx-menu {
   position: fixed;

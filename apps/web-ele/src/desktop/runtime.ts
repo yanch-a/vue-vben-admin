@@ -10,6 +10,10 @@ interface LemonDesktopBridge {
   openServerSelector: () => Promise<void>;
   setAuthenticated: (authenticated: boolean) => Promise<void>;
   setLocale: (locale: 'en-US' | 'zh-CN') => Promise<void>;
+  /** 原生菜单触发导出临时查询；返回取消订阅函数 */
+  onExportTemporarySession?: (listener: () => void) => () => void;
+  /** 原生菜单触发导入临时查询；返回取消订阅函数 */
+  onImportTemporarySession?: (listener: () => void) => () => void;
 }
 
 /** 当前由 Electron 主进程选中的服务端。 */
