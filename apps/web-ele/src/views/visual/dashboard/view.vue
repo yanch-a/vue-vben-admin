@@ -18,6 +18,14 @@ const route = useRoute();
 const loading = ref(false);
 const bundle = ref<any>();
 const viewport = ref({ width: window.innerWidth, height: window.innerHeight });
+const loadError = ref('');
+const screenId = computed(() => {
+  const paramId = Array.isArray(route.params.id) ? route.params.id[0] : route.params.id;
+  const queryId = Array.isArray(route.query.screenId) ? route.query.screenId[0] : route.query.screenId;
+  const raw = paramId || queryId;
+  const value = raw == null ? '' : String(raw).trim();
+  return /^\d+$/.test(value) ? value : '';
+});
 const config = computed(() => bundle.value?.config || { width: 1200, height: 675, widgets: [] });
 const scale = computed(() => Math.min(viewport.value.width / config.value.width, viewport.value.height / config.value.height));
 
@@ -31,9 +39,21 @@ function widgetStyle(widget: any) {
 }
 
 async function load() {
+  if (!screenId.value) {
+    loadError.value = '大屏 ID 无效，请返回工作台重新打开';
+    return;
+  }
   loading.value = true;
-  try { bundle.value = (await runtimeScreen(String(route.params.id)))?.data; }
-  catch (error: any) { ElMessage.error(error?.msg || error?.message || '大屏加载失败'); }
+  loadError.value = '';
+  try {
+    const response: any = await runtimeScreen(screenId.value);
+    bundle.value = response?.data ?? response;
+    if (!bundle.value?.config) throw new Error('接口未返回有效的大屏配置');
+  }
+  catch (error: any) {
+    loadError.value = error?.msg || error?.message || '大屏加载失败';
+    ElMessage.error(loadError.value);
+  }
   finally { loading.value = false; }
 }
 
@@ -44,6 +64,9 @@ onBeforeUnmount(() => window.removeEventListener('resize', resize));
 
 <template>
   <div class="viewer" v-loading="loading" :style="{ background: config.background || '#0b1220' }">
+    <ElResult v-if="loadError" icon="error" title="大屏无法显示" :sub-title="loadError">
+      <template #extra><ElButton type="primary" @click="load">重新加载</ElButton></template>
+    </ElResult>
     <div v-if="bundle" class="screen" :style="{ width: `${config.width}px`, height: `${config.height}px`, transform: `translate(-50%, -50%) scale(${scale})` }">
       <article v-for="widget in config.widgets" :key="widget.id" class="widget" :style="widgetStyle(widget)">
         <header>{{ widget.title }}</header>
@@ -59,7 +82,8 @@ onBeforeUnmount(() => window.removeEventListener('resize', resize));
 </template>
 
 <style scoped>
-.viewer { position: fixed; inset: 0; overflow: hidden; color: #dbeafe; }
+.viewer { position: fixed; inset: 0; display: grid; overflow: hidden; color: #dbeafe; place-items: center; }
+.viewer :deep(.el-result) { position: relative; z-index: 2; padding: 32px; background: #ffffffee; border-radius: 10px; }
 .screen { position: absolute; top: 50%; left: 50%; transform-origin: center center; }
 .widget { position: absolute; display: flex; flex-direction: column; overflow: hidden; background: #101b2dcc; border: 1px solid #30435f; border-radius: 5px; }
 .widget header { flex: 0 0 34px; padding: 8px 12px; font-weight: 600; background: #16243a; }.body { flex: 1; min-height: 0; padding: 5px; }

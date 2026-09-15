@@ -235,25 +235,26 @@ export function useClientTasks() {
     return Math.min(100, Math.round((t.done / t.total) * 100));
   }
 
-  async function refreshAll() {
+  /** 刷新全部任务；定时轮询传 false，避免后台异常弹窗。 */
+  async function refreshAll(showErrorMessage = true) {
     // 上一轮没结束就跳过，避免 setInterval 叠请求；超时 abort 会打爆后端 ClientAbortException
     if (refreshing.value) return;
     refreshing.value = true;
     try {
-      await doRefreshAll();
+      await doRefreshAll(showErrorMessage);
     } finally {
       refreshing.value = false;
     }
   }
 
-  async function doRefreshAll() {
+  async function doRefreshAll(showErrorMessage: boolean) {
     const wasRunningKeys = new Set(
       tasks.value.filter((t) => isActive(t.status)).map((t) => `${t.source}:${t.id}`),
     );
     const [copyRes, schemaRes, scriptRes] = await Promise.allSettled([
-      listDbCopyTasks(),
-      schemaDocTaskList(),
-      listSqlScriptTasks(),
+      listDbCopyTasks(showErrorMessage),
+      schemaDocTaskList(showErrorMessage),
+      listSqlScriptTasks(showErrorMessage),
     ]);
     const next: ClientTask[] = [];
     if (copyRes.status === 'fulfilled') {
@@ -286,7 +287,9 @@ export function useClientTasks() {
 
     // 列表里还没有、或该侧接口失败：逐条问详情，避免刚提交的任务被抹掉
     if (leftover.length) {
-      await Promise.all(leftover.map((t) => refreshOne(t)));
+      await Promise.all(
+        leftover.map((t) => refreshOne(t, showErrorMessage)),
+      );
       pruneCompleted();
       persistRunning();
     }
@@ -298,14 +301,14 @@ export function useClientTasks() {
     }
   }
 
-  async function refreshOne(task: ClientTask) {
+  async function refreshOne(task: ClientTask, showErrorMessage = true) {
     try {
       const res: any =
         task.source === 'copy'
-          ? await getDbCopyTask(task.id)
+          ? await getDbCopyTask(task.id, showErrorMessage)
           : task.source === 'sqlScript'
-            ? await getSqlScriptTask(task.id)
-            : await schemaDocTask(task.id);
+            ? await getSqlScriptTask(task.id, showErrorMessage)
+            : await schemaDocTask(task.id, showErrorMessage);
       const raw = unwrapOne(res);
       if (!raw) return;
       upsert(
@@ -345,7 +348,7 @@ export function useClientTasks() {
     polling.value = true;
     timerMs = ms;
     timer = setInterval(() => {
-      void refreshAll().then(() => {
+      void refreshAll(false).then(() => {
         if (!hasRunning.value) {
           stopPolling();
         }

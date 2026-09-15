@@ -41,19 +41,21 @@ export function startSqlScript(form: FormData) {
   });
 }
 
-export function listSqlScriptTasks() {
+export function listSqlScriptTasks(showErrorMessage = true) {
   return request({
     url: sqlScriptUrl + 'tasks',
     method: 'get',
     timeout: 30_000,
+    showErrorMessage,
   });
 }
 
-export function getSqlScriptTask(taskId: string) {
+export function getSqlScriptTask(taskId: string, showErrorMessage = true) {
   return request({
     url: sqlScriptUrl + 'task/' + encodeURIComponent(taskId),
     method: 'get',
     timeout: 30_000,
+    showErrorMessage,
   });
 }
 

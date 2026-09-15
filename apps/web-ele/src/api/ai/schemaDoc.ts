@@ -56,16 +56,21 @@ export function analyzeHistory(data: {
   return request({ url: url + 'analyzeHistory', method: 'post', data });
 }
 
-export function schemaDocTask(taskId: string) {
-  return request({ url: url + 'task/' + taskId, method: 'get' });
+export function schemaDocTask(taskId: string, showErrorMessage = true) {
+  return request({
+    url: url + 'task/' + taskId,
+    method: 'get',
+    showErrorMessage,
+  });
 }
 
 /** 当前用户结构文档任务（进行中 + 缓存里近 7 天已完成） */
-export function schemaDocTaskList() {
+export function schemaDocTaskList(showErrorMessage = true) {
   return request({
     url: url + 'task/list',
     method: 'get',
     timeout: 30_000,
+    showErrorMessage,
   });
 }
 

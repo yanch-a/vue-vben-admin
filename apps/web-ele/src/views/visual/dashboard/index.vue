@@ -11,8 +11,8 @@ import type {
   ScreenWidget,
 } from '#/api/visual/dashboard';
 
-import { computed, onMounted, reactive, ref } from 'vue';
-import { useRouter } from 'vue-router';
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
+import { useRoute, useRouter } from 'vue-router';
 import { ElMessage, ElMessageBox } from 'element-plus';
 
 import {
@@ -39,6 +39,7 @@ defineOptions({ name: 'VisualDashboardWorkbench' });
 type WorkMode = 'charts' | 'editor' | 'screens';
 
 const router = useRouter();
+const route = useRoute();
 const mode = ref<WorkMode>('screens');
 const loading = ref(false);
 const charts = ref<ChartAsset[]>([]);
@@ -49,11 +50,14 @@ const results = reactive<Record<string, QueryResult>>({});
 const selectedWidgetId = ref('');
 const canvasRef = ref<HTMLElement>();
 const dirty = ref(false);
+const focusCanvas = ref(false);
+const contextMenu = reactive({ visible: false, x: 0, y: 0, widgetId: '' });
 
 const screenForm = reactive({
   id: undefined as number | string | undefined,
   name: '未命名大屏',
   description: '',
+  status: 'DRAFT',
   draftRevision: undefined as number | undefined,
   refreshMode: 'LIVE',
   refreshIntervalSeconds: 300,
@@ -77,6 +81,16 @@ const chartSpecForm = reactive({
 const selectedWidget = computed(() =>
   screenConfig.widgets.find((item) => item.id === selectedWidgetId.value),
 );
+/** 统计每个图表资产在当前画布中的使用次数，允许复用但必须给用户明确反馈。 */
+const usedChartCounts = computed(() => {
+  const counts = new Map<string, number>();
+  for (const widget of screenConfig.widgets) {
+    if (widget.chartId == null) continue;
+    const key = String(widget.chartId);
+    counts.set(key, (counts.get(key) || 0) + 1);
+  }
+  return counts;
+});
 const filteredCharts = computed(() => {
   const keyword = chartKeyword.value.trim().toLowerCase();
   return keyword ? charts.value.filter((item) => `${item.title} ${item.description || ''}`.toLowerCase().includes(keyword)) : charts.value;
@@ -98,6 +112,14 @@ function unwrap<T>(response: any, fallback: T): T {
   return (response?.data ?? response ?? fallback) as T;
 }
 
+/** 兼容历史接口可能返回的 id、ID 或 screenId，入口处统一为稳定字符串。 */
+function screenIdOf(value: any): string {
+  const raw = typeof value === 'object' && value !== null
+    ? (value.id ?? value.ID ?? value.screenId)
+    : value;
+  return raw == null || String(raw).trim() === '' ? '' : String(raw);
+}
+
 function parseSpec(value?: string): ChartSpec {
   try {
     const parsed = JSON.parse(value || '{}') as Partial<ChartSpec>;
@@ -110,8 +132,14 @@ async function loadAll() {
   loading.value = true;
   try {
     const [chartRes, screenRes] = await Promise.all([listCharts(), listScreens()]);
-    charts.value = unwrap(chartRes, []);
-    screens.value = unwrap(screenRes, []);
+    charts.value = unwrap<ChartAsset[]>(chartRes, []).map((item: any) => ({
+      ...item,
+      id: item.id ?? item.ID ?? item.chartId,
+    }));
+    screens.value = unwrap<any[]>(screenRes, []).map((item: any) => ({
+      ...item,
+      id: screenIdOf(item),
+    }));
   } finally { loading.value = false; }
 }
 
@@ -212,7 +240,7 @@ async function removeChart(asset: ChartAsset) {
 }
 
 function newScreen() {
-  Object.assign(screenForm, { id: undefined, name: '未命名大屏', description: '', draftRevision: undefined, refreshMode: 'LIVE', refreshIntervalSeconds: 300 });
+  Object.assign(screenForm, { id: undefined, name: '未命名大屏', description: '', status: 'DRAFT', draftRevision: undefined, refreshMode: 'LIVE', refreshIntervalSeconds: 300 });
   Object.assign(screenConfig, emptyConfig());
   selectedWidgetId.value = '';
   Object.keys(results).forEach((key) => delete results[key]);
@@ -220,10 +248,16 @@ function newScreen() {
   mode.value = 'editor';
 }
 
-async function editScreen(id: number | string) {
+async function editScreen(value: any) {
+  const id = screenIdOf(value);
+  if (!id) {
+    ElMessage.error('大屏 ID 缺失，请刷新列表后重试');
+    return;
+  }
   const detail: any = unwrap(await getScreen(id), {});
   Object.assign(screenForm, {
     id: detail.id, name: detail.name, description: detail.description || '',
+    status: detail.status || 'DRAFT',
     draftRevision: detail.draftRevision, refreshMode: detail.refreshMode || 'LIVE',
     refreshIntervalSeconds: detail.refreshIntervalSeconds || 300,
   });
@@ -280,7 +314,14 @@ function widgetStyle(widget: ScreenWidget) {
   };
 }
 
-function beginPointer(event: PointerEvent, widget: ScreenWidget, resize = false) {
+type PointerMode = 'east' | 'move' | 'south' | 'southeast';
+
+/**
+ * 统一处理组件移动及右、下、右下三个方向的缩放。
+ * 坐标始终换算回逻辑画布尺寸，发布查看页因此能严格复现编辑比例。
+ */
+function beginPointer(event: PointerEvent, widget: ScreenWidget, pointerMode: PointerMode = 'move') {
+  event.preventDefault();
   event.stopPropagation();
   selectWidget(widget);
   const startX = event.clientX;
@@ -288,14 +329,18 @@ function beginPointer(event: PointerEvent, widget: ScreenWidget, resize = false)
   const initial = { x: widget.x, y: widget.y, w: widget.w, h: widget.h };
   const scale = (canvasRef.value?.getBoundingClientRect().width || screenConfig.width) / screenConfig.width;
   const move = (moveEvent: PointerEvent) => {
-    const dx = (moveEvent.clientX - startX) / scale;
-    const dy = (moveEvent.clientY - startY) / scale;
-    if (resize) {
-      widget.w = Math.max(220, Math.min(screenConfig.width - widget.x, initial.w + dx));
-      widget.h = Math.max(140, Math.min(screenConfig.height - widget.y, initial.h + dy));
-    } else {
+    const dx = Math.round((moveEvent.clientX - startX) / scale);
+    const dy = Math.round((moveEvent.clientY - startY) / scale);
+    if (pointerMode === 'move') {
       widget.x = Math.max(0, Math.min(screenConfig.width - widget.w, initial.x + dx));
       widget.y = Math.max(0, Math.min(screenConfig.height - widget.h, initial.y + dy));
+    } else {
+      if (pointerMode === 'east' || pointerMode === 'southeast') {
+        widget.w = Math.max(160, Math.min(screenConfig.width - widget.x, initial.w + dx));
+      }
+      if (pointerMode === 'south' || pointerMode === 'southeast') {
+        widget.h = Math.max(110, Math.min(screenConfig.height - widget.y, initial.h + dy));
+      }
     }
     dirty.value = true;
   };
@@ -305,6 +350,30 @@ function beginPointer(event: PointerEvent, widget: ScreenWidget, resize = false)
   };
   window.addEventListener('pointermove', move);
   window.addEventListener('pointerup', up);
+}
+
+/** 打开画布组件右键菜单，并把右键目标同步为当前选中组件。 */
+function openWidgetContextMenu(event: MouseEvent, widget: ScreenWidget) {
+  event.preventDefault();
+  event.stopPropagation();
+  selectWidget(widget);
+  Object.assign(contextMenu, {
+    visible: true,
+    x: Math.min(event.clientX, window.innerWidth - 150),
+    y: Math.min(event.clientY, window.innerHeight - 56),
+    widgetId: widget.id,
+  });
+}
+
+/** 删除指定画布组件；右键菜单和属性面板共用，避免两套删除逻辑不一致。 */
+function removeWidget(widgetId: string) {
+  const index = screenConfig.widgets.findIndex((item) => item.id === widgetId);
+  if (index < 0) return;
+  screenConfig.widgets.splice(index, 1);
+  delete results[widgetId];
+  if (selectedWidgetId.value === widgetId) selectedWidgetId.value = '';
+  contextMenu.visible = false;
+  dirty.value = true;
 }
 
 function selectWidget(widget: ScreenWidget) {
@@ -317,17 +386,31 @@ function selectWidget(widget: ScreenWidget) {
 }
 
 function removeSelectedWidget() {
-  const index = screenConfig.widgets.findIndex((item) => item.id === selectedWidgetId.value);
-  if (index < 0) return;
-  screenConfig.widgets.splice(index, 1);
-  selectedWidgetId.value = '';
-  dirty.value = true;
+  removeWidget(selectedWidgetId.value);
+}
+
+/**
+ * 选中画布组件后可按 Delete 删除。
+ * 输入框、文本域、可编辑区域和图表编辑弹窗中不响应，避免正常编辑内容时误删组件。
+ */
+function onWorkbenchKeydown(event: KeyboardEvent) {
+  if (event.key !== 'Delete' || mode.value !== 'editor' || chartDialog.value || !selectedWidgetId.value) return;
+  const target = event.target;
+  if (target instanceof HTMLElement) {
+    const tag = target.tagName.toLowerCase();
+    if (target.isContentEditable || tag === 'input' || tag === 'textarea' || tag === 'select') return;
+  }
+  event.preventDefault();
+  removeSelectedWidget();
 }
 
 async function saveDraft(showMessage = true) {
   const detail: any = unwrap(await saveScreenDraft({ ...screenForm, config: screenConfig }), {});
-  screenForm.id = detail.id;
+  const savedId = screenIdOf(detail);
+  if (!savedId) throw new Error('草稿保存接口未返回大屏 ID');
+  screenForm.id = savedId;
   screenForm.draftRevision = detail.draftRevision;
+  screenForm.status = detail.status || screenForm.status;
   dirty.value = false;
   if (showMessage) ElMessage.success('草稿已保存');
   return detail;
@@ -342,24 +425,44 @@ async function previewAll() {
 async function publish() {
   await saveDraft(false);
   await publishScreen(screenForm.id!);
+  screenForm.status = 'PUBLISHED';
   ElMessage.success('发布成功，查看页已切换到新版本');
   await loadAll();
 }
 
-function viewScreen(id: number | string) {
-  const target = router.resolve({ name: 'VisualDashboardView', params: { id } });
+function viewScreen(value: any) {
+  const id = screenIdOf(value);
+  if (!id) {
+    ElMessage.error('大屏 ID 缺失，无法打开查看页，请刷新列表后重试');
+    return;
+  }
+  // 同时写入路径参数和 query。后台菜单路由与前端路由合并时即使动态参数丢失，查看页仍能从 query 恢复。
+  const target = router.resolve({
+    path: `/visual/dashboard/view/${encodeURIComponent(id)}`,
+    query: { screenId: id },
+  });
   window.open(target.href, '_blank', 'noopener');
 }
 
-async function manualRefresh(id: number | string) {
-  await refreshScreen(id);
+async function manualRefresh(value: any) {
+  const resolvedId = screenIdOf(value);
+  if (!resolvedId) {
+    ElMessage.error('大屏 ID 缺失，无法刷新');
+    return;
+  }
+  await refreshScreen(resolvedId);
   ElMessage.success('数据刷新成功');
   await loadAll();
 }
 
 async function removeScreen(row: any) {
+  const id = screenIdOf(row);
+  if (!id) {
+    ElMessage.error('大屏 ID 缺失，无法删除');
+    return;
+  }
   await ElMessageBox.confirm(`确定删除大屏“${row.name}”吗？`, '删除大屏', { type: 'warning' });
-  await deleteScreen(row.id);
+  await deleteScreen(id);
   await loadAll();
 }
 
@@ -374,12 +477,21 @@ async function leaveEditor() {
   mode.value = 'screens';
 }
 
-onMounted(() => { void loadAll(); void loadConnections(); });
+watch(() => route.query.tab, (tab) => {
+  if (tab === 'charts' && mode.value !== 'editor') mode.value = 'charts';
+}, { immediate: true });
+
+onMounted(() => {
+  window.addEventListener('keydown', onWorkbenchKeydown);
+  void loadAll();
+  void loadConnections();
+});
+onBeforeUnmount(() => window.removeEventListener('keydown', onWorkbenchKeydown));
 </script>
 
 <template>
-  <div class="workbench" v-loading="loading">
-    <header class="topbar">
+  <div class="workbench" v-loading="loading" @click="contextMenu.visible = false">
+    <header class="topbar" :class="{ compact: mode === 'editor' }">
       <div>
         <h2>数据大屏工作台</h2>
         <p>图表资产、自由编排、发布与数据刷新都在这里完成</p>
@@ -391,9 +503,11 @@ onMounted(() => { void loadAll(); void loadConnections(); });
       </div>
       <div v-else class="top-actions">
         <span class="save-state">{{ dirty ? '有未保存修改' : '已保存' }}</span>
+        <ElButton @click="focusCanvas = !focusCanvas">{{ focusCanvas ? '显示侧栏' : '专注画布' }}</ElButton>
         <ElButton @click="leaveEditor">返回列表</ElButton>
         <ElButton @click="previewAll">刷新预览</ElButton>
         <ElButton @click="saveDraft()">保存草稿</ElButton>
+        <ElButton :disabled="!screenForm.id || screenForm.status !== 'PUBLISHED'" @click="viewScreen(screenForm)">查看大屏</ElButton>
         <ElButton type="primary" @click="publish">保存并发布</ElButton>
       </div>
     </header>
@@ -410,9 +524,9 @@ onMounted(() => { void loadAll(); void loadConnections(); });
           <h3>{{ row.name }}</h3><p>{{ row.description || '暂无说明' }}</p>
           <small>{{ row.refreshMode === 'LIVE' ? '每次查看实时查询' : `每 ${row.refreshIntervalSeconds}s 更新快照` }}</small>
           <div class="card-actions">
-            <ElButton size="small" type="primary" @click="editScreen(row.id)">编辑</ElButton>
-            <ElButton size="small" :disabled="row.status !== 'PUBLISHED'" @click="viewScreen(row.id)">查看</ElButton>
-            <ElButton size="small" :disabled="row.status !== 'PUBLISHED'" @click="manualRefresh(row.id)">刷新数据</ElButton>
+            <ElButton size="small" type="primary" @click="editScreen(row)">编辑</ElButton>
+            <ElButton size="small" :disabled="row.status !== 'PUBLISHED'" @click="viewScreen(row)">查看</ElButton>
+            <ElButton size="small" :disabled="row.status !== 'PUBLISHED'" @click="manualRefresh(row)">刷新数据</ElButton>
             <ElButton size="small" type="danger" text @click="removeScreen(row)">删除</ElButton>
           </div>
         </article>
@@ -438,14 +552,16 @@ onMounted(() => { void loadAll(); void loadConnections(); });
       </div>
     </main>
 
-    <main v-else class="editor">
-      <aside class="asset-panel">
+    <main v-else class="editor" :class="{ 'focus-canvas': focusCanvas }">
+      <aside v-show="!focusCanvas" class="asset-panel">
         <h3>图表资产</h3>
         <ElInput v-model="chartKeyword" size="small" clearable placeholder="搜索，拖入画布" />
         <div class="asset-list">
-          <div v-for="asset in filteredCharts" :key="asset.id" class="drag-asset" draggable="true"
+          <div v-for="asset in filteredCharts" :key="asset.id" class="drag-asset"
+            :class="{ used: usedChartCounts.has(String(asset.id)) }" draggable="true"
             @dragstart="startAssetDrag($event, asset)" @dblclick="addChart(asset)">
-            <b>{{ asset.title }}</b><span>{{ parseSpec(asset.chartSpec).chartType }}</span>
+            <div><b>{{ asset.title }}</b><small v-if="usedChartCounts.has(String(asset.id))">画布中已使用 {{ usedChartCounts.get(String(asset.id)) }} 次</small></div>
+            <span>{{ parseSpec(asset.chartSpec).chartType }}</span>
           </div>
         </div>
         <ElButton class="full" @click="openChartDialog()">+ 新建图表</ElButton>
@@ -457,19 +573,27 @@ onMounted(() => { void loadAll(); void loadConnections(); });
           <div v-if="!screenConfig.widgets.length" class="drop-hint">从左侧拖入图表，或双击图表快速添加</div>
           <article v-for="widget in screenConfig.widgets" :key="widget.id" class="canvas-widget"
             :class="{ selected: selectedWidgetId === widget.id }" :style="widgetStyle(widget)"
-            @click.stop="selectWidget(widget)">
+            @click.stop="selectWidget(widget)" @contextmenu="openWidgetContextMenu($event, widget)">
             <header @pointerdown="beginPointer($event, widget)"><span>{{ widget.title }}</span><i>拖动</i></header>
             <div class="widget-body"><ChartRenderer :spec="widget.chartSpec" :result="results[widget.id]" /></div>
-            <button class="resize" title="拖动调整大小" @pointerdown="beginPointer($event, widget, true)" />
+            <button class="resize-handle east" title="向右调整宽度" @pointerdown="beginPointer($event, widget, 'east')" />
+            <button class="resize-handle south" title="向下调整高度" @pointerdown="beginPointer($event, widget, 'south')" />
+            <button class="resize-handle southeast" title="拖动调整宽高" @pointerdown="beginPointer($event, widget, 'southeast')" />
           </article>
         </div>
       </section>
 
-      <aside class="property-panel">
+      <aside v-show="!focusCanvas" class="property-panel">
         <template v-if="selectedWidget">
           <div class="panel-title"><h3>图表设置</h3><ElButton type="danger" text @click="removeSelectedWidget">移除</ElButton></div>
           <ElForm label-position="top" size="small">
             <ElFormItem label="标题"><ElInput v-model="selectedWidget.title" @input="dirty = true" /></ElFormItem>
+            <div class="layout-fields">
+              <ElFormItem label="X"><ElInputNumber v-model="selectedWidget.x" :min="0" :max="screenConfig.width - selectedWidget.w" controls-position="right" @change="dirty = true" /></ElFormItem>
+              <ElFormItem label="Y"><ElInputNumber v-model="selectedWidget.y" :min="0" :max="screenConfig.height - selectedWidget.h" controls-position="right" @change="dirty = true" /></ElFormItem>
+              <ElFormItem label="宽"><ElInputNumber v-model="selectedWidget.w" :min="160" :max="screenConfig.width - selectedWidget.x" controls-position="right" @change="dirty = true" /></ElFormItem>
+              <ElFormItem label="高"><ElInputNumber v-model="selectedWidget.h" :min="110" :max="screenConfig.height - selectedWidget.y" controls-position="right" @change="dirty = true" /></ElFormItem>
+            </div>
             <ElFormItem label="图表类型">
               <ElSelect v-model="selectedWidget.chartSpec.chartType" @change="dirty = true">
                 <ElOption v-for="item in ['bar','line','area','pie','scatter','kpi','table']" :key="item" :value="item" :label="item" />
@@ -535,6 +659,11 @@ onMounted(() => { void loadAll(); void loadConnections(); });
       </aside>
     </main>
 
+    <div v-if="contextMenu.visible" class="widget-context-menu"
+      :style="{ left: `${contextMenu.x}px`, top: `${contextMenu.y}px` }" @click.stop>
+      <button @click="removeWidget(contextMenu.widgetId)">删除组件</button>
+    </div>
+
     <ElDialog v-model="chartDialog" title="图表编辑器" width="900px" destroy-on-close>
       <div class="chart-editor">
         <ElForm label-position="top">
@@ -572,14 +701,17 @@ onMounted(() => { void loadAll(); void loadConnections(); });
 
 <style scoped>
 .workbench { min-height: calc(100vh - 92px); background: var(--el-bg-color-page); color: var(--el-text-color-primary); }
-.topbar { display: flex; align-items: center; justify-content: space-between; padding: 16px 22px; background: var(--el-bg-color); border-bottom: 1px solid var(--el-border-color-light); }
+.topbar { display: flex; min-height: 68px; align-items: center; justify-content: space-between; padding: 10px 16px; background: var(--el-bg-color); border-bottom: 1px solid var(--el-border-color-light); }
+.topbar.compact { min-height: 54px; padding-block: 6px; }.topbar.compact p { display: none; }.topbar.compact h2 { font-size: 17px; }
 .topbar h2,.topbar p,.asset-card h3,.asset-card p { margin: 0; }.topbar p { margin-top: 4px; color: var(--el-text-color-secondary); font-size: 13px; }
-.top-actions,.card-actions,.library-head,.panel-title,.form-row { display: flex; align-items: center; gap: 10px; }.save-state { color: var(--el-text-color-secondary); font-size: 12px; }
+.top-actions,.card-actions,.library-head,.panel-title,.form-row { display: flex; align-items: center; gap: 8px; }.top-actions :deep(.el-button + .el-button),.card-actions :deep(.el-button + .el-button) { margin-left: 0; }.save-state { color: var(--el-text-color-secondary); font-size: 12px; }
 .library { padding: 22px; }.library-head { justify-content: space-between; margin-bottom: 18px; }.search { max-width: 320px; }
 .card-grid { display: grid; grid-template-columns: repeat(auto-fill,minmax(280px,1fr)); gap: 16px; }.asset-card { position: relative; padding: 18px; min-height: 140px; overflow: hidden; background: var(--el-bg-color); border: 1px solid var(--el-border-color-light); border-radius: 10px; box-shadow: var(--el-box-shadow-lighter); }
 .asset-card h3 { margin: 12px 0 7px; }.asset-card p { height: 42px; overflow: hidden; color: var(--el-text-color-secondary); font-size: 12px; }.asset-card small { display: block; margin: 7px 0; color: var(--el-text-color-secondary); }.chart-badge { display: inline-block; padding: 2px 8px; background: var(--el-color-primary-light-9); color: var(--el-color-primary); border-radius: 20px; font-size: 11px; }.screen-cover { height: 76px; margin: -18px -18px 0; padding: 12px; background: linear-gradient(135deg,#15223a,#245ea8); color: #fff; }
-.editor { display: grid; grid-template-columns: 250px minmax(500px,1fr) 310px; height: calc(100vh - 154px); }.asset-panel,.property-panel { padding: 16px; overflow: auto; background: var(--el-bg-color); }.asset-panel { border-right: 1px solid var(--el-border-color-light); }.property-panel { border-left: 1px solid var(--el-border-color-light); }.asset-list { display: flex; flex-direction: column; gap: 8px; margin: 14px 0; }.drag-asset { display: flex; justify-content: space-between; padding: 10px; cursor: grab; border: 1px solid var(--el-border-color); border-radius: 6px; }.drag-asset span { color: var(--el-color-primary); font-size: 11px; }.full { width: 100%; }
-.canvas-stage { display: grid; padding: 22px; overflow: auto; place-items: center; background: #d7dce4; }.canvas { position: relative; width: min(100%,1200px); aspect-ratio: 16/9; overflow: hidden; box-shadow: 0 12px 35px #0004; }.drop-hint { display: grid; height: 100%; place-items: center; color: #94a3b8; }.canvas-widget { position: absolute; display: flex; flex-direction: column; overflow: hidden; color: #dbeafe; background: #101b2dcc; border: 1px solid #30435f; border-radius: 5px; }.canvas-widget.selected { outline: 2px solid #409eff; }.canvas-widget header { display: flex; flex: 0 0 32px; align-items: center; justify-content: space-between; padding: 0 10px; cursor: move; background: #16243a; font-size: 12px; }.canvas-widget header i { color: #64748b; font-style: normal; }.widget-body { flex: 1; min-height: 0; padding: 5px; }.resize { position: absolute; right: 0; bottom: 0; width: 16px; height: 16px; cursor: nwse-resize; background: linear-gradient(135deg,transparent 50%,#409eff 50%); border: 0; }
-.property-panel h3,.asset-panel h3 { margin: 0 0 14px; }.property-panel :deep(.el-select),.chart-editor :deep(.el-select) { width: 100%; }.form-row { align-items: flex-start; }.form-row > * { flex: 1; }.dialog-preview { height: 300px; padding: 8px; border: 1px dashed var(--el-border-color); border-radius: 6px; }
-@media (max-width: 1100px) { .editor { grid-template-columns: 210px minmax(420px,1fr) 270px; } }
+.screen-card .card-actions { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); margin-top: 10px; }.screen-card .card-actions :deep(.el-button) { width: 100%; margin: 0; }
+.editor { display: grid; grid-template-columns: 210px minmax(0,1fr) 286px; height: calc(100dvh - 126px); min-height: 560px; }.editor.focus-canvas { grid-template-columns: minmax(0,1fr); }.asset-panel,.property-panel { padding: 12px; overflow: auto; background: var(--el-bg-color); }.asset-panel { border-right: 1px solid var(--el-border-color-light); }.property-panel { border-left: 1px solid var(--el-border-color-light); }.asset-list { display: flex; flex-direction: column; gap: 7px; margin: 10px 0; }.drag-asset { display: flex; min-height: 43px; align-items: center; justify-content: space-between; padding: 7px 9px; cursor: grab; border: 1px solid var(--el-border-color); border-radius: 6px; }.drag-asset.used { border-color: var(--el-color-success); background: var(--el-color-success-light-9); }.drag-asset div { min-width: 0; }.drag-asset b { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }.drag-asset small { display: block; margin-top: 2px; color: var(--el-color-success); font-size: 10px; }.drag-asset span { flex: 0 0 auto; margin-left: 6px; color: var(--el-color-primary); font-size: 11px; }.full { width: 100%; }
+.canvas-stage { display: grid; padding: 6px; overflow: auto; place-items: center; background: #cbd2dc; }.canvas { position: relative; width: min(100%,calc((100dvh - 142px) * 1.7778)); aspect-ratio: 16/9; overflow: hidden; box-shadow: 0 5px 18px #0005; }.drop-hint { display: grid; height: 100%; place-items: center; color: #94a3b8; }.canvas-widget { position: absolute; display: flex; flex-direction: column; overflow: hidden; color: #dbeafe; touch-action: none; user-select: none; background: #101b2dcc; border: 1px solid #30435f; border-radius: 5px; }.canvas-widget.selected { z-index: 2; outline: 2px solid #409eff; outline-offset: -1px; }.canvas-widget header { display: flex; flex: 0 0 30px; align-items: center; justify-content: space-between; padding: 0 9px; cursor: move; touch-action: none; background: #16243a; font-size: 12px; }.canvas-widget header i { color: #64748b; font-style: normal; }.widget-body { flex: 1; min-height: 0; padding: 4px; }.resize-handle { position: absolute; z-index: 4; padding: 0; touch-action: none; background: transparent; border: 0; }.resize-handle.east { top: 25%; right: -1px; width: 8px; height: 50%; cursor: ew-resize; border-right: 3px solid #409eff; }.resize-handle.south { bottom: -1px; left: 25%; width: 50%; height: 8px; cursor: ns-resize; border-bottom: 3px solid #409eff; }.resize-handle.southeast { right: 0; bottom: 0; width: 24px; height: 24px; cursor: nwse-resize; background: linear-gradient(135deg,transparent 52%,#409eff 53%); }
+.property-panel h3,.asset-panel h3 { margin: 0 0 10px; }.property-panel :deep(.el-select),.chart-editor :deep(.el-select) { width: 100%; }.form-row { align-items: flex-start; }.form-row > * { flex: 1; }.layout-fields { display: grid; grid-template-columns: repeat(4,minmax(0,1fr)); gap: 5px; }.layout-fields :deep(.el-input-number) { width: 100%; }.dialog-preview { height: 300px; padding: 8px; border: 1px dashed var(--el-border-color); border-radius: 6px; }
+.widget-context-menu { position: fixed; z-index: 4000; min-width: 136px; padding: 5px; background: var(--el-bg-color-overlay); border: 1px solid var(--el-border-color); border-radius: 6px; box-shadow: var(--el-box-shadow-light); }.widget-context-menu button { width: 100%; padding: 7px 10px; color: var(--el-color-danger); text-align: left; cursor: pointer; background: transparent; border: 0; border-radius: 4px; }.widget-context-menu button:hover { background: var(--el-color-danger-light-9); }
+@media (max-width: 1100px) { .editor { grid-template-columns: 180px minmax(390px,1fr) 250px; }.top-actions { flex-wrap: wrap; justify-content: flex-end; } }
 </style>

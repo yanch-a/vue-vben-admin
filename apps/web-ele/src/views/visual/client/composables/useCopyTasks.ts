@@ -42,19 +42,24 @@ export function useCopyTasks() {
 
   const hasRunning = computed(() => runningCount.value > 0);
 
-  async function refreshList() {
+  /** 刷新任务列表；定时轮询传 false，避免后台异常弹窗。 */
+  async function refreshList(showErrorMessage = true) {
     try {
-      const res: any = await listDbCopyTasks();
+      const res: any = await listDbCopyTasks(showErrorMessage);
       tasks.value = unwrapList(res);
     } catch {
       /* 静默：轮询失败不打断 UI */
     }
   }
 
-  async function refreshActive() {
+  /** 刷新当前任务；定时轮询传 false，避免后台异常弹窗。 */
+  async function refreshActive(showErrorMessage = true) {
     if (!activeTaskId.value) return;
     try {
-      const res: any = await getDbCopyTask(activeTaskId.value);
+      const res: any = await getDbCopyTask(
+        activeTaskId.value,
+        showErrorMessage,
+      );
       const task = unwrapTask(res);
       if (!task) return;
       const idx = tasks.value.findIndex((t) => t.taskId === task.taskId);
@@ -75,9 +80,9 @@ export function useCopyTasks() {
     if (polling.value) return;
     polling.value = true;
     timer = setInterval(async () => {
-      await refreshList();
+      await refreshList(false);
       if (activeTaskId.value && progressVisible.value) {
-        await refreshActive();
+        await refreshActive(false);
       }
       stopIfIdle();
     }, 1500);

@@ -7,6 +7,11 @@ import type {
 
 type ExtendOptions<T = any> = {
   /**
+   * 是否由全局请求拦截器展示错误消息。
+   * 定时轮询、自动保存等后台请求应设为 false，避免服务异常反复打断用户。
+   */
+  showErrorMessage?: boolean;
+  /**
    * 参数序列化方式。预置的有
    * - brackets: ids[]=1&ids[]=2&ids[]=3
    * - comma: ids=1,2,3

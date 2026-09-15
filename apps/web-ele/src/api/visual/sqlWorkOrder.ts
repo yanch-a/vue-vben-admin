@@ -29,12 +29,27 @@ export function workOrderCapabilities() {
   return request({ url: url + 'capabilities', method: 'get' });
 }
 
-export function workOrderPage(params: Record<string, any>) {
-  return request({ url: url + 'page', method: 'get', params });
+export function workOrderPage(
+  params: Record<string, any>,
+  showErrorMessage = true,
+) {
+  return request({
+    url: url + 'page',
+    method: 'get',
+    params,
+    showErrorMessage,
+  });
 }
 
-export function workOrderDetail(id: number | string) {
-  return request({ url: url + id, method: 'get' });
+export function workOrderDetail(
+  id: number | string,
+  showErrorMessage = true,
+) {
+  return request({
+    url: url + id,
+    method: 'get',
+    showErrorMessage,
+  });
 }
 
 export function saveWorkOrder(data: Record<string, any>) {

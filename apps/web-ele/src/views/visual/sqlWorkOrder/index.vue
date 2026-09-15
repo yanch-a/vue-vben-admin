@@ -85,10 +85,14 @@ function typeForRisk(level?: string) {
 }
 function dateText(value?: string) { return value ? new Date(value).toLocaleString() : '-'; }
 
-async function load() {
+/** 加载工单列表；定时轮询传 false，避免后台异常弹窗。 */
+async function load(showErrorMessage = true) {
   loading.value = true;
   try {
-    const res: any = await workOrderPage({ ...query, scope: scope.value });
+    const res: any = await workOrderPage(
+      { ...query, scope: scope.value },
+      showErrorMessage,
+    );
     const data = unbox(res);
     rows.value = data?.list || [];
     total.value = Number(data?.total || 0);
@@ -161,10 +165,13 @@ async function saveDraft() {
   } finally { editorSaving.value = false; }
 }
 
-async function openDetail(row: SqlWorkOrder) {
+/** 加载工单详情；定时轮询传 false，手动打开时保留错误提示。 */
+async function openDetail(row: SqlWorkOrder, showErrorMessage = true) {
   detailVisible.value = true;
   detailLoading.value = true;
-  try { detail.value = unbox(await workOrderDetail(row.id)); }
+  try {
+    detail.value = unbox(await workOrderDetail(row.id, showErrorMessage));
+  }
   finally { detailLoading.value = false; }
 }
 
@@ -246,9 +253,13 @@ onMounted(async () => {
   await openOrderFromNotification(route.query.orderId);
   refreshTimer = setInterval(async () => {
     if (!rows.value.some((item) => ['EXECUTING', 'PREPARING'].includes(item.status))) return;
-    await load();
-    if (detailVisible.value && ['EXECUTING', 'PREPARING'].includes(detail.value?.order?.status || '')) {
-      await openDetail(detail.value.order);
+    try {
+      await load(false);
+      if (detailVisible.value && ['EXECUTING', 'PREPARING'].includes(detail.value?.order?.status || '')) {
+        await openDetail(detail.value.order, false);
+      }
+    } catch {
+      // 保留上一次成功状态，下一轮继续尝试，不打断当前操作。
     }
   }, 3000);
 });
@@ -272,11 +283,11 @@ watch(
           {{ $tr(dba ? 'DBA 审批台' : '开发提单台') }}
         </ElTag>
         <div class="filters">
-          <ElInput v-model="query.title" clearable :placeholder="$tr('标题')" :prefix-icon="Search" @keyup.enter="load" />
+          <ElInput v-model="query.title" clearable :placeholder="$tr('标题')" :prefix-icon="Search" @keyup.enter="() => load()" />
           <ElSelect v-model="query.status" clearable :placeholder="$tr('全部状态')">
             <ElOption v-for="item in statusOptions" :key="item[0]" :label="item[1]" :value="item[0]" />
           </ElSelect>
-          <ElButton :icon="Refresh" circle :title="$tr('刷新')" @click="load" />
+          <ElButton :icon="Refresh" circle :title="$tr('刷新')" @click="() => load()" />
           <ElButton v-if="roleReady && !dba" type="primary" :icon="Plus" @click="createOrder">{{ $tr('新建工单') }}</ElButton>
         </div>
       </header>

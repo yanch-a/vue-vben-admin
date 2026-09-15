@@ -78,17 +78,18 @@ import { visualClientConfig } from './config';
 import { resolveSqlDialect, resolveTableIdent } from './dialect/sqlDialect';
 import { isDestructiveDdl, looksLikeControlledDdl } from './utils/controlledDdl';
 import {
-  askAiPrefillForError,
-  describeSqlWriteRisk,
-  isFreeDmlSql,
-  isWriteOrDangerousSql,
-} from './utils/sqlWriteGuard';
-import {
   metadataTableName,
   parseQueryTables,
   type QueryTableRef,
   type TableRef,
 } from './utils/resultRowSql';
+import { confirmSqlWrite } from './utils/sqlWriteConfirmation';
+import {
+  askAiPrefillForError,
+  describeSqlWriteRisk,
+  isFreeDmlSql,
+  isWriteOrDangerousSql,
+} from './utils/sqlWriteGuard';
 import {
   isMongoDbType,
   isMongoEditableQuery,
@@ -135,6 +136,7 @@ const {
   trackCopy,
   trackSqlScript,
   cancel: cancelClientTask,
+  openPanel: openTaskPanel,
   togglePanel: toggleTaskPanel,
 } = useClientTasks();
 
@@ -548,6 +550,11 @@ function goRelation() {
 /** 打开已保存查询文件管理页（分组 / 树 / 搜索） */
 function goSavedQueryManage() {
   router.push({ name: 'SavedQuerys' });
+}
+
+/** 从 SQL 工作台直接进入统一大屏入口的图表库页签。 */
+function goChartLibrary() {
+  router.push({ name: 'VisualDashboardWorkbench', query: { tab: 'charts' } });
 }
 
 function goSqlWorkOrder() {
@@ -1470,15 +1477,7 @@ async function runControlledDdl(
         : isDestructiveDdl(sql)
           ? '即将执行删除类 DDL（DROP），确认继续？'
           : describeSqlWriteRisk(sql);
-    try {
-      await ElMessageBox.confirm(tip, '写操作确认', {
-        type: 'warning',
-        confirmButtonText: '确认执行',
-        cancelButtonText: '取消',
-      });
-    } catch {
-      return;
-    }
+    if (!(await confirmSqlWrite(sql, { message: tip }))) return;
   }
   activeTab.value.executing = true;
   activeTab.value.resultVisible = true;
@@ -1535,15 +1534,7 @@ async function runControlledDdl(
 async function runFreeDml(sql: string, _source?: string, opts?: { skipConfirm?: boolean }) {
   if (!activeConnection.value || !activeTab.value) return;
   if (!opts?.skipConfirm) {
-    try {
-      await ElMessageBox.confirm(describeSqlWriteRisk(sql), '写操作确认', {
-        type: 'warning',
-        confirmButtonText: '确认执行',
-        cancelButtonText: '取消',
-      });
-    } catch {
-      return;
-    }
+    if (!(await confirmSqlWrite(sql))) return;
   }
   activeTab.value.executing = true;
   activeTab.value.resultVisible = true;
@@ -2158,6 +2149,11 @@ function onOpenTaskPanel() {
   toggleTaskPanel();
 }
 
+/** 从 AI 结构文档打开任务面板时始终保持面板可见。 */
+function onShowTaskPanel() {
+  openTaskPanel(runningCount.value ? 'running' : 'done');
+}
+
 async function onCancelClientTask(task: Parameters<typeof cancelClientTask>[0]) {
   try {
     await cancelClientTask(task);
@@ -2415,15 +2411,7 @@ function onAiRunSql(sql: string) {
         await runControlledDdl(s, { forceConfirm: true });
         return;
       }
-      try {
-        await ElMessageBox.confirm(describeSqlWriteRisk(s), '写操作确认', {
-          type: 'warning',
-          confirmButtonText: '确认执行',
-          cancelButtonText: '取消',
-        });
-      } catch {
-        return;
-      }
+      if (!(await confirmSqlWrite(s))) return;
       ElMessage.warning(
         '当前语句无法通过客户端安全通道执行，已写入编辑器，请确认后手工处理。',
       );
@@ -2444,6 +2432,13 @@ function onAiOpenSqlTab(sql: string) {
 
 function onOpenSchemaDoc() {
   if (!ensureAiReady()) return;
+  schemaDocVisible.value = true;
+}
+
+/** AI 浮窗内打开结构文档时先收起浮窗，避免遮挡抽屉内容。 */
+function onAiOpenSchemaDoc() {
+  if (!ensureAiReady()) return;
+  aiChatRef.value?.minimize();
   schemaDocVisible.value = true;
 }
 
@@ -2519,6 +2514,7 @@ onBeforeUnmount(() => {
         @query-view="goQueryView"
         @relation="goRelation"
         @saved-queries="goSavedQueryManage"
+        @chart-library="goChartLibrary"
         @work-order="goSqlWorkOrder"
         @redis="goRedisConsole"
         @progress="onOpenTaskPanel"
@@ -2536,6 +2532,7 @@ onBeforeUnmount(() => {
         @change="setActiveConnection"
         @close="closeConnection"
         @refresh="refreshBrowseObjects"
+        @open="onOpenConnection"
       />
 
       <div
@@ -2771,6 +2768,7 @@ onBeforeUnmount(() => {
       @replace-sql="onAiReplaceSql"
       @run-sql="onAiRunSql"
       @open-sql-in-new-tab="onAiOpenSqlTab"
+      @open-schema-doc="onAiOpenSchemaDoc"
     />
 
     <SchemaDocDrawer
@@ -2783,6 +2781,7 @@ onBeforeUnmount(() => {
       @ask-ai="onSchemaDocAskAi"
       @select-instance="onSelectInstance"
       @open-sql="onSchemaDocOpenSql"
+      @open-progress="onShowTaskPanel"
     />
 
     <QueryHistoryDrawer

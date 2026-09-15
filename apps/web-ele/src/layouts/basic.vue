@@ -124,15 +124,19 @@ function toNotificationItem(item: WorkOrderNotification): NotificationItem {
   };
 }
 
-/** 拉取通知和未读数；轮询失败由请求层处理，不中断主界面。 */
-async function loadNotifications(options?: { manual?: boolean }) {
+/** 拉取通知和未读数；自动触发时静默失败，手动刷新仍展示请求错误。 */
+async function loadNotifications(options?: { manual?: boolean; silent?: boolean }) {
   if (options?.manual) {
     notificationRefreshing.value = true;
   }
   try {
     const [items, unread] = await Promise.all([
-      listWorkOrderNotificationsApi(),
-      unreadWorkOrderNotificationCountApi(),
+      listWorkOrderNotificationsApi(20, {
+        showErrorMessage: !options?.silent,
+      }),
+      unreadWorkOrderNotificationCountApi({
+        showErrorMessage: !options?.silent,
+      }),
     ]);
     notifications.value = (items || []).map((item) => toNotificationItem(item));
     unreadNotificationCount.value = Number(unread || 0);
@@ -148,6 +152,11 @@ async function loadNotifications(options?: { manual?: boolean }) {
 /** 手动刷新通知列表。 */
 async function handleNotificationRefresh() {
   await loadNotifications({ manual: true });
+}
+
+/** 窗口重新获得焦点时后台刷新通知，不因临时服务异常弹窗。 */
+function handleWindowFocus() {
+  void loadNotifications({ silent: true });
 }
 
 async function handleNotificationRead(item: NotificationItem) {
@@ -182,14 +191,17 @@ async function handleNotificationClear() {
 }
 
 onMounted(() => {
-  loadNotifications();
-  notificationTimer = setInterval(loadNotifications, NOTIFICATION_POLL_MS);
-  window.addEventListener('focus', loadNotifications);
+  void loadNotifications({ silent: true });
+  notificationTimer = setInterval(
+    () => void loadNotifications({ silent: true }),
+    NOTIFICATION_POLL_MS,
+  );
+  window.addEventListener('focus', handleWindowFocus);
 });
 
 onBeforeUnmount(() => {
   if (notificationTimer) clearInterval(notificationTimer);
-  window.removeEventListener('focus', loadNotifications);
+  window.removeEventListener('focus', handleWindowFocus);
 });
 
 async function handleLogout() {

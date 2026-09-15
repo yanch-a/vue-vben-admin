@@ -11,6 +11,8 @@ export default async function request(config: {
   params?: any;
   responseType?: any;
   responseReturn?: 'body' | 'raw';
+  /** 定时轮询、自动保存等后台请求可关闭全局错误弹窗。 */
+  showErrorMessage?: boolean;
   signal?: AbortSignal;
   timeout?: number;
   url: string;
@@ -19,6 +21,9 @@ export default async function request(config: {
   const options: Record<string, any> = {
     responseReturn: config.responseReturn || 'body',
   };
+  if (config.showErrorMessage != null) {
+    options.showErrorMessage = config.showErrorMessage;
+  }
   if (config.params) options.params = config.params;
   if (config.responseType) options.responseType = config.responseType;
   if (config.headers) options.headers = config.headers;

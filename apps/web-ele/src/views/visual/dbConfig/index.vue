@@ -3,11 +3,11 @@
    * 数据库连接配置：方片化管理；公开性、密码留空不改、会员授权分配
    * @author yanch
    */
-  import { defineComponent, inject, onMounted, reactive, ref } from 'vue'
+  import { computed, defineComponent, inject, onMounted, reactive, ref, watch } from 'vue'
   import { useRouter } from 'vue-router'
 
   import { getMemberUser } from '@/api/member/memberUser'
-  import { testConnection } from '@/api/visual/database'
+  import { getTables, testConnection } from '@/api/visual/database'
   import {
     deleteDbConfig,
     editDbConfig,
@@ -15,8 +15,10 @@
     getDbConfigPage,
     getVqDict,
     listDbConfigUsers,
+    listDbTableGrants,
     listMemberUserGroups,
     replaceDbConfigUsers,
+    replaceDbTableGrants,
     searchDbConfigUserCandidates,
   } from '@/api/visual/vq'
   import { Plus, Search } from '@element-plus/icons-vue'
@@ -114,6 +116,19 @@
       /** { memberUserId, userName, realName, canUse, canWriteData, canWriteSchema, canEditCanvas } */
       const grants = ref([])
       const searchKeyword = ref('')
+      const tableGrants = ref([])
+      const tableCandidates = ref([])
+      const tableCandidatesLoading = ref(false)
+      const tableInstanceName = ref('')
+      const tableSubjectType = ref('USER')
+      const tableSubjectId = ref(null)
+      watch(tableSubjectType, () => {
+        tableSubjectId.value = null
+      })
+      const tableUserOptions = computed(() => {
+        const values = [...grants.value, ...candidateUsers.value]
+        return Array.from(new Map(values.map((user) => [String(user.memberUserId || user.id), user])).values())
+      })
 
       const getList = async () => {
         loading.value = true
@@ -317,14 +332,18 @@
       const openAuthDialog = async (row) => {
         authDbConfigId.value = row.id
         authDbName.value = row.dbName || ''
+        tableSubjectType.value = 'USER'
+        tableSubjectId.value = null
         authVisible.value = true
         selectedGroupId.value = null
         candidateUsers.value = []
         searchKeyword.value = ''
         try {
-          const [{ data: groups }, { data: existing }] = await Promise.all([
+          tableInstanceName.value = row.schemaName || ''
+          const [{ data: groups }, { data: existing }, { data: existingTables }] = await Promise.all([
             listMemberUserGroups(),
             listDbConfigUsers(row.id),
+            listDbTableGrants(row.id),
           ])
           memberGroups.value = groups || []
           grants.value = (existing || []).map((g) => ({
@@ -336,7 +355,9 @@
             canWriteData: g.canWriteData == null ? 0 : g.canWriteData,
             canWriteSchema: g.canWriteSchema == null ? 0 : g.canWriteSchema,
           }))
+          tableGrants.value = existingTables || []
           await enrichGrantNames(grants.value)
+          if (tableInstanceName.value) await loadTableCandidates()
         } catch (e) {
           console.error(e)
           ElMessage.error('加载授权信息失败')
@@ -393,6 +414,54 @@
 
       const onSelectGroup = () => searchUsers()
 
+      /** 从目标数据库实时加载表，确保 PG/达梦等类型使用实际元数据。 */
+      const loadTableCandidates = async () => {
+        if (!authDbConfigId.value || !tableInstanceName.value.trim()) {
+          tableCandidates.value = []
+          return ElMessage.warning('请先填写数据库 / Schema 名称')
+        }
+        tableCandidatesLoading.value = true
+        try {
+          const { data } = await getTables(authDbConfigId.value, tableInstanceName.value.trim())
+          tableCandidates.value = data || []
+        } catch (e) {
+          console.error(e)
+          tableCandidates.value = []
+          ElMessage.error('加载数据库表失败')
+        } finally {
+          tableCandidatesLoading.value = false
+        }
+      }
+
+      const tableSubjectLabel = (row) => {
+        if (row.subjectType === 'DEPT') {
+          return memberGroups.value.find((g) => String(g.id) === String(row.subjectId))?.groupName || `部门 ${row.subjectId}`
+        }
+        const user = tableUserOptions.value.find((g) => String(g.memberUserId || g.id) === String(row.subjectId))
+        return user?.realName || user?.userName || `用户 ${row.subjectId}`
+      }
+
+      const addTableGrant = (table) => {
+        if (!tableSubjectId.value) return ElMessage.warning('请先选择用户或部门')
+        const instanceName = tableInstanceName.value.trim()
+        const duplicate = tableGrants.value.some((row) => row.subjectType === tableSubjectType.value
+          && String(row.subjectId) === String(tableSubjectId.value)
+          && String(row.instanceName).toLowerCase() === instanceName.toLowerCase()
+          && String(row.tableName).toLowerCase() === String(table.tableName).toLowerCase())
+        if (duplicate) return ElMessage.info('该表已在授权列表中')
+        tableGrants.value.push({
+          subjectType: tableSubjectType.value,
+          subjectId: tableSubjectId.value,
+          instanceName,
+          tableName: table.tableName,
+          canRead: 1,
+          canWriteData: 0,
+          canWriteSchema: 0,
+        })
+      }
+
+      const removeTableGrant = (index) => tableGrants.value.splice(index, 1)
+
       const addGrant = (user, defaults = {}) => {
         const id = user.id || user.memberUserId
         if (!id || isGranted(user)) return false
@@ -440,6 +509,18 @@
               memberUserId: g.memberUserId,
               canUse: g.canUse ? 1 : 0,
               canEditCanvas: g.canEditCanvas ? 1 : 0,
+              canWriteData: g.canWriteData ? 1 : 0,
+              canWriteSchema: g.canWriteSchema ? 1 : 0,
+            })),
+          })
+          await replaceDbTableGrants({
+            dbConfigId: authDbConfigId.value,
+            grants: tableGrants.value.map((g) => ({
+              subjectType: g.subjectType,
+              subjectId: g.subjectId,
+              instanceName: g.instanceName,
+              tableName: g.tableName,
+              canRead: g.canRead ? 1 : 0,
               canWriteData: g.canWriteData ? 1 : 0,
               canWriteSchema: g.canWriteSchema ? 1 : 0,
             })),
@@ -527,6 +608,17 @@
         removeGrant,
         onWriteFlagChange,
         saveAuth,
+        tableGrants,
+        tableCandidates,
+        tableCandidatesLoading,
+        tableInstanceName,
+        tableSubjectType,
+        tableSubjectId,
+        tableUserOptions,
+        loadTableCandidates,
+        tableSubjectLabel,
+        addTableGrant,
+        removeTableGrant,
         sshAuthMode,
         hostText,
         typeLabel,
@@ -974,6 +1066,36 @@
           </el-table>
         </div>
       </div>
+      <el-divider content-position="left">{{ $tr('表级权限（用户与所属部门权限合并）') }}</el-divider>
+      <div class="table-auth-tools">
+        <el-radio-group v-model="tableSubjectType">
+          <el-radio-button value="USER">{{ $tr('用户') }}</el-radio-button>
+          <el-radio-button value="DEPT">{{ $tr('部门') }}</el-radio-button>
+        </el-radio-group>
+        <el-select v-if="tableSubjectType === 'USER'" v-model="tableSubjectId" filterable :placeholder="$tr('选择用户')">
+          <el-option v-for="u in tableUserOptions" :key="u.memberUserId || u.id" :label="u.realName || u.userName" :value="u.memberUserId || u.id" />
+        </el-select>
+        <el-select v-else v-model="tableSubjectId" filterable :placeholder="$tr('选择部门')">
+          <el-option v-for="g in memberGroups" :key="g.id" :label="g.groupName" :value="g.id" />
+        </el-select>
+        <el-input v-model="tableInstanceName" :placeholder="$tr('数据库 / Schema 名称')" @keyup.enter="loadTableCandidates" />
+        <el-button :loading="tableCandidatesLoading" @click="loadTableCandidates">{{ $tr('加载表') }}</el-button>
+      </div>
+      <div class="table-auth-layout">
+        <el-table v-loading="tableCandidatesLoading" :data="tableCandidates" border size="small" height="250">
+          <el-table-column prop="tableName" :label="$tr('可选表')" min-width="150" />
+          <el-table-column :label="$tr('操作')" width="70" align="center"><template #default="{ row }"><el-button link type="primary" @click="addTableGrant(row)">{{ $tr('加入') }}</el-button></template></el-table-column>
+        </el-table>
+        <el-table :data="tableGrants" border size="small" height="250">
+          <el-table-column :label="$tr('主体')" min-width="110"><template #default="{ row }">{{ tableSubjectLabel(row) }}</template></el-table-column>
+          <el-table-column prop="instanceName" :label="$tr('实例')" min-width="100" />
+          <el-table-column prop="tableName" :label="$tr('表名')" min-width="120" />
+          <el-table-column :label="$tr('读取')" width="64" align="center"><template #default="{ row }"><el-switch v-model="row.canRead" :active-value="1" :inactive-value="0" /></template></el-table-column>
+          <el-table-column :label="$tr('写数据')" width="72" align="center"><template #default="{ row }"><el-switch v-model="row.canWriteData" :active-value="1" :inactive-value="0" /></template></el-table-column>
+          <el-table-column :label="$tr('改结构')" width="72" align="center"><template #default="{ row }"><el-switch v-model="row.canWriteSchema" :active-value="1" :inactive-value="0" /></template></el-table-column>
+          <el-table-column :label="$tr('操作')" width="64" align="center"><template #default="{ $index }"><el-button link type="danger" @click="removeTableGrant($index)">{{ $tr('移除') }}</el-button></template></el-table-column>
+        </el-table>
+      </div>
       <template #footer>
         <el-button @click="authVisible = false">{{ $tr('取消') }}</el-button>
         <el-button type="primary" :loading="authSaving" @click="saveAuth">{{ $tr('保存授权') }}</el-button>
@@ -1311,6 +1433,19 @@
     color: var(--el-text-color-secondary);
   }
 
+  .table-auth-tools {
+    display: grid;
+    grid-template-columns: auto minmax(140px, 1fr) minmax(170px, 1fr) auto;
+    gap: 8px;
+    margin-bottom: 10px;
+  }
+
+  .table-auth-layout {
+    display: grid;
+    grid-template-columns: minmax(260px, 0.7fr) minmax(520px, 1.3fr);
+    gap: 12px;
+  }
+
   @media (max-width: 900px) {
     .auth-layout {
       flex-direction: column;
@@ -1318,6 +1453,11 @@
 
     .auth-left {
       width: 100%;
+    }
+
+    .table-auth-tools,
+    .table-auth-layout {
+      grid-template-columns: 1fr;
     }
   }
 </style>

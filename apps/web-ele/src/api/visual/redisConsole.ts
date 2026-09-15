@@ -12,17 +12,20 @@ export function getRedisInfo(id: number | string) { return request({ url: url + 
 export function scanRedisKeys(id: number | string, database: number, pattern: string) {
   return request({ url: url + id + '/keys', method: 'get', params: { database, pattern, count: 500 } });
 }
-export function getRedisKey(id: number | string, database: number, key: string) {
-  return request({ url: url + id + '/key', method: 'get', params: { database, key } });
+export function getRedisKey(id: number | string, database: number, keyBase64: string) {
+  return request({ url: url + id + '/key', method: 'get', params: { database, keyBase64 } });
 }
 export function saveRedisKey(id: number | string, database: number, data: Record<string, any>) {
   return request({ url: url + id + '/key', method: 'post', params: { database }, data });
 }
-export function deleteRedisKey(id: number | string, database: number, key: string) {
-  return request({ url: url + id + '/key', method: 'delete', params: { database, key } });
+export function deleteRedisKey(id: number | string, database: number, keyBase64: string) {
+  return request({ url: url + id + '/key', method: 'delete', params: { database, keyBase64 } });
 }
-export function updateRedisKeyMeta(id: number | string, database: number, key: string, data: Record<string, any>) {
-  return request({ url: url + id + '/key/meta', method: 'put', params: { database, key }, data });
+export function deleteRedisDirectory(id: number | string, database: number, prefixBase64: string) {
+  return request({ url: url + id + '/keys', method: 'delete', params: { database, prefixBase64 } });
+}
+export function updateRedisKeyMeta(id: number | string, database: number, keyBase64: string, data: Record<string, any>) {
+  return request({ url: url + id + '/key/meta', method: 'put', params: { database, keyBase64 }, data });
 }
 export function executeRedisCommand(id: number | string, database: number, command: string, allowDangerous = false) {
   return request({ url: url + id + '/command', method: 'post', params: { database }, data: { command, allowDangerous } });

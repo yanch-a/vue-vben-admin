@@ -7,6 +7,8 @@
  */
 import { onBeforeUnmount, onMounted, reactive } from 'vue';
 
+import { Plus } from '@element-plus/icons-vue';
+
 import type { DbConnection } from '../composables/useConnectionStore';
 import { useClientPreferences } from '../composables/useClientPreferences';
 
@@ -21,6 +23,8 @@ const props = defineProps<{
 const emit = defineEmits<{
   change: [sessionId: number | string];
   close: [sessionId: number | string];
+  /** 打开已有数据库连接 */
+  open: [];
   /** 刷新该连接对应的左侧浏览对象 */
   refresh: [sessionId: number | string];
 }>();
@@ -136,6 +140,14 @@ onBeforeUnmount(() => {
         ×
       </button>
     </div>
+    <ElButton
+      class="add-connection"
+      :icon="Plus"
+      circle
+      size="small"
+      :title="$tr('打开数据库连接')"
+      @click="emit('open')"
+    />
     <div v-if="!connections.length" class="empty">{{ $tr('请新建或打开数据库连接') }}</div>
 
     <Teleport to="body">
@@ -195,6 +207,11 @@ onBeforeUnmount(() => {
 .conn-tab.active {
   background: var(--el-bg-color);
   border-color: var(--el-border-color);
+}
+.add-connection {
+  flex: 0 0 auto;
+  align-self: center;
+  margin: 0 6px 0 4px;
 }
 .name {
   font-weight: 600;

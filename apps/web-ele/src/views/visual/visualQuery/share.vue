@@ -238,13 +238,12 @@ async function flushSync(commandMeta) {
       commandPayload: commandMeta?.params
         ? JSON.stringify(commandMeta.params).slice(0, 8000)
         : undefined,
-    });
+    }, false);
     if (data?.contentVersion != null) {
       contentVersion = data.contentVersion;
     }
   } catch (e) {
     console.error('同步结果失败', e);
-    ElMessage.warning(e?.message || '同步失败，请稍后重试');
   } finally {
     syncing.value = false;
   }

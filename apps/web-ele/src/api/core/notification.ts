@@ -16,16 +16,21 @@ export interface WorkOrderNotification {
 }
 
 /** 获取当前用户最近的通知。 */
-export function listWorkOrderNotificationsApi(limit = 20) {
+export function listWorkOrderNotificationsApi(
+  limit = 20,
+  options?: { showErrorMessage?: boolean },
+) {
   return requestClient.get<WorkOrderNotification[]>(
     '/admin/workOrderNotification/list',
-    { params: { limit } },
+    { ...options, params: { limit } },
   );
 }
 
 /** 获取未读通知数量。 */
-export function unreadWorkOrderNotificationCountApi() {
-  return requestClient.get<number>('/admin/workOrderNotification/unreadCount');
+export function unreadWorkOrderNotificationCountApi(options?: {
+  showErrorMessage?: boolean;
+}) {
+  return requestClient.get<number>('/admin/workOrderNotification/unreadCount', options);
 }
 
 /** 标记一条通知为已读。 */

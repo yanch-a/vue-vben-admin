@@ -179,6 +179,10 @@ function createRequestClient(baseURL: string, options?: RequestClientOptions) {
   // 通用的错误处理（鉴权失败不重复弹窗）
   client.addResponseInterceptor(
     errorMessageResponseInterceptor((msg: string, error) => {
+      const requestConfig = error?.config ?? error?.response?.config;
+      if (requestConfig?.showErrorMessage === false) {
+        return;
+      }
       if (error?.__isAuthError || isReAuthenticating) {
         return;
       }

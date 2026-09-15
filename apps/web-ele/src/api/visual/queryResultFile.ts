@@ -70,11 +70,12 @@ export function syncQueryResultContent(data: {
   commandId?: string;
   commandName?: string;
   commandPayload?: string;
-}) {
+}, showErrorMessage = true) {
   return request({
     url: url + 'syncContent',
     method: 'post',
     data,
+    showErrorMessage,
   });
 }
 

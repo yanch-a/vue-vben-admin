@@ -288,8 +288,8 @@ export default defineComponent({
       }
     }
 
-    const reloadGroupTables = async (groupId) => {
-      const { data } = await getGroupTablesWithColumns(groupId)
+    const reloadGroupTables = async (groupId, showErrorMessage = true) => {
+      const { data } = await getGroupTablesWithColumns(groupId, showErrorMessage)
       groupSelectedTables.value = data || []
       selectedTables.value = (data || []).map((t) => ({
         id: t.sourceTableId,
@@ -366,8 +366,12 @@ export default defineComponent({
         ElMessage.warning(`表【${missingSchema.tableName}】缺少所属数据库信息，请重新勾选`)
         return
       }
-      await saveGroupTables2DB(selectedGroup.value.id, groupSelectedTables.value)
-      await reloadGroupTables(selectedGroup.value.id)
+      await saveGroupTables2DB(
+        selectedGroup.value.id,
+        groupSelectedTables.value,
+        !silent,
+      )
+      await reloadGroupTables(selectedGroup.value.id, !silent)
       if (!silent) {
         ElMessage.success('保存成功')
       }
@@ -396,7 +400,6 @@ export default defineComponent({
         await persistGroupTables({ silent: true })
       } catch (error) {
         console.error('自动更新分组失败:', error)
-        ElMessage.error(error?.msg || error?.message || '自动更新分组失败')
       } finally {
         autoSaving.value = false
       }
@@ -1698,4 +1701,4 @@ export default defineComponent({
     color: var(--el-text-color-secondary);
   }
 }
-</style> 
+</style>

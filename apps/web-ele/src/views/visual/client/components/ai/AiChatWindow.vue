@@ -6,9 +6,10 @@
  * 发送走 useAiChat → POST /admin/aiAgent/chat/stream。
  * @author yanch
  */
-import { computed, onMounted, nextTick, ref } from 'vue';
+import { computed, nextTick, onMounted, ref, watch } from 'vue';
 
-import { ElMessage } from 'element-plus';
+import { Document, Plus } from '@element-plus/icons-vue';
+import { ElMessage, ElMessageBox } from 'element-plus';
 
 import { listConversations, deleteConversation, type AgentScene } from '#/api/ai/agent';
 import { listSelectableModels } from '#/api/ai/model';
@@ -38,12 +39,19 @@ const emit = defineEmits<{
   runSql: [string];
   openSqlInNewTab: [string];
   applyQueryConfig: [any];
+  /** 打开当前连接的 AI 结构文档 */
+  openSchemaDoc: [];
 }>();
 
-/** 当前是否脱敏（未允许样例数据） */
-const isMaskedMode = computed(
-  () => Number(props.aiAllowSampleData) !== 1,
-);
+/** 读取数据库连接的默认脱敏配置，新会话会重新继承该值。 */
+function defaultMaskedMode() {
+  return Number(props.aiAllowSampleData) !== 1;
+}
+
+/** 当前会话的脱敏策略，允许用户独立于数据库默认配置进行覆盖。 */
+const isMaskedMode = ref(defaultMaskedMode());
+/** 用户是否已手动覆盖默认值，避免连接信息异步刷新时覆盖用户选择。 */
+const maskCustomized = ref(false);
 
 // 模型 ID 来自当前服务端，桌面端按服务端地址隔离。
 const MODEL_KEY = getDesktopScopedStorageKey('visual-client-ai-model-id');
@@ -67,6 +75,7 @@ const composerRef = ref<InstanceType<typeof AiComposer>>();
 const {
   messages,
   running,
+  conversationId,
   send: sendChat,
   stop,
   newConversation,
@@ -75,6 +84,7 @@ const {
   dbConfigId: props.dbConfigId,
   instanceName: props.instanceName || '',
   modelId: modelId.value,
+  allowSampleData: !isMaskedMode.value,
 }));
 
 /** 最近一条助手消息已收尾，用来在标题栏标「已完成」 */
@@ -125,6 +135,72 @@ async function openConvList() {
   const res: any = await listConversations({ dbConfigId: props.dbConfigId as any });
   convs.value = res?.data || [];
 }
+
+/** 新建会话并重新继承当前数据库连接的脱敏默认值。 */
+function startNewConversation() {
+  if (running.value) return;
+  newConversation();
+  pendingContext.value = {};
+  isMaskedMode.value = defaultMaskedMode();
+  maskCustomized.value = false;
+  convDrawer.value = false;
+}
+
+/** 打开历史会话时使用数据库默认值，用户仍可在继续提问前修改。 */
+async function openConversation(id: number | string) {
+  if (running.value) return;
+  await loadConversation(id);
+  isMaskedMode.value = defaultMaskedMode();
+  maskCustomized.value = false;
+  convDrawer.value = false;
+}
+
+/**
+ * 关闭脱敏会把 run_sql/sample_rows 的真实样例行发送给模型，因此二次确认。
+ * 从关闭切回开启是收紧权限，无需确认。
+ */
+async function beforeMaskChange() {
+  if (!isMaskedMode.value) return true;
+  try {
+    await ElMessageBox.confirm(
+      '关闭后，本对话后续请求可能把 run_sql / sample_rows 返回的真实数据发送给所选模型。是否继续？',
+      '关闭本对话数据脱敏',
+      {
+        type: 'warning',
+        confirmButtonText: '确认关闭',
+        cancelButtonText: '保持脱敏',
+        // AI 浮窗固定为 z-index:3000，确认框遮罩必须使用更高的独立层级。
+        modalClass: 'ai-mask-confirm-overlay',
+      },
+    );
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// 切换数据库连接时清空旧库会话，避免上下文与脱敏策略串到新连接。
+watch(
+  () => props.dbConfigId,
+  (next, previous) => {
+    if (String(next ?? '') === String(previous ?? '')) return;
+    if (running.value) stop();
+    newConversation();
+    pendingContext.value = {};
+    isMaskedMode.value = defaultMaskedMode();
+    maskCustomized.value = false;
+  },
+);
+
+// 尚未开始会话时，连接配置异步加载完成后同步其默认值。
+watch(
+  () => props.aiAllowSampleData,
+  () => {
+    if (!maskCustomized.value && !conversationId.value && messages.value.length === 0) {
+      isMaskedMode.value = defaultMaskedMode();
+    }
+  },
+);
 
 function onModelChange(v: any) {
   localStorage.setItem(MODEL_KEY, String(v));
@@ -199,6 +275,15 @@ defineExpose({
           </ElOptionGroup>
         </ElSelect>
         <div class="actions" @mousedown.stop>
+          <button
+            class="new-conversation"
+            :disabled="running"
+            :title="$tr('新建会话（脱敏设置将重新跟随数据库配置）')"
+            @click="startNewConversation"
+          >
+            <ElIcon><Plus /></ElIcon>
+            <span>{{ $tr('新建会话') }}</span>
+          </button>
           <button :title="$tr('会话列表')" @click="openConvList">☰</button>
           <button :title="$tr('最小化到任务栏')" @click="minimize">—</button>
           <button :title="$tr('最大化/还原')" @click="toggleMax">☐</button>
@@ -217,18 +302,40 @@ defineExpose({
           <strong>{{ $tr(instanceName || '未选择') }}</strong>
         </span>
         <span class="ctx-sep">|</span>
-        <ElTag
-          size="small"
-          :type="isMaskedMode ? 'warning' : 'success'"
-          effect="plain"
-          :title="
-            isMaskedMode
-              ? 'run_sql 结果会脱敏后发给模型；sample_rows 不可用。可在连接设置中开启「允许样例数据」'
-              : '允许把真实行数据发给模型（含 run_sql / sample_rows）'
-          "
-        >
-          {{ $tr(isMaskedMode ? '脱敏模式' : '真实样例') }}
-        </ElTag>
+        <span class="mask-control">
+          <span>{{ $tr('本对话数据脱敏') }}</span>
+          <ElSwitch
+            v-model="isMaskedMode"
+            size="small"
+            inline-prompt
+            active-text="开"
+            inactive-text="关"
+            :disabled="running"
+            :before-change="beforeMaskChange"
+            @change="maskCustomized = true"
+          />
+          <ElTag
+            size="small"
+            :type="isMaskedMode ? 'warning' : 'danger'"
+            effect="plain"
+            :title="
+              isMaskedMode
+                ? 'run_sql 结果会脱敏后发给模型，sample_rows 不可用'
+                : '本对话允许把真实行数据发给模型（含 run_sql / sample_rows）'
+            "
+          >
+            {{ $tr(isMaskedMode ? '已脱敏' : '真实数据') }}
+          </ElTag>
+        </span>
+      </div>
+      <div class="schema-doc-tip" @mousedown.stop>
+        <ElIcon><Document /></ElIcon>
+        <span>
+          {{ $tr('AI 会优先依赖结构文档理解表含义、字段和关联；文档越完整，回答越准确。') }}
+        </span>
+        <ElButton size="small" type="primary" plain @click="emit('openSchemaDoc')">
+          {{ $tr('打开 AI 结构文档') }}
+        </ElButton>
       </div>
       <AiMessageList
         :messages="messages"
@@ -265,11 +372,11 @@ defineExpose({
         append-to-body
         class="ai-chat-drawer"
       >
-        <ElButton size="small" type="primary" @click="newConversation(); convDrawer = false">
+        <ElButton size="small" type="primary" :disabled="running" @click="startNewConversation">
           {{ $tr('新建会话') }}
         </ElButton>
         <div v-for="c in convs" :key="c.id" class="conv-item">
-          <span class="conv-title" @click="loadConversation(c.id); convDrawer = false">
+          <span class="conv-title" @click="openConversation(c.id)">
             {{ $tr(c.title || '未命名') }}
           </span>
           <ElButton
@@ -330,6 +437,24 @@ defineExpose({
 .ctx-sep {
   opacity: 0.45;
 }
+.mask-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.schema-doc-tip {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--el-color-primary-light-7);
+  background: var(--el-color-primary-light-9);
+  color: var(--el-text-color-regular);
+  font-size: var(--vc-ai-font-size-sm, 12px);
+}
+.schema-doc-tip > span {
+  flex: 1;
+}
 .title {
   flex: 1;
   font-size: var(--vc-ai-font-size, 13px);
@@ -367,6 +492,19 @@ defineExpose({
   height: 24px;
   color: var(--el-text-color-regular);
 }
+.actions button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+.actions .new-conversation {
+  width: auto;
+  min-width: 24px;
+  padding: 0 6px;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  color: var(--el-color-primary);
+}
 .rs {
   position: absolute;
 }
@@ -401,5 +539,9 @@ defineExpose({
 <style>
 .ai-model-select-popper {
   z-index: 4000 !important;
+}
+/* MessageBox 的 z-index 由 Element Plus 写在行内，使用专属遮罩类提升到 AI 浮窗之上。 */
+.ai-mask-confirm-overlay {
+  z-index: 4200 !important;
 }
 </style>

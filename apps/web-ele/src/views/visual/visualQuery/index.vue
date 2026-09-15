@@ -25,10 +25,11 @@
   import SqlEditor from '../client/components/query/SqlEditor.vue'
   import AiChatWindow from '../client/components/ai/AiChatWindow.vue'
   import AiDockBar from '../client/components/ai/AiDockBar.vue'
-  import { describeSqlWriteRisk, isFreeDmlSql, isWriteOrDangerousSql } from '../client/utils/sqlWriteGuard'
   import { looksLikeControlledDdl } from '../client/utils/controlledDdl'
-  import '../client/styles/client-fonts.css'
   import { formatSqlByDialect } from '../client/utils/formatSql'
+  import { confirmSqlWrite } from '../client/utils/sqlWriteConfirmation'
+  import { describeSqlWriteRisk, isFreeDmlSql, isWriteOrDangerousSql } from '../client/utils/sqlWriteGuard'
+  import '../client/styles/client-fonts.css'
   // Univer 0.25+
   import { LocaleType, mergeLocales, Univer } from "@univerjs/core";
   import { FUniver } from "@univerjs/core/facade";
@@ -372,7 +373,7 @@
         const seq = ++livePreviewSeq
         state.livePreviewLoading = true
         try {
-          const res = await previewSqlBySelection(buildPreviewPayload())
+          const res = await previewSqlBySelection(buildPreviewPayload(), false)
           if (seq !== livePreviewSeq) return
           const sql = formatPreviewSql(res.data?.previewSql, res.data?.dbType)
           state.livePreviewSql = sql || ''
@@ -919,16 +920,7 @@
         if (!isFreeDmlSql(sql) && !looksLikeControlledDdl(sql) && !isWriteOrDangerousSql(sql)) {
           return true
         }
-        try {
-          await ElMessageBox.confirm(describeSqlWriteRisk(sql), '写操作确认', {
-            type: 'warning',
-            confirmButtonText: '确认执行',
-            cancelButtonText: '取消',
-          })
-          return true
-        } catch {
-          return false
-        }
+        return confirmSqlWrite(sql, { message: describeSqlWriteRisk(sql) })
       }
 
       const runVisualDml = async (sql) => {

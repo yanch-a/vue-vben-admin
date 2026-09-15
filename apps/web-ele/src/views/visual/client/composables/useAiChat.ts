@@ -145,7 +145,34 @@ function pickProposedSql(data: any): AiMsg['sql'] | undefined {
   };
 }
 
-export function useAiChat(getCtx: () => { dbConfigId: any; instanceName: string; modelId: any }) {
+/** AI 发送时所需的当前工作台上下文。 */
+interface AiChatContext {
+  dbConfigId: any;
+  instanceName: string;
+  modelId: any;
+  /** 当前会话的数据发送策略，由 AI 窗口控制。 */
+  allowSampleData?: boolean;
+}
+
+/**
+ * 当前挂载的 AI 窗口提供的上下文读取器。
+ * 路由返回后会被新组件替换，避免单例会话继续读取已销毁组件的旧连接。
+ */
+let activeContextGetter: (() => AiChatContext) | undefined;
+
+/** 跨路由复用的会话状态；页面卸载不会中断正在进行的 SSE 或清空消息。 */
+let sharedAiChatStore: ReturnType<typeof createAiChatStore> | undefined;
+
+export function useAiChat(getCtx: () => AiChatContext) {
+  activeContextGetter = getCtx;
+  if (!sharedAiChatStore) {
+    sharedAiChatStore = createAiChatStore();
+  }
+  return sharedAiChatStore;
+}
+
+/** 创建一次 AI 会话状态机，后续页面实例均复用该状态机。 */
+function createAiChatStore() {
   const messages = ref<AiMsg[]>([]);
   const running = ref(false);
   const conversationId = ref<number | string | undefined>();
@@ -163,6 +190,10 @@ export function useAiChat(getCtx: () => { dbConfigId: any; instanceName: string;
   }
 
   function send(text: string, scene: AgentScene, context?: AgentChatRequest['context']) {
+    const getCtx = activeContextGetter;
+    if (!getCtx) {
+      throw new Error('AI 工作台尚未就绪');
+    }
     const ctx = getCtx();
     if (!ctx.dbConfigId || !ctx.instanceName || !ctx.modelId) {
       throw new Error('请先选择连接、实例和模型');

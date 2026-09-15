@@ -96,7 +96,7 @@ export function createWxScanQrcodeApi() {
 export function pollWxScanStatusApi(state: string) {
   return requestClient.get<MemberAuthApi.WxScanPollResult>(
     '/member/wxScan/poll',
-    { params: { state } },
+    { params: { state }, showErrorMessage: false },
   );
 }
 

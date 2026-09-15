@@ -5,13 +5,13 @@ import { useRouter } from 'vue-router';
 import { Page } from '@vben/common-ui';
 
 import {
-  ArrowLeft, Close, DataAnalysis, Delete, Edit, Expand, Fold, Monitor,
+  ArrowLeft, Close, DataAnalysis, Delete, Edit, Expand, Fold, Folder, Key, Monitor,
   Plus, Promotion, Refresh, Search, SwitchButton,
 } from '@element-plus/icons-vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 
 import {
-  deleteRedisConnection, deleteRedisKey, executeRedisCommand, getRedisDatabases,
+  deleteRedisConnection, deleteRedisDirectory, deleteRedisKey, executeRedisCommand, getRedisDatabases,
   getRedisInfo, getRedisKey, redisConnections, saveRedisConnection, saveRedisKey, scanRedisKeys,
   testRedisConnection, updateRedisKeyMeta,
 } from '#/api/visual/redisConsole';
@@ -28,18 +28,65 @@ const databaseStatsLoading = ref(false);
 const databaseStatsError = ref('');
 const keyPattern = ref('*');
 const keys = ref<any[]>([]);
+type KeyTreeNode = {
+  children?: KeyTreeNode[];
+  id: string;
+  isFolder: boolean;
+  key?: string;
+  keyBase64?: string;
+  label: string;
+  prefix?: string;
+  ttlSeconds?: number;
+  type?: string;
+};
+
+/** Redis 通常用冒号表达命名空间；树节点保留完整前缀用于目录删除。 */
+const keyTree = computed<KeyTreeNode[]>(() => {
+  const root: KeyTreeNode[] = [];
+  for (const item of keys.value) {
+    const parts = String(item.key).split(':');
+    let level = root;
+    let path = '';
+    for (let index = 0; index < parts.length - 1; index++) {
+      const part = parts[index] || '(空)';
+      path += `${parts[index]}:`;
+      let folder = level.find((node) => node.isFolder && node.prefix === path);
+      if (!folder) {
+        folder = { id: `folder:${path}`, isFolder: true, label: part, prefix: path, children: [] };
+        level.push(folder);
+      }
+      level = folder.children!;
+    }
+    level.push({
+      id: `key:${item.keyBase64 || item.key}`,
+      isFolder: false,
+      key: item.key,
+      keyBase64: item.keyBase64,
+      label: parts[parts.length - 1] || item.key,
+      ttlSeconds: item.ttlSeconds,
+      type: item.type,
+    });
+  }
+  const sortNodes = (nodes: KeyTreeNode[]) => {
+    nodes.sort((a, b) => Number(b.isFolder) - Number(a.isFolder) || a.label.localeCompare(b.label, 'zh-CN'));
+    nodes.forEach((node) => node.children && sortNodes(node.children));
+  };
+  sortNodes(root);
+  return root;
+});
 const loadingKeys = ref(false);
 const selectedKey = ref('');
 const keyLoading = ref(false);
 const keyForm = reactive({ key: '', type: 'STRING', ttlSeconds: -1 as null | number, content: '' });
 const originalKey = ref('');
+const keyTruncated = ref(false);
 const savingKey = ref(false);
 
 const connectionVisible = ref(false);
 const connectionSaving = ref(false);
 const connectionForm = reactive({
   id: undefined as any, connectionName: '', mode: 'STANDALONE', hostName: '127.0.0.1', port: 6379,
-  clusterNodes: '', username: '', password: '', tlsEnabled: 0, timeoutMs: 5000, databaseCount: 16, isPublic: 0,
+  clusterNodes: '', username: '', password: '', tlsEnabled: 0, timeoutMs: 5000, databaseCount: 16, orderNum: 0, isPublic: 0,
 });
 
 const command = ref('');
@@ -63,6 +110,14 @@ const workspaceStyle = computed(() => {
 });
 
 const contextMenu = reactive({ visible: false, x: 0, y: 0, item: null as any });
+const keyContextMenu = reactive({ visible: false, x: 0, y: 0, item: null as KeyTreeNode | null });
+const connectionSort = ref<'manual' | 'nameAsc' | 'nameDesc'>('manual');
+const sortedConnections = computed(() => {
+  const list = [...connections.value];
+  if (connectionSort.value === 'nameAsc') return list.sort((a, b) => String(a.connectionName).localeCompare(String(b.connectionName), 'zh-CN'));
+  if (connectionSort.value === 'nameDesc') return list.sort((a, b) => String(b.connectionName).localeCompare(String(a.connectionName), 'zh-CN'));
+  return list.sort((a, b) => Number(a.orderNum || 0) - Number(b.orderNum || 0));
+});
 const infoVisible = ref(false);
 const infoLoading = ref(false);
 const infoTitle = ref('Redis 信息');
@@ -121,31 +176,47 @@ function refreshStatsOnOpen(visible: boolean) {
 
 async function loadKeys() {
   if (!activeId.value) { keys.value = []; return; }
+  const connectionId = activeId.value;
+  const selectedDatabase = database.value;
   loadingKeys.value = true;
-  try { keys.value = unbox(await scanRedisKeys(activeId.value, database.value, keyPattern.value || '*')) || []; }
-  finally { loadingKeys.value = false; }
+  try {
+    const result = unbox(await scanRedisKeys(connectionId, selectedDatabase, keyPattern.value || '*')) || [];
+    // 快速切换连接或 DB 时，丢弃旧请求的迟到响应，避免展示错库键列表。
+    if (activeId.value === connectionId && database.value === selectedDatabase) keys.value = result;
+  } finally {
+    if (activeId.value === connectionId && database.value === selectedDatabase) loadingKeys.value = false;
+  }
 }
 
 async function selectKey(item: any) {
+  if (item.isFolder) return;
+  const connectionId = activeId.value;
+  const selectedDatabase = database.value;
+  const requestedKeyBase64 = item.keyBase64 || toKeyBase64(item.key);
   selectedKey.value = item.key; keyLoading.value = true;
   try {
-    const data = unbox(await getRedisKey(activeId.value, database.value, item.key));
+    const data = unbox(await getRedisKey(connectionId, selectedDatabase, requestedKeyBase64));
+    if (activeId.value !== connectionId || database.value !== selectedDatabase) return;
     originalKey.value = data.key; keyForm.key = data.key; keyForm.type = data.type; keyForm.ttlSeconds = data.ttlSeconds;
+    keyTruncated.value = Boolean(data.truncated);
     if (data.type === 'STRING') keyForm.content = data.value ?? '';
     else if (data.type === 'HASH') keyForm.content = JSON.stringify(data.entries || {}, null, 2);
     else if (data.type === 'ZSET') keyForm.content = JSON.stringify(data.scoredValues || {}, null, 2);
     else keyForm.content = JSON.stringify(data.values || [], null, 2);
     if (data.truncated) ElMessage.warning('集合内容超过服务端展示上限，当前只显示前 500 项');
-  } finally { keyLoading.value = false; }
+  } finally {
+    if (activeId.value === connectionId && database.value === selectedDatabase) keyLoading.value = false;
+  }
 }
 
 function newKey() {
   selectedKey.value = ''; originalKey.value = '';
+  keyTruncated.value = false;
   Object.assign(keyForm, { key: '', type: 'STRING', ttlSeconds: -1, content: '' });
 }
 
-function buildKeyPayload() {
-  const payload: any = { key: keyForm.key, type: keyForm.type, ttlSeconds: keyForm.ttlSeconds };
+function buildKeyPayload(overwrite: boolean) {
+  const payload: any = { key: keyForm.key, type: keyForm.type, ttlSeconds: keyForm.ttlSeconds, overwrite };
   if (keyForm.type === 'STRING') payload.value = keyForm.content;
   else if (keyForm.type === 'HASH') payload.entries = JSON.parse(keyForm.content || '{}');
   else if (keyForm.type === 'ZSET') payload.scoredValues = JSON.parse(keyForm.content || '{}');
@@ -156,14 +227,17 @@ function buildKeyPayload() {
 async function persistKey() {
   if (!writable.value) return ElMessage.warning('公开连接为只读');
   if (!keyForm.key.trim()) return ElMessage.warning('键名不能为空');
+  if (keyTruncated.value) return ElMessage.warning('当前集合只加载了部分内容，请使用命令行编辑，避免覆盖未显示的数据');
   savingKey.value = true;
   try {
-    if (originalKey.value && originalKey.value !== keyForm.key.trim()) {
-      await updateRedisKeyMeta(activeId.value, database.value, originalKey.value, { newKey: keyForm.key.trim(), ttlSeconds: keyForm.ttlSeconds });
-      originalKey.value = keyForm.key.trim();
+    // 先完成 JSON 解析和前端校验，再执行重命名，避免格式错误造成“键已改名但保存失败”。
+    const payload = buildKeyPayload(Boolean(originalKey.value));
+    if (originalKey.value && originalKey.value !== keyForm.key) {
+      await updateRedisKeyMeta(activeId.value, database.value, toKeyBase64(originalKey.value), { newKey: keyForm.key, ttlSeconds: keyForm.ttlSeconds });
+      originalKey.value = keyForm.key;
     }
-    await saveRedisKey(activeId.value, database.value, buildKeyPayload());
-    ElMessage.success('键值已保存'); originalKey.value = keyForm.key.trim();
+    await saveRedisKey(activeId.value, database.value, payload);
+    ElMessage.success('键值已保存'); originalKey.value = keyForm.key;
     await Promise.all([loadKeys(), loadDatabaseStats()]);
   } catch (error: any) { ElMessage.error(error?.message || '内容格式错误，请检查 JSON'); }
   finally { savingKey.value = false; }
@@ -172,12 +246,44 @@ async function persistKey() {
 async function removeKey() {
   const key = originalKey.value || keyForm.key; if (!key) return;
   await ElMessageBox.confirm(`确认删除键「${key}」？`, '删除 Redis 键', { type: 'warning' });
-  await deleteRedisKey(activeId.value, database.value, key); ElMessage.success('已删除'); newKey();
+  await deleteRedisKey(activeId.value, database.value, toKeyBase64(key)); ElMessage.success('已删除'); newKey();
+  await Promise.all([loadKeys(), loadDatabaseStats()]);
+}
+
+/** 把 UTF-8 键转为 URL-safe Base64，与后端 keyBase64 协议一致。 */
+function toKeyBase64(value: string) {
+  const bytes = new TextEncoder().encode(value);
+  let binary = '';
+  bytes.forEach((byte) => { binary += String.fromCharCode(byte); });
+  return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+
+function openKeyMenu(event: MouseEvent, item: KeyTreeNode) {
+  keyContextMenu.item = item;
+  keyContextMenu.x = Math.max(4, Math.min(event.clientX, window.innerWidth - 210));
+  keyContextMenu.y = Math.max(4, Math.min(event.clientY, window.innerHeight - 90));
+  keyContextMenu.visible = true;
+}
+
+/** 右键删除：目录走前缀批量删除，叶子节点只删除当前键。 */
+async function removeTreeNode(item: KeyTreeNode | null) {
+  if (!item || !writable.value) return;
+  keyContextMenu.visible = false;
+  if (item.isFolder) {
+    await ElMessageBox.confirm(`确认删除目录「${item.prefix}」下的全部 Redis 键？此操作不可恢复。`, '删除 Redis 目录', { type: 'warning' });
+    const result = unbox(await deleteRedisDirectory(activeId.value, database.value, toKeyBase64(item.prefix || '')));
+    ElMessage.success(`已删除 ${result?.deleted ?? 0} 个键`);
+  } else {
+    await ElMessageBox.confirm(`确认删除键「${item.key}」？`, '删除 Redis 键', { type: 'warning' });
+    await deleteRedisKey(activeId.value, database.value, item.keyBase64 || toKeyBase64(item.key || ''));
+    ElMessage.success('已删除');
+  }
+  newKey();
   await Promise.all([loadKeys(), loadDatabaseStats()]);
 }
 
 function resetConnection() {
-  Object.assign(connectionForm, { id: undefined, connectionName: '', mode: 'STANDALONE', hostName: '127.0.0.1', port: 6379, clusterNodes: '', username: '', password: '', tlsEnabled: 0, timeoutMs: 5000, databaseCount: 16, isPublic: 0 });
+  Object.assign(connectionForm, { id: undefined, connectionName: '', mode: 'STANDALONE', hostName: '127.0.0.1', port: 6379, clusterNodes: '', username: '', password: '', tlsEnabled: 0, timeoutMs: 5000, databaseCount: 16, orderNum: 0, isPublic: 0 });
 }
 function createConnection() { resetConnection(); connectionVisible.value = true; }
 function editConnection(item: any) { resetConnection(); Object.assign(connectionForm, item, { password: '' }); connectionVisible.value = true; }
@@ -252,7 +358,7 @@ function openConnectionMenu(event: MouseEvent, item: any) {
   contextMenu.visible = true;
 }
 
-function closeContextMenu() { contextMenu.visible = false; }
+function closeContextMenu() { contextMenu.visible = false; keyContextMenu.visible = false; }
 
 function startResize(kind: 'connections' | 'keys', event: PointerEvent) {
   if (event.button !== 0 || window.innerWidth < 720) return;
@@ -375,10 +481,13 @@ onMounted(async () => {
   if (savedConnectionWidth !== null && Number.isFinite(Number(savedConnectionWidth))) connectionWidth.value = Math.max(50, Math.min(520, Number(savedConnectionWidth)));
   if (savedKeyWidth !== null && Number.isFinite(Number(savedKeyWidth))) keyListWidth.value = Math.max(180, Math.min(680, Number(savedKeyWidth)));
   connectionPaneVisible.value = localStorage.getItem('lemon-redis-connections-visible') !== 'false';
+  const savedSort = localStorage.getItem('lemon-redis-connection-sort');
+  if (savedSort === 'nameAsc' || savedSort === 'nameDesc' || savedSort === 'manual') connectionSort.value = savedSort;
   if (window.innerWidth < 720) connectionPaneVisible.value = false;
   document.addEventListener('click', closeContextMenu);
   await loadConnections();
 });
+watch(connectionSort, (value) => localStorage.setItem('lemon-redis-connection-sort', value));
 
 onBeforeUnmount(() => {
   stopResize();
@@ -424,10 +533,10 @@ onBeforeUnmount(() => {
 
       <div class="workspace" :style="workspaceStyle">
         <aside v-if="connectionPaneVisible" class="connections" :class="{ compact: connectionWidth < 110 }">
-          <div class="pane-head"><strong>{{ $tr('连接') }}</strong><ElButton :icon="Plus" circle size="small" :title="$tr('新建连接')" @click="createConnection" /></div>
+          <div class="pane-head"><strong>{{ $tr('连接') }}</strong><ElSelect v-if="connectionWidth >= 170" v-model="connectionSort" class="connection-sort" size="small" :title="$tr('连接排序')"><ElOption :label="$tr('自定义排序')" value="manual" /><ElOption :label="$tr('名称升序')" value="nameAsc" /><ElOption :label="$tr('名称降序')" value="nameDesc" /></ElSelect><ElButton :icon="Plus" circle size="small" :title="$tr('新建连接')" @click="createConnection" /></div>
           <ElScrollbar>
             <button
-              v-for="item in connections"
+              v-for="item in sortedConnections"
               :key="item.id"
               class="connection-item"
               :class="{ active: item.id === activeId }"
@@ -450,16 +559,36 @@ onBeforeUnmount(() => {
                 <ElButton v-if="writable" :icon="Plus" circle type="primary" :title="$tr('新建键')" @click="newKey" />
               </div>
             </div>
-            <ElScrollbar v-loading="loadingKeys"><button v-for="item in keys" :key="item.key" class="key-item" :class="{ active: item.key === selectedKey }" @click="selectKey(item)"><ElTag size="small" effect="plain">{{ item.type }}</ElTag><span>{{ item.key }}</span><small>{{ item.ttlSeconds < 0 ? '永久' : `${item.ttlSeconds}s` }}</small></button><ElEmpty v-if="!loadingKeys && !keys.length" :description="$tr('没有匹配的键')" :image-size="64" /></ElScrollbar>
+            <ElScrollbar v-loading="loadingKeys">
+              <ElTree
+                class="key-tree"
+                :data="keyTree"
+                node-key="id"
+                default-expand-all
+                :expand-on-click-node="false"
+                @node-click="selectKey"
+                @node-contextmenu="openKeyMenu"
+              >
+                <template #default="{ data: item }">
+                  <span class="key-tree-node" :class="{ active: !item.isFolder && item.key === selectedKey }">
+                    <ElIcon><Folder v-if="item.isFolder" /><Key v-else /></ElIcon>
+                    <span class="key-tree-label">{{ item.label }}</span>
+                    <ElTag v-if="!item.isFolder" size="small" effect="plain">{{ item.type }}</ElTag>
+                    <small v-if="!item.isFolder">{{ item.ttlSeconds < 0 ? '永久' : `${item.ttlSeconds}s` }}</small>
+                  </span>
+                </template>
+              </ElTree>
+              <ElEmpty v-if="!loadingKeys && !keys.length" :description="$tr('没有匹配的键')" :image-size="64" />
+            </ElScrollbar>
           </section>
           <div class="resize-handle" :title="$tr('拖动调整键列表宽度')" @pointerdown="startResize('keys', $event)"></div>
 
           <main class="editor" v-loading="keyLoading">
-            <div class="pane-head"><strong>{{ $tr(originalKey ? '编辑键' : '新建键') }}</strong><span v-if="!writable" class="readonly">{{ $tr('只读连接') }}</span><ElButton v-if="originalKey && writable" type="danger" plain :icon="Delete" @click="removeKey">{{ $tr('删除') }}</ElButton><ElButton v-if="writable" type="primary" :loading="savingKey" @click="persistKey">{{ $tr('保存') }}</ElButton></div>
+            <div class="pane-head"><strong>{{ $tr(originalKey ? '编辑键' : '新建键') }}</strong><span v-if="!writable" class="readonly">{{ $tr('只读连接') }}</span><span v-else-if="keyTruncated" class="readonly">{{ $tr('内容未完整加载，不可覆盖保存') }}</span><ElButton v-if="originalKey && writable" type="danger" plain :icon="Delete" @click="removeKey">{{ $tr('删除') }}</ElButton><ElButton v-if="writable" type="primary" :loading="savingKey" :disabled="keyTruncated" @click="persistKey">{{ $tr('保存') }}</ElButton></div>
             <ElForm label-position="top" class="key-form">
               <div class="key-meta"><ElFormItem :label="$tr('键名')"><ElInput v-model="keyForm.key" /></ElFormItem><ElFormItem :label="$tr('类型')"><ElSelect v-model="keyForm.type" :disabled="Boolean(originalKey)"><ElOption v-for="type in ['STRING','HASH','LIST','SET','ZSET']" :key="type" :label="type" :value="type" /></ElSelect></ElFormItem><ElFormItem :label="$tr('TTL 秒（-1 永久）')"><ElInputNumber v-model="keyForm.ttlSeconds" :min="-1" controls-position="right" /></ElFormItem></div>
               <ElFormItem :label="keyForm.type === 'STRING' ? '值' : keyForm.type === 'HASH' ? '字段 JSON 对象' : keyForm.type === 'ZSET' ? '成员与分数 JSON 对象' : '成员 JSON 数组'">
-                <ElInput v-model="keyForm.content" type="textarea" :rows="20" resize="none" class="value-editor" spellcheck="false" :readonly="!writable" />
+                <ElInput v-model="keyForm.content" type="textarea" :rows="20" resize="none" class="value-editor" spellcheck="false" :readonly="!writable || keyTruncated" />
               </ElFormItem>
             </ElForm>
           </main>
@@ -484,6 +613,10 @@ onBeforeUnmount(() => {
         <button @click="openCli(contextMenu.item)"><Monitor />{{ $tr('命令行模式') }}</button>
         <button v-if="contextMenu.item?.writable" class="danger" @click="removeConnection(contextMenu.item); closeContextMenu()"><Delete />{{ $tr('删除') }}</button>
       </div>
+      <div v-if="keyContextMenu.visible" class="connection-menu key-menu" :style="{ left: `${keyContextMenu.x}px`, top: `${keyContextMenu.y}px` }" @click.stop>
+        <button v-if="writable" class="danger" @click="removeTreeNode(keyContextMenu.item)"><Delete />{{ $tr(keyContextMenu.item?.isFolder ? '删除整个目录' : '删除键') }}</button>
+        <button v-else disabled>{{ $tr('只读连接不可删除') }}</button>
+      </div>
     </div>
 
     <ElDialog v-model="connectionVisible" :title="connectionForm.id ? '编辑 Redis 连接' : '新建 Redis 连接'" width="620px">
@@ -492,7 +625,7 @@ onBeforeUnmount(() => {
         <ElFormItem :label="$tr('连接模式')"><ElSegmented v-model="connectionForm.mode" :options="[{ label: '单机', value: 'STANDALONE' }, { label: 'Cluster', value: 'CLUSTER' }]" /></ElFormItem>
         <div v-if="connectionForm.mode === 'STANDALONE'" class="form-grid"><ElFormItem :label="$tr('主机')"><ElInput v-model="connectionForm.hostName" /></ElFormItem><ElFormItem :label="$tr('端口')"><ElInputNumber v-model="connectionForm.port" :min="1" :max="65535" controls-position="right" /></ElFormItem></div>
         <ElFormItem v-else :label="$tr('集群节点')"><ElInput v-model="connectionForm.clusterNodes" type="textarea" :rows="4" placeholder="redis-1:6379, redis-2:6379, redis-3:6379" /></ElFormItem>
-        <div class="form-grid"><ElFormItem :label="$tr('ACL 用户名')"><ElInput v-model="connectionForm.username" :placeholder="$tr('可选')" /></ElFormItem><ElFormItem :label="connectionForm.id ? '密码（留空保持不变）' : '密码'"><ElInput v-model="connectionForm.password" type="password" show-password /></ElFormItem><ElFormItem :label="$tr('命令超时 ms')"><ElInputNumber v-model="connectionForm.timeoutMs" :min="500" :max="120000" controls-position="right" /></ElFormItem><ElFormItem v-if="connectionForm.mode === 'STANDALONE'" :label="$tr('DB 数量')"><ElInputNumber v-model="connectionForm.databaseCount" :min="1" :max="256" controls-position="right" /></ElFormItem></div>
+        <div class="form-grid"><ElFormItem :label="$tr('ACL 用户名')"><ElInput v-model="connectionForm.username" :placeholder="$tr('可选')" /></ElFormItem><ElFormItem :label="connectionForm.id ? '密码（留空保持不变）' : '密码'"><ElInput v-model="connectionForm.password" type="password" show-password /></ElFormItem><ElFormItem :label="$tr('命令超时 ms')"><ElInputNumber v-model="connectionForm.timeoutMs" :min="500" :max="120000" controls-position="right" /></ElFormItem><ElFormItem v-if="connectionForm.mode === 'STANDALONE'" :label="$tr('DB 数量')"><ElInputNumber v-model="connectionForm.databaseCount" :min="1" :max="256" controls-position="right" /></ElFormItem><ElFormItem :label="$tr('排序值')"><ElInputNumber v-model="connectionForm.orderNum" :min="-99999" :max="99999" controls-position="right" /></ElFormItem></div>
         <div class="switches"><ElCheckbox v-model="connectionForm.tlsEnabled" :true-value="1" :false-value="0">TLS</ElCheckbox><ElCheckbox v-model="connectionForm.isPublic" :true-value="1" :false-value="0">{{ $tr('公开为只读连接') }}</ElCheckbox></div>
       </ElForm>
       <template #footer><ElButton @click="connectionVisible = false">{{ $tr('取消') }}</ElButton><ElButton type="primary" :loading="connectionSaving" @click="persistConnection">{{ $tr('保存') }}</ElButton></template>
@@ -525,6 +658,7 @@ onBeforeUnmount(() => {
 .connection-item.active,.key-item.active { background: var(--el-color-primary-light-9); }
 .redis-mark { width: 25px; height: 25px; flex: 0 0 25px; display: grid; place-items: center; background: #c93636; color: white; font-weight: 700; border-radius: 4px; }
 .connection-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.connection-sort { width: 104px; margin-left: auto; }
 .resize-handle { position: relative; z-index: 2; cursor: col-resize; background: var(--el-border-color-lighter); touch-action: none; }
 .resize-handle::after { position: absolute; inset: 0 1px; content: ''; }
 .resize-handle:hover::after { background: var(--el-color-primary-light-5); }
@@ -534,6 +668,12 @@ onBeforeUnmount(() => {
 .key-item { min-height: 40px; padding: 6px 10px; }
 .key-item span:nth-child(2) { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .key-item small { color: var(--el-text-color-secondary); white-space: nowrap; }
+.key-tree { --el-tree-node-content-height: 38px; background: transparent; }
+.key-tree-node { width: 100%; min-width: 0; display: flex; align-items: center; gap: 7px; padding-right: 8px; }
+.key-tree-node.active { color: var(--el-color-primary); font-weight: 600; }
+.key-tree-label { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.key-tree-node small { color: var(--el-text-color-secondary); white-space: nowrap; }
+.key-menu { width: 196px; }
 .editor { overflow: auto; }
 .readonly { color: var(--el-color-warning); }
 .key-form { min-width: 430px; padding: 14px; }

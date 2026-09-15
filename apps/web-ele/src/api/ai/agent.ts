@@ -22,6 +22,8 @@ export interface AgentChatRequest {
   dbConfigId: number | string;
   instanceName: string;
   modelId: number | string;
+  /** 是否允许当前对话将真实样例行发送给模型；未传时后端继承数据库配置。 */
+  allowSampleData?: boolean;
   scene: AgentScene;
   message: string;
   context?: {

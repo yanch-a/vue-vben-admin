@@ -26,6 +26,10 @@ import {
 
 defineOptions({ name: 'AiModelManage' });
 
+/** 官网免费 Token 领取页；部署方可通过 VITE_FREE_TOKEN_URL 覆盖。 */
+const freeTokenUrl =
+  import.meta.env.VITE_FREE_TOKEN_URL || 'https://gitee.com/yanchh/lemon_db_client';
+
 const loading = ref(false);
 const providers = ref<any[]>([]);
 const currentId = ref<number | string>();
@@ -307,6 +311,14 @@ async function onSelectProvider(row: any) {
 <template>
   <Page auto-content-height>
     <div class="ai-model-page">
+      <ElAlert class="token-tip" type="info" :closable="false" show-icon>
+        <template #title>
+          {{ $tr('还没有 API Token？') }}
+          <ElLink :href="freeTokenUrl" target="_blank" type="primary">
+            {{ $tr('前往官网领取免费 Token') }}
+          </ElLink>
+        </template>
+      </ElAlert>
       <div class="bar">
         <ElButton type="primary" @click="onInitBuiltin">{{ $tr('初始化内置厂商') }}</ElButton>
         <ElButton @click="openProvider()">{{ $tr('新增厂商') }}</ElButton>
@@ -516,6 +528,14 @@ async function onSelectProvider(row: any) {
   display: flex;
   gap: 8px;
   margin-bottom: 12px;
+}
+.token-tip {
+  margin-bottom: 12px;
+}
+.token-tip :deep(.el-alert__title) {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 .body {
   flex: 1;

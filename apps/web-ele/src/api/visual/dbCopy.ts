@@ -66,22 +66,24 @@ export function startDbCopy(data: DbCopyStartPayload) {
   });
 }
 
-/** 当前用户任务列表 */
-export function listDbCopyTasks() {
+/** 当前用户任务列表；后台轮询可关闭全局错误消息。 */
+export function listDbCopyTasks(showErrorMessage = true) {
   return request({
     url: dbCopyUrl + 'tasks',
     method: 'get',
     // 复制进行中列表可能较大，避免默认 10s 超时把连接掐断
     timeout: 30_000,
+    showErrorMessage,
   });
 }
 
-/** 任务详情 */
-export function getDbCopyTask(taskId: string) {
+/** 任务详情；后台轮询可关闭全局错误消息。 */
+export function getDbCopyTask(taskId: string, showErrorMessage = true) {
   return request({
     url: dbCopyUrl + 'task/' + encodeURIComponent(taskId),
     method: 'get',
     timeout: 30_000,
+    showErrorMessage,
   });
 }
 

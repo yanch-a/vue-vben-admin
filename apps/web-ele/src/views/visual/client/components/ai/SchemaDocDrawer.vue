@@ -51,6 +51,8 @@ const emit = defineEmits<{
   askAi: [{ message: string; instanceName: string }];
   selectInstance: [string];
   openSql: [{ tableName: string; instanceName: string }];
+  /** 从结构文档直接打开统一任务进度面板 */
+  openProgress: [];
 }>();
 
 const visible = computed({
@@ -86,6 +88,10 @@ const drift = ref<{ newTables?: string[]; changedTables?: string[]; droppedTable
 /** 本抽屉提交过的 taskId，完成后刷新左侧树 */
 const submittedTaskIds = new Set<string>();
 const { trackSchema, tasks: clientTasks } = useClientTasks();
+/** 结构文档工具栏上的运行中任务角标。 */
+const runningTaskCount = computed(
+  () => clientTasks.value.filter((task) => ['PENDING', 'RUNNING'].includes(task.status)).length,
+);
 
 const instLabel = computed(() => props.instanceLabel || '实例');
 const instanceList = computed(() => {
@@ -581,6 +587,15 @@ const keyFields = computed(() => {
       </ElButton>
       <ElButton size="small" @click="doDrift">{{ $tr('检测结构变化') }}</ElButton>
       <ElButton size="small" type="success" @click="askAi()">{{ $tr('问 AI') }}</ElButton>
+      <ElBadge :value="runningTaskCount" :hidden="runningTaskCount === 0">
+        <ElButton
+          size="small"
+          :type="runningTaskCount ? 'warning' : 'default'"
+          @click="emit('openProgress')"
+        >
+          {{ $tr('任务进度') }}
+        </ElButton>
+      </ElBadge>
       <ElDropdown trigger="click" @command="onMoreCommand">
         <ElButton size="small">{{ $tr('更多') }}</ElButton>
         <template #dropdown>
@@ -596,6 +611,14 @@ const keyFields = computed(() => {
     <div class="body">
       <div class="left">
         <ElInput v-model="tableKeyword" size="small" clearable :placeholder="$tr('搜索表名')" />
+        <div class="status-legend" :aria-label="$tr('表文档状态说明')">
+          <span title="AI 或用户已经填写文档">🟢 {{ $tr('已填写') }}</span>
+          <span title="只有数据库结构骨架，尚未由 AI 或用户补充">○ {{ $tr('仅骨架') }}</span>
+          <span title="尚未初始化结构文档骨架">⚪ {{ $tr('未初始化') }}</span>
+          <span title="数据库表结构已变化，需要重新生成">🟡 {{ $tr('结构变化') }}</span>
+          <span title="数据库中的表已经删除">🔴 {{ $tr('表已删除') }}</span>
+          <span title="用户已锁定，AI 不会覆盖正文">🔒 {{ $tr('用户锁定') }}</span>
+        </div>
         <div v-if="drift && ((drift.newTables?.length || 0) + (drift.changedTables?.length || 0) + (drift.droppedTables?.length || 0) > 0)" class="drift-box">
           <div v-if="drift.newTables?.length" class="drift-row">
             {{ $tr('新表') }}
@@ -758,6 +781,22 @@ const keyFields = computed(() => {
   min-height: 0;
   margin-top: 8px;
   overflow: auto;
+}
+.status-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px 9px;
+  margin-top: 7px;
+  padding: 6px 7px;
+  border: 1px solid var(--el-border-color-lighter);
+  border-radius: 5px;
+  background: var(--el-fill-color-lighter);
+  color: var(--el-text-color-secondary);
+  font-size: var(--vc-ui-font-size-sm, 11px);
+  line-height: 1.5;
+}
+.status-legend span {
+  white-space: nowrap;
 }
 .left-empty {
   margin-top: 16px;

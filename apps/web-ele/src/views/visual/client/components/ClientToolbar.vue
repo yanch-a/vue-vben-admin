@@ -3,7 +3,7 @@
  * 客户端顶栏工具条
  * @author yanch
  */
-import { ArrowDown, Refresh } from '@element-plus/icons-vue';
+import { ArrowDown, Document, Refresh } from '@element-plus/icons-vue';
 
 defineOptions({ name: 'ClientToolbar' });
 
@@ -25,6 +25,8 @@ const emit = defineEmits<{
   relation: [];
   /** 已保存查询文件管理 */
   savedQueries: [];
+  /** 跳转到数据大屏工作台的图表库 */
+  chartLibrary: [];
   /** 打开右上角任务进度 */
   progress: [];
   /** 系统功能：导出 / 导入配置 */
@@ -79,6 +81,9 @@ function onSystemCommand(cmd: string | number) {
     <ElButton size="small" @click="emit('savedQueries')">
       {{ $tr('查询文件') }}
     </ElButton>
+    <ElButton size="small" @click="emit('chartLibrary')">
+      {{ $tr('图表库') }}
+    </ElButton>
     <ElButton size="small" @click="emit('workOrder')">
       {{ $tr('SQL 工单') }}
     </ElButton>
@@ -88,8 +93,17 @@ function onSystemCommand(cmd: string | number) {
     <ElButton size="small" type="primary" :disabled="!hasConnection" @click="emit('ai')">
       {{ $tr('AI 助手') }}
     </ElButton>
-    <ElButton size="small" :disabled="!hasConnection" @click="emit('schemaDoc')">
-      {{ $tr('结构文档') }}
+    <ElButton
+      class="schema-doc-btn"
+      size="small"
+      type="primary"
+      plain
+      :icon="Document"
+      :disabled="!hasConnection"
+      :title="$tr('AI 会优先依赖结构文档理解表、字段和关联')"
+      @click="emit('schemaDoc')"
+    >
+      {{ $tr('AI 结构文档') }}
     </ElButton>
     <ElButton size="small" :disabled="!hasConnection" @click="emit('history')">
       {{ $tr('查询历史') }}
@@ -158,6 +172,9 @@ function onSystemCommand(cmd: string | number) {
 }
 .task-badge {
   margin-left: 4px;
+}
+.schema-doc-btn {
+  font-weight: 600;
 }
 .lic-hint {
   margin-left: 2px;

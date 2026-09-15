@@ -121,10 +121,14 @@ export function getTablesWithColumns(data: any) {
 }
 
 /** 按分组引用加载表及字段 */
-export function getGroupTablesWithColumns(groupId: number | string) {
+export function getGroupTablesWithColumns(
+  groupId: number | string,
+  showErrorMessage = true,
+) {
   return request({
     url: dbTableUrl + 'getGroupTablesWithColumns/' + groupId,
     method: 'get',
+    showErrorMessage,
   })
 }
 
@@ -145,11 +149,16 @@ export function editDbTable(data: any) {
 }
 
 /** 保存分组到数据库 */
-export function saveGroupTables2DB(groupId: string, tables: any[]) {
+export function saveGroupTables2DB(
+  groupId: string,
+  tables: any[],
+  showErrorMessage = true,
+) {
   return request({
     url: dbTableUrl + 'save/' + groupId,
     method: 'post',
     data: tables,
+    showErrorMessage,
   })
 }
 
@@ -483,6 +492,35 @@ export function replaceDbConfigUsers(data: {
     url: dbConfigUserUrl + 'replace',
     method: 'post',
     data,
+  })
+}
+
+/** 查询用户/部门的表级授权。 */
+export function listDbTableGrants(dbConfigId: number | string) {
+  return request({
+    url: dbConfigUserUrl + 'tableGrants/' + dbConfigId,
+    method: 'get',
+  })
+}
+
+/** 全量替换表级授权。 */
+export function replaceDbTableGrants(data: {
+  dbConfigId: number | string
+  grants: Array<{
+    canRead?: number
+    canWriteData?: number
+    canWriteSchema?: number
+    instanceName: string
+    subjectId: number | string
+    subjectType: 'DEPT' | 'USER'
+    tableName: string
+  }>
+}, showErrorMessage = true) {
+  return request({
+    url: dbConfigUserUrl + 'tableGrants/replace',
+    method: 'post',
+    data,
+    showErrorMessage,
   })
 }
 
