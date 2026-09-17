@@ -2,8 +2,8 @@
 /**
  * 顶部已打开连接栏
  * - 单击切换；关闭按钮关闭页签
- * - 连接页签右键：刷新当前浏览对象 / 修改浏览对象颜色
- * - 空白区域右键：导入 / 导出临时查询记录（本地会话缓存）
+ * - 连接页签右键：刷新 / 改颜色 / 导入导出本连接查询
+ * - 空白区域右键：导入 / 导出全部临时查询记录（本地会话缓存）
  * @author yanch
  */
 import { onBeforeUnmount, onMounted, reactive, ref } from 'vue';
@@ -28,14 +28,21 @@ const emit = defineEmits<{
   open: [];
   /** 刷新该连接对应的左侧浏览对象 */
   refresh: [sessionId: number | string];
-  /** 导出本地临时连接与查询记录 */
+  /** 导出全部本地临时连接与查询记录 */
   exportSession: [];
-  /** 导入本地临时连接与查询记录文件内容 */
+  /** 导入全部本地临时连接与查询记录文件内容 */
   importSession: [file: File];
+  /** 导出当前右键连接的查询记录 */
+  exportConnectionQueries: [sessionId: number | string];
+  /** 导入查询记录到当前右键连接 */
+  importConnectionQueries: [sessionId: number | string, file: File];
 }>();
 
 const { preferences, setConnectionColor } = useClientPreferences();
 const importInputRef = ref<HTMLInputElement>();
+const connectionImportInputRef = ref<HTMLInputElement>();
+/** 连接级导入时锁定目标 sessionId，避免异步选文件后串连接 */
+const pendingConnectionImportId = ref('');
 
 const ctx = reactive({
   visible: false,
@@ -125,11 +132,34 @@ function onImportSession() {
   importInputRef.value?.click();
 }
 
+function onExportConnectionQueries() {
+  const sid = ctx.sessionId;
+  closeCtx();
+  if (sid) emit('exportConnectionQueries', sid);
+}
+
+function onImportConnectionQueries() {
+  const sid = ctx.sessionId;
+  closeCtx();
+  if (!sid) return;
+  pendingConnectionImportId.value = sid;
+  connectionImportInputRef.value?.click();
+}
+
 function onImportFileChange(event: Event) {
   const input = event.target as HTMLInputElement;
   const file = input.files?.[0];
   input.value = '';
   if (file) emit('importSession', file);
+}
+
+function onConnectionImportFileChange(event: Event) {
+  const input = event.target as HTMLInputElement;
+  const file = input.files?.[0];
+  const sid = pendingConnectionImportId.value;
+  pendingConnectionImportId.value = '';
+  input.value = '';
+  if (file && sid) emit('importConnectionQueries', sid, file);
 }
 
 function applyColor() {
@@ -202,6 +232,13 @@ defineExpose({
       accept="application/json,.json"
       @change="onImportFileChange"
     />
+    <input
+      ref="connectionImportInputRef"
+      class="hidden-file"
+      type="file"
+      accept="application/json,.json"
+      @change="onConnectionImportFileChange"
+    />
 
     <Teleport to="body">
       <div
@@ -214,6 +251,12 @@ defineExpose({
         <template v-if="ctx.mode === 'tab'">
           <div class="item" @click="onRefreshBrowse">{{ $tr('刷新当前浏览对象') }}</div>
           <div class="item" @click="onEditColor">{{ $tr('修改浏览对象颜色') }}</div>
+          <div class="item divider" @click="onExportConnectionQueries">
+            {{ $tr('导出本连接查询记录') }}
+          </div>
+          <div class="item" @click="onImportConnectionQueries">
+            {{ $tr('导入本连接查询记录') }}
+          </div>
         </template>
         <template v-else>
           <div class="item" @click="onExportSession">{{ $tr('导出临时查询记录') }}</div>
@@ -317,6 +360,10 @@ defineExpose({
   padding: 8px 14px;
   cursor: pointer;
   white-space: nowrap;
+}
+.item.divider {
+  margin-top: 4px;
+  border-top: 1px solid var(--el-border-color-lighter);
 }
 .item:hover {
   background: var(--el-fill-color-light);

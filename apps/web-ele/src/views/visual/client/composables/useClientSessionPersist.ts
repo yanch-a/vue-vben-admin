@@ -37,6 +37,17 @@ export interface ClientSessionSnapshot {
   resultHeight?: number;
 }
 
+/** 单个连接的查询导出包（不含其它连接）。 */
+export interface ConnectionQueriesBundle {
+  kind: 'lemon-connection-queries-v1';
+  version: 1;
+  updatedAt: number;
+  /** 导出时的连接元数据，导入时仅作提示，以右键目标连接为准写入 */
+  connection: DbConnection;
+  tabs: PersistedQueryTab[];
+  activeTabId?: string;
+}
+
 export interface PersistHandles {
   openConnections: Ref<DbConnection[]>;
   activeConnectionId: Ref<number | string | null>;
@@ -49,6 +60,12 @@ export interface PersistHandles {
     tabsByConnection: Record<string, PersistedQueryTab[]>;
     activeTabByConnection: Record<string, string>;
   }) => void;
+  /** 仅替换某个连接下的查询 Tab */
+  replaceConnectionTabs: (
+    connectionId: number | string,
+    tabs: PersistedQueryTab[],
+    activeTabId?: string,
+  ) => void;
   leftWidth: Ref<number>;
   resultHeight: Ref<number>;
 }
@@ -104,6 +121,20 @@ function sanitizeTab(t: QueryTab | PersistedQueryTab): PersistedQueryTab | null 
           : (t as any).savedSqlBaseline
         : undefined,
   };
+}
+
+/**
+ * 导入场景：断开与远端「已保存查询」的 ID 关联，保留 Tab 标题（保存名）。
+ * 避免导入后 Ctrl+S 误更新他人/他环境的库记录。
+ */
+function detachImportedSavedQueryIds(
+  tabs: PersistedQueryTab[],
+): PersistedQueryTab[] {
+  return tabs.map((t) => ({
+    ...t,
+    savedQueryId: undefined,
+    savedSqlBaseline: undefined,
+  }));
 }
 
 /**
@@ -183,6 +214,41 @@ export function validateSessionSnapshot(raw: unknown): ClientSessionSnapshot | n
     activeTabByConnection,
     leftWidth,
     resultHeight,
+  };
+}
+
+/** 校验「单连接查询」导出包。 */
+export function validateConnectionQueriesBundle(
+  raw: unknown,
+): ConnectionQueriesBundle | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const o = raw as Record<string, any>;
+  if (o.kind !== 'lemon-connection-queries-v1' || o.version !== 1) return null;
+  if (!o.connection || o.connection.id == null || o.connection.id === '') {
+    return null;
+  }
+  if (!o.connection.dbName || !o.connection.dbType) return null;
+  if (!Array.isArray(o.tabs)) return null;
+
+  const tabs: PersistedQueryTab[] = [];
+  for (const item of o.tabs.slice(0, MAX_TABS_PER_CONN)) {
+    const tab = sanitizeTab(item as PersistedQueryTab);
+    if (tab) tabs.push(tab);
+  }
+  if (tabs.length === 0) return null;
+
+  const activeTabId =
+    typeof o.activeTabId === 'string' && tabs.some((t) => t.id === o.activeTabId)
+      ? o.activeTabId
+      : tabs[0]!.id;
+
+  return {
+    kind: 'lemon-connection-queries-v1',
+    version: 1,
+    updatedAt: typeof o.updatedAt === 'number' ? o.updatedAt : Date.now(),
+    connection: stripConnection(o.connection as DbConnection),
+    tabs,
+    activeTabId,
   };
 }
 
@@ -315,16 +381,85 @@ export function setupClientSessionPersist(h: PersistHandles): {
       try {
         h.openConnections.value = snap.connections.map(stripConnection);
         h.activeConnectionId.value = snap.activeConnectionId;
+        // 跨环境导入：清掉 savedQueryId，标题保留，下次保存走新建
+        const tabsByConnection: Record<string, PersistedQueryTab[]> = {};
+        for (const [sid, list] of Object.entries(snap.tabsByConnection)) {
+          tabsByConnection[sid] = detachImportedSavedQueryIds(list || []);
+        }
         h.applyTabsSnapshot({
-          tabsByConnection: snap.tabsByConnection,
+          tabsByConnection,
           activeTabByConnection: snap.activeTabByConnection,
         });
         if (snap.leftWidth != null) h.leftWidth.value = snap.leftWidth;
         if (snap.resultHeight != null) h.resultHeight.value = snap.resultHeight;
-        writeSnapshot(snap);
+        // 落盘也用剥离后的 tabs，避免刷新后又带上外源 ID
+        writeSnapshot({
+          ...snap,
+          tabsByConnection,
+        });
         return snap;
       } catch (e) {
         console.warn('[visual-client] session import aborted', e);
+        return null;
+      } finally {
+        setTimeout(() => {
+          restoring = false;
+        }, 0);
+      }
+    },
+    /** 导出指定连接下的查询 Tab（不含其它连接）。 */
+    exportConnectionQueries: (
+      sessionId: number | string,
+    ): ConnectionQueriesBundle | null => {
+      flush();
+      const sid = String(sessionId);
+      const conn = h.openConnections.value.find(
+        (item) => String(item.sessionId) === sid,
+      );
+      if (!conn) return null;
+      const { tabsByConnection, activeTabByConnection } = h.getTabsSnapshot();
+      const tabs: PersistedQueryTab[] = [];
+      for (const tab of (tabsByConnection[sid] || []).slice(0, MAX_TABS_PER_CONN)) {
+        const sanitized = sanitizeTab(tab);
+        if (sanitized) tabs.push(sanitized);
+      }
+      if (tabs.length === 0) return null;
+      const activeId = activeTabByConnection[sid];
+      return {
+        kind: 'lemon-connection-queries-v1',
+        version: 1,
+        updatedAt: Date.now(),
+        connection: stripConnection(conn),
+        tabs,
+        activeTabId:
+          activeId && tabs.some((t) => t.id === activeId)
+            ? activeId
+            : tabs[0]!.id,
+      };
+    },
+    /**
+     * 把单连接查询包导入到指定已打开连接，仅替换该连接的查询 Tab。
+     */
+    importConnectionQueries: (
+      sessionId: number | string,
+      raw: unknown,
+    ): ConnectionQueriesBundle | null => {
+      const bundle = validateConnectionQueriesBundle(raw);
+      if (!bundle) return null;
+      const sid = String(sessionId);
+      const exists = h.openConnections.value.some(
+        (item) => String(item.sessionId) === sid,
+      );
+      if (!exists) return null;
+      restoring = true;
+      try {
+        // 导入本连接查询：保留名称，清空外源 savedQueryId
+        const tabs = detachImportedSavedQueryIds(bundle.tabs);
+        h.replaceConnectionTabs(sid, tabs, bundle.activeTabId);
+        flush();
+        return bundle;
+      } catch (e) {
+        console.warn('[visual-client] connection queries import aborted', e);
         return null;
       } finally {
         setTimeout(() => {

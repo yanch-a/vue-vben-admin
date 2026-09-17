@@ -1,5 +1,5 @@
 <script lang="ts" setup>
-import type { SqlWorkOrder } from '#/api/visual/sqlWorkOrder';
+import type { SqlAuditResult, SqlAuditStep, SqlWorkOrder } from '#/api/visual/sqlWorkOrder';
 
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
@@ -13,6 +13,7 @@ import { listSelectableModels } from '#/api/ai/model';
 import { getInstances } from '#/api/visual/database';
 import {
   auditWorkOrder,
+  auditWorkOrderRules,
   downloadWorkOrderRollback,
   executeWorkOrder,
   reviewWorkOrder,
@@ -31,9 +32,12 @@ defineOptions({ name: 'SqlWorkOrder' });
 const router = useRouter();
 const route = useRoute();
 const loading = ref(false);
+/** DBA 点击执行期间的忙标记，与列表 loading 分开，避免互相打断。 */
+const executing = ref(false);
 const rows = ref<SqlWorkOrder[]>([]);
 const total = ref(0);
 const dba = ref(false);
+const canForceSubmit = ref(false);
 const roleReady = ref(false);
 const scope = ref<'mine' | 'review'>('mine');
 const query = reactive({ pageNum: 1, pageSize: 20, status: '', title: '' });
@@ -60,8 +64,14 @@ const detailLoading = ref(false);
 const detail = ref<any>();
 const auditVisible = ref(false);
 const auditLoading = ref(false);
+/** form=填写问题；running=过程中；done=展示结果 */
+const auditPhase = ref<'form' | 'running' | 'done'>('form');
 const auditForm = reactive({ modelId: undefined as any, question: '' });
 const models = ref<any[]>([]);
+/** 审计过程步骤（running 时为前端预演，done 后换成后端真实步骤） */
+const auditSteps = ref<SqlAuditStep[]>([]);
+const auditResult = ref<SqlAuditResult | null>(null);
+let auditProgressTimer: ReturnType<typeof setInterval> | undefined;
 let refreshTimer: ReturnType<typeof setInterval> | undefined;
 
 const statusOptions = [
@@ -70,12 +80,69 @@ const statusOptions = [
 ];
 const statusLabel = Object.fromEntries(statusOptions);
 
+/** 审计轨迹 action 中文名 */
+const eventActionLabel: Record<string, string> = {
+  CREATE: '创建工单',
+  UPDATE: '更新草稿',
+  SUBMIT: '提交审批',
+  FORCE_SUBMIT: '强制提交',
+  AI_AUDIT: 'AI 审计',
+  APPROVE: '审批通过',
+  REJECT: '审批驳回',
+  PREPARE_ROLLBACK: '生成回滚',
+  EXECUTE_SUCCESS: '执行成功',
+  EXECUTE_FAILED: '执行失败',
+  EXECUTION_QUEUE_REJECTED: '执行排队失败',
+};
+
+/** 前端预演步骤（等待接口期间给用户过程感；完成后会被真实步骤替换） */
+const AUDIT_PREVIEW_STEPS: SqlAuditStep[] = [
+  { code: 'PARSE', title: '解析 SQL 语句', status: 'pending', detail: '等待开始' },
+  { code: 'SCHEMA', title: 'Schema 对象检查', status: 'pending', detail: '等待开始' },
+  { code: 'RULES', title: '执行内置规则集', status: 'pending', detail: '等待开始' },
+  { code: 'ESTIMATE', title: '影响行数估算', status: 'pending', detail: '等待开始' },
+  { code: 'AI', title: '调用大模型生成建议', status: 'pending', detail: '等待开始' },
+  { code: 'SUMMARY', title: '汇总审计报告', status: 'pending', detail: '等待开始' },
+];
+
+const auditSession = computed(() => detail.value?.auditSession || null);
+const auditSessionSteps = computed<SqlAuditStep[]>(() => {
+  const steps = auditSession.value?.steps;
+  return Array.isArray(steps) ? steps : [];
+});
+const auditSessionCoverage = computed(() => auditSession.value?.coverage || null);
+
 function unbox(res: any) { return res?.data ?? res; }
 function typeForStatus(status?: string) {
   if (status === 'SUCCESS' || status === 'APPROVED') return 'success';
   if (status === 'FAILED' || status === 'REJECTED') return 'danger';
   if (status === 'PENDING' || status === 'PREPARING' || status === 'EXECUTING') return 'warning';
   return 'info';
+}
+
+/** ElMessageBox 取消/关闭不视为业务失败。 */
+function isMessageBoxCancel(error: unknown): boolean {
+  if (error === 'cancel' || error === 'close') return true;
+  if (error && typeof error === 'object' && 'action' in error) {
+    const action = (error as { action?: string }).action;
+    return action === 'cancel' || action === 'close';
+  }
+  return false;
+}
+
+/**
+ * 统一取后端业务错误文案。
+ * sqlWorkOrder 走 utils/request（responseReturn:body），业务码失败不会触发全局 ElMessage，
+ * 调用方必须自行弹错；同时兼容 msg / message / response.data.msg 几种形态。
+ */
+function errorMessage(error: any, fallback = '操作失败'): string {
+  return String(
+    error?.msg
+      || error?.message
+      || error?.response?.data?.msg
+      || error?.response?.data?.message
+      || fallback,
+  ).trim();
 }
 function typeForRisk(level?: string) {
   if (level === 'CRITICAL') return 'danger';
@@ -84,6 +151,68 @@ function typeForRisk(level?: string) {
   return 'success';
 }
 function dateText(value?: string) { return value ? new Date(value).toLocaleString() : '-'; }
+
+function stepStatusType(status?: string) {
+  if (status === 'success') return 'success';
+  if (status === 'failed') return 'danger';
+  if (status === 'running') return 'warning';
+  if (status === 'skipped' || status === 'disabled') return 'info';
+  return 'info';
+}
+
+function stepStatusLabel(status?: string) {
+  if (status === 'success') return '完成';
+  if (status === 'failed') return '失败';
+  if (status === 'running') return '进行中';
+  if (status === 'skipped') return '跳过';
+  if (status === 'disabled') return '未启用';
+  if (status === 'pending') return '等待';
+  return status || '-';
+}
+
+function formatDuration(ms?: number) {
+  if (ms == null || Number.isNaN(Number(ms))) return '';
+  const value = Number(ms);
+  if (value < 1000) return `${value}ms`;
+  return `${(value / 1000).toFixed(1)}s`;
+}
+
+function eventLabel(action?: string) {
+  return eventActionLabel[action || ''] || action || '-';
+}
+
+function stopAuditProgressPreview() {
+  if (auditProgressTimer) {
+    clearInterval(auditProgressTimer);
+    auditProgressTimer = undefined;
+  }
+}
+
+/** 请求进行中时，按固定节奏推进预演步骤（真实结果回来后会被替换）。 */
+function startAuditProgressPreview() {
+  stopAuditProgressPreview();
+  auditSteps.value = AUDIT_PREVIEW_STEPS.map((item) => ({ ...item }));
+  let index = 0;
+  const tick = () => {
+    const list = auditSteps.value;
+    if (index > 0 && list[index - 1] && list[index - 1].status === 'running') {
+      list[index - 1] = { ...list[index - 1], status: 'success', detail: '已完成（等待最终结果确认）' };
+    }
+    if (index >= list.length) {
+      stopAuditProgressPreview();
+      return;
+    }
+    list[index] = {
+      ...list[index],
+      status: 'running',
+      detail: index === 4 ? '正在等待大模型返回…' : '执行中…',
+    };
+    auditSteps.value = [...list];
+    index += 1;
+  };
+  tick();
+  auditProgressTimer = setInterval(tick, 900);
+}
 
 /** 加载工单列表；定时轮询传 false，避免后台异常弹窗。 */
 async function load(showErrorMessage = true) {
@@ -102,6 +231,7 @@ async function load(showErrorMessage = true) {
 async function loadCapabilities() {
   const data = unbox(await workOrderCapabilities());
   dba.value = Boolean(data?.dba);
+  canForceSubmit.value = Boolean(data?.canForceSubmit);
   scope.value = dba.value ? 'review' : 'mine';
   roleReady.value = true;
 }
@@ -181,10 +311,48 @@ async function openOrderFromNotification(orderId: unknown) {
   await openDetail({ id: String(orderId) } as SqlWorkOrder);
 }
 
-async function submit(row: SqlWorkOrder) {
-  await ElMessageBox.confirm('提交后脚本将锁定，修改需驳回后生成新版本。确认提交？', '提交 DBA 审批', { type: 'warning' });
-  await submitWorkOrder(row.id);
-  ElMessage.success('已提交审批'); await load();
+async function submit(row: SqlWorkOrder, force = false) {
+  try {
+    if (force) {
+      const prompt: any = await ElMessageBox.prompt(
+        '审计存在 ERROR，强制提交将留下 FORCE_SUBMIT 事件。请填写原因：',
+        '强制提交',
+        { inputValidator: (v: string) => Boolean(v?.trim()) || '必须填写强制提交原因', type: 'error' },
+      );
+      await submitWorkOrder(row.id, { forceSubmit: true, forceReason: prompt.value });
+    } else {
+      await ElMessageBox.confirm('提交后脚本将锁定，修改需驳回后生成新版本。确认提交？', '提交 DBA 审批', { type: 'warning' });
+      try {
+        await submitWorkOrder(row.id, {});
+      } catch (error: any) {
+        const message = errorMessage(error);
+        if (canForceSubmit.value && (message.includes('ERROR') || message.includes('forceSubmit') || message.includes('禁止提交'))) {
+          await ElMessageBox.confirm(`${message}\n\n是否强制提交？`, '审计拦截', { type: 'error', confirmButtonText: '强制提交' });
+          return submit(row, true);
+        }
+        throw error;
+      }
+    }
+    ElMessage.success(force ? '已强制提交审批' : '已提交审批');
+    await load();
+  } catch (error: any) {
+    if (isMessageBoxCancel(error)) return;
+    ElMessage.error(errorMessage(error, '提交失败'));
+  }
+}
+
+function typeForFinding(status?: string) {
+  if (status === 'ERROR') return 'danger';
+  if (status === 'WARNING') return 'warning';
+  return 'success';
+}
+
+function estimatedRowsText(row: any) {
+  if (row?.estimatedRows != null && row.estimatedRows !== undefined) return String(row.estimatedRows);
+  if (row?.estimatedRowsStatus && row.estimatedRowsStatus !== 'ok' && row.estimatedRowsStatus !== 'n/a') {
+    return row.estimatedRowsStatus + (row.estimatedRowsNote ? ` (${row.estimatedRowsNote})` : '');
+  }
+  return row?.estimatedRowsStatus === 'n/a' ? '-' : (row?.estimatedRowsNote || '-');
 }
 
 async function openAudit(row?: SqlWorkOrder) {
@@ -198,6 +366,10 @@ async function openAudit(row?: SqlWorkOrder) {
   auditForm.question = '检查危险操作、锁表和性能风险，并结合上线规范判断是否建议通过。';
   detail.value = detail.value || { order };
   if (!detail.value.order?.scriptText) detail.value.order = order;
+  auditPhase.value = 'form';
+  auditResult.value = null;
+  auditSteps.value = [];
+  stopAuditProgressPreview();
   auditVisible.value = true;
 }
 
@@ -205,13 +377,71 @@ async function runAudit() {
   const order = detail.value?.order;
   if (!order) return;
   auditLoading.value = true;
+  auditPhase.value = 'running';
+  auditResult.value = null;
+  stopAuditProgressPreview();
+  auditSteps.value = [
+    { code: 'PARSE', title: '解析 SQL 语句', status: 'running', detail: '规则预审进行中…' },
+  ];
   try {
-    await auditWorkOrder(order.id, { ...auditForm });
-    ElMessage.success('AI 审计完成，结论已写入工单记录');
-    auditVisible.value = false;
+    const rulesRes: any = await auditWorkOrderRules(order.id);
+    const rules = unbox(rulesRes) as SqlAuditResult;
+    const ruleSteps = Array.isArray(rules?.steps) ? [...rules.steps] : [];
+    const liveSteps = ruleSteps.map((step) => {
+      if (step.code === 'AI') {
+        return { ...step, status: 'running', detail: step.detail || '正在等待大模型返回…' };
+      }
+      if (step.code === 'SUMMARY') {
+        return { ...step, status: 'pending', detail: step.detail || '等待 AI 建议完成后汇总' };
+      }
+      return step;
+    });
+    auditSteps.value = liveSteps;
+    auditResult.value = {
+      ...rules,
+      aiAdviceMarkdown: '',
+      aiStatus: 'pending',
+    };
+
+    const res: any = await auditWorkOrder(order.id, { ...auditForm });
+    const result = unbox(res) as SqlAuditResult;
+    auditSteps.value = Array.isArray(result?.steps) ? result.steps : liveSteps;
+    auditResult.value = result;
+    auditPhase.value = 'done';
+    if (result?.aiStatus === 'failed') {
+      ElMessage.warning('规则审计已完成，但 AI 建议生成失败：' + (result.aiError || '未知错误'));
+    } else {
+      ElMessage.success('AI 审计完成，结果已写入工单记录');
+    }
     await openDetail(order);
     await load();
-  } finally { auditLoading.value = false; }
+  } catch (error: any) {
+    if (auditResult.value?.ruleReportMarkdown) {
+      auditPhase.value = 'done';
+      ElMessage.warning(errorMessage(error, 'AI 阶段失败，已保留规则审计结果'));
+      try {
+        await openDetail(order);
+        await load();
+      } catch {
+        /* ignore */
+      }
+    } else {
+      auditPhase.value = 'form';
+      ElMessage.error(errorMessage(error, 'AI 审计失败'));
+    }
+  } finally {
+    auditLoading.value = false;
+  }
+}
+
+
+
+function closeAuditDialog() {
+  stopAuditProgressPreview();
+  auditVisible.value = false;
+  auditPhase.value = 'form';
+  auditResult.value = null;
+  auditSteps.value = [];
 }
 
 async function review(row: SqlWorkOrder, approved: boolean) {
@@ -225,16 +455,52 @@ async function review(row: SqlWorkOrder, approved: boolean) {
 }
 
 async function execute(row: SqlWorkOrder) {
+  // 防重复点击：失败时若未处理 Promise，页面会像卡住且无提示。
+  if (executing.value) return;
   try {
-    await ElMessageBox.confirm('系统会先读取旧数据并生成回滚文件，成功后才执行 SQL。确认开始？', '执行已审批工单', { type: 'warning' });
-    await executeWorkOrder(row.id, false);
-  } catch (error: any) {
-    const message = error?.message || String(error || '');
-    if (!message.includes('人工回滚') && !message.includes('无法自动还原')) throw error;
-    await ElMessageBox.confirm(`${message}\n\n确认由 DBA 人工处理无法自动还原的部分？`, '回滚不完整', { type: 'error', confirmButtonText: '接受风险并执行' });
-    await executeWorkOrder(row.id, true);
+    await ElMessageBox.confirm(
+      '系统会先读取旧数据并生成回滚文件，成功后才执行 SQL。确认开始？',
+      '执行已审批工单',
+      { type: 'warning' },
+    );
+  } catch (error) {
+    if (isMessageBoxCancel(error)) return;
+    ElMessage.error(errorMessage(error));
+    return;
   }
-  ElMessage.success('回滚文件已生成，工单进入执行队列'); await load();
+
+  executing.value = true;
+  try {
+    try {
+      await executeWorkOrder(row.id, false);
+    } catch (error: any) {
+      const message = errorMessage(error);
+      // 仅“回滚不完整”允许二次确认后带 allowIncompleteRollback 重试，其它错误直接提示。
+      if (!message.includes('人工回滚') && !message.includes('无法自动还原')) {
+        ElMessage.error(message || '执行失败');
+        return;
+      }
+      try {
+        await ElMessageBox.confirm(
+          `${message}\n\n确认由 DBA 人工处理无法自动还原的部分？`,
+          '回滚不完整',
+          { type: 'error', confirmButtonText: '接受风险并执行' },
+        );
+      } catch (inner) {
+        if (isMessageBoxCancel(inner)) return;
+        ElMessage.error(errorMessage(inner));
+        return;
+      }
+      await executeWorkOrder(row.id, true);
+    }
+    ElMessage.success('回滚文件已生成，工单进入执行队列');
+    await load();
+  } catch (error: any) {
+    if (isMessageBoxCancel(error)) return;
+    ElMessage.error(errorMessage(error, '执行失败'));
+  } finally {
+    executing.value = false;
+  }
 }
 
 async function downloadRollback(row: SqlWorkOrder) {
@@ -263,7 +529,10 @@ onMounted(async () => {
     }
   }, 3000);
 });
-onBeforeUnmount(() => { if (refreshTimer) clearInterval(refreshTimer); });
+onBeforeUnmount(() => {
+  if (refreshTimer) clearInterval(refreshTimer);
+  stopAuditProgressPreview();
+});
 
 watch(
   () => route.query.orderId,
@@ -314,7 +583,7 @@ watch(
               <ElButton v-if="['PENDING','APPROVED'].includes(row.status)" link type="primary" @click="openDetail(row).then(() => openAudit())">{{ $tr('AI 审计') }}</ElButton>
               <ElButton v-if="row.status === 'PENDING'" link type="success" @click="review(row, true)">{{ $tr('通过') }}</ElButton>
               <ElButton v-if="row.status === 'PENDING'" link type="danger" @click="review(row, false)">{{ $tr('驳回') }}</ElButton>
-              <ElButton v-if="row.status === 'APPROVED'" link type="warning" @click="execute(row)">{{ $tr('执行') }}</ElButton>
+              <ElButton v-if="row.status === 'APPROVED'" link type="warning" :loading="executing" :disabled="executing" @click="execute(row)">{{ $tr('执行') }}</ElButton>
             </template>
             <ElButton v-if="['EXECUTING','SUCCESS','FAILED'].includes(row.status)" link :icon="Download" @click="downloadRollback(row)">{{ $tr('回滚脚本') }}</ElButton>
           </template>
@@ -340,17 +609,198 @@ watch(
       <div v-loading="detailLoading" v-if="detail?.order" class="detail">
         <div class="detail-head"><h3>{{ detail.order.title }}</h3><ElTag :type="typeForStatus(detail.order.status)">{{ statusLabel[detail.order.status] }}</ElTag><ElTag v-if="detail.order.riskLevel" :type="typeForRisk(detail.order.riskLevel)" effect="plain">{{ $tr('风险') }} {{ detail.order.riskLevel }} / {{ detail.order.riskScore }}</ElTag></div>
         <ElDescriptions :column="2" border size="small"><ElDescriptionsItem :label="$tr('目标')">{{ detail.order.dbType }} / {{ detail.order.instanceName }}</ElDescriptionsItem><ElDescriptionsItem :label="$tr('版本')">v{{ detail.order.currentVersion }}</ElDescriptionsItem><ElDescriptionsItem :label="$tr('提交人')">{{ detail.order.submitterName }}</ElDescriptionsItem><ElDescriptionsItem :label="$tr('审批人')">{{ detail.order.reviewerName || '-' }}</ElDescriptionsItem></ElDescriptions>
+        <div v-if="detail.order.forceSubmitted" style="margin: 8px 0"><ElTag type="danger" effect="dark">{{ $tr('已强制提交') }}</ElTag></div>
+        <h4>{{ $tr('按语句审核') }}</h4>
+        <ElTable v-if="detail.statementFindings?.length" :data="detail.statementFindings" size="small" border>
+          <ElTableColumn prop="statementIndex" :label="$tr('#')" width="58"><template #default="{ row }">{{ row.statementIndex + 1 }}</template></ElTableColumn>
+          <ElTableColumn :label="$tr('状态')" width="100"><template #default="{ row }"><ElTag :type="typeForFinding(row.status)" size="small">{{ row.status || 'OK' }}</ElTag></template></ElTableColumn>
+          <ElTableColumn prop="sqlPreview" :label="$tr('SQL')" min-width="220" show-overflow-tooltip />
+          <ElTableColumn :label="$tr('影响行数')" width="140"><template #default="{ row }">{{ estimatedRowsText(row) }}</template></ElTableColumn>
+          <ElTableColumn :label="$tr('命中规则')" min-width="240">
+            <template #default="{ row }">
+              <div v-if="row.hits?.length" class="hit-list">
+                <div v-for="(hit, idx) in row.hits" :key="idx">
+                  <ElTag :type="hit.severity === 'ERROR' ? 'danger' : 'warning'" size="small" effect="plain">{{ hit.severity }}</ElTag>
+                  {{ hit.ruleCode }}: {{ hit.message }}
+                </div>
+              </div>
+              <span v-else>-</span>
+            </template>
+          </ElTableColumn>
+        </ElTable>
+        <ElEmpty v-else description="暂无按语句结果（提交或审计后生成）" :image-size="64" />
+
+        <template v-if="auditSession">
+          <h4>{{ $tr('审计过程') }}</h4>
+          <div class="audit-summary">
+            <ElTag v-if="auditSession.modelName" type="info" effect="plain">{{ auditSession.modelName }}</ElTag>
+            <ElTag v-if="auditSession.durationMs != null" effect="plain">耗时 {{ formatDuration(auditSession.durationMs) }}</ElTag>
+            <ElTag v-if="auditSession.errorCount != null" :type="auditSession.errorCount > 0 ? 'danger' : 'success'" effect="plain">ERROR {{ auditSession.errorCount }}</ElTag>
+            <ElTag v-if="auditSession.warningCount != null" :type="auditSession.warningCount > 0 ? 'warning' : 'success'" effect="plain">WARNING {{ auditSession.warningCount }}</ElTag>
+            <ElTag v-if="auditSession.source" effect="plain">{{ auditSession.source === 'AI_AUDIT' ? '含 AI 建议' : '仅规则引擎' }}</ElTag>
+          </div>
+          <ElTimeline v-if="auditSessionSteps.length" class="audit-steps">
+            <ElTimelineItem
+              v-for="(step, idx) in auditSessionSteps"
+              :key="`${step.code}-${idx}`"
+              :type="stepStatusType(step.status)"
+              :timestamp="formatDuration(step.durationMs)"
+              placement="top"
+            >
+              <div class="step-title">
+                <strong>{{ step.title || step.code }}</strong>
+                <ElTag size="small" :type="stepStatusType(step.status)" effect="plain">{{ stepStatusLabel(step.status) }}</ElTag>
+              </div>
+              <div class="step-detail">{{ step.detail }}</div>
+            </ElTimelineItem>
+          </ElTimeline>
+          <div v-if="auditSessionCoverage" class="coverage-box">
+            <div class="coverage-title">{{ $tr('规则覆盖') }}</div>
+            <div class="coverage-grid">
+              <span>总数 {{ auditSessionCoverage.totalRules ?? 0 }}</span>
+              <span>方言启用 {{ auditSessionCoverage.activeRules ?? 0 }}</span>
+              <span>命中 {{ auditSessionCoverage.hitRules ?? 0 }}</span>
+              <span>未命中 {{ auditSessionCoverage.cleanRules ?? 0 }}</span>
+              <span>方言跳过 {{ auditSessionCoverage.skippedByDialect ?? 0 }}</span>
+              <span>禁用 {{ auditSessionCoverage.disabledRules ?? 0 }}</span>
+            </div>
+            <div v-if="auditSessionCoverage.hitRuleCodes?.length" class="coverage-codes">
+              命中：{{ auditSessionCoverage.hitRuleCodes.join('、') }}
+            </div>
+            <div v-if="auditSessionCoverage.skippedRuleCodes?.length" class="coverage-codes muted">
+              方言跳过（部分）：{{ auditSessionCoverage.skippedRuleCodes.join('、') }}
+            </div>
+          </div>
+          <template v-if="auditSession.ruleReportMarkdown">
+            <h4>{{ $tr('确定性规则结果') }}</h4>
+            <div class="report rule-report">{{ auditSession.ruleReportMarkdown }}</div>
+          </template>
+          <template v-if="auditSession.aiAdviceMarkdown || auditSession.aiStatus === 'failed'">
+            <h4>{{ $tr('AI 审计建议') }}</h4>
+            <ElAlert
+              v-if="auditSession.aiStatus === 'failed'"
+              type="warning"
+              :closable="false"
+              :title="auditSession.aiError || 'AI 建议生成失败'"
+              style="margin-bottom: 8px"
+            />
+            <div v-if="auditSession.question" class="audit-question">DBA 问题：{{ auditSession.question }}</div>
+            <div v-if="auditSession.aiAdviceMarkdown" class="report ai-report">{{ auditSession.aiAdviceMarkdown }}</div>
+          </template>
+        </template>
+        <template v-else-if="detail.order.aiAuditReport">
+          <h4>{{ $tr('审计报告') }}</h4>
+          <div class="report">{{ detail.order.aiAuditReport }}</div>
+        </template>
+
         <h4>{{ $tr('SQL 脚本') }}</h4><pre class="code">{{ detail.order.scriptText }}</pre>
-        <template v-if="detail.order.aiAuditReport"><h4>{{ $tr('审计报告') }}</h4><div class="report">{{ detail.order.aiAuditReport }}</div></template>
         <template v-if="detail.order.executionMessage"><h4>{{ $tr('执行状态') }}</h4><ElAlert :title="detail.order.executionMessage" :type="detail.order.status === 'FAILED' ? 'error' : 'info'" :closable="false" /></template>
         <h4>{{ $tr('版本记录') }}</h4><ElTable :data="detail.versions" size="small"><ElTableColumn prop="versionNo" :label="$tr('版本')" width="70"><template #default="{ row }">v{{ row.versionNo }}</template></ElTableColumn><ElTableColumn prop="createdByName" :label="$tr('修改人')" width="110" /><ElTableColumn prop="changeNote" :label="$tr('说明')" /><ElTableColumn :label="$tr('时间')" width="170"><template #default="{ row }">{{ dateText(row.createTime) }}</template></ElTableColumn></ElTable>
-        <h4>{{ $tr('审计轨迹') }}</h4><ElTimeline><ElTimelineItem v-for="event in detail.events" :key="event.id" :timestamp="dateText(event.createTime)" placement="top"><strong>{{ event.action }}</strong> · {{ event.actorName }}<div>{{ event.commentText }}</div></ElTimelineItem></ElTimeline>
+        <h4>{{ $tr('审计轨迹') }}</h4>
+        <ElTimeline>
+          <ElTimelineItem v-for="event in detail.events" :key="event.id" :timestamp="dateText(event.createTime)" placement="top">
+            <strong>{{ eventLabel(event.action) }}</strong> · {{ event.actorName }}
+            <div>{{ event.commentText }}</div>
+          </ElTimelineItem>
+        </ElTimeline>
       </div>
     </ElDrawer>
 
-    <ElDialog v-model="auditVisible" :title="$tr('向 AI 询问 SQL 风险')" width="620px">
-      <ElForm label-position="top"><ElFormItem :label="$tr('审计模型')"><ElSelect v-model="auditForm.modelId" filterable><ElOption v-for="model in models" :key="model.id" :label="`${model.providerName || ''} / ${model.modelName || model.modelCode}`" :value="model.id" /></ElSelect></ElFormItem><ElFormItem :label="$tr('DBA 审计问题')"><ElInput v-model="auditForm.question" type="textarea" :rows="5" /></ElFormItem></ElForm>
-      <template #footer><ElButton @click="auditVisible = false">{{ $tr('取消') }}</ElButton><ElButton type="primary" :loading="auditLoading" @click="runAudit">{{ $tr('开始审计') }}</ElButton></template>
+    <ElDialog
+      v-model="auditVisible"
+      :title="auditPhase === 'done' ? $tr('AI 审计结果') : $tr('向 AI 询问 SQL 风险')"
+      width="720px"
+      destroy-on-close
+      @closed="closeAuditDialog"
+    >
+      <template v-if="auditPhase === 'form'">
+        <ElForm label-position="top">
+          <ElFormItem :label="$tr('审计模型')">
+            <ElSelect v-model="auditForm.modelId" filterable>
+              <ElOption
+                v-for="model in models"
+                :key="model.id"
+                :label="`${model.providerName || ''} / ${model.modelName || model.displayName || model.modelCode}`"
+                :value="model.id"
+              />
+            </ElSelect>
+          </ElFormItem>
+          <ElFormItem :label="$tr('DBA 审计问题')">
+            <ElInput v-model="auditForm.question" type="textarea" :rows="5" />
+          </ElFormItem>
+        </ElForm>
+      </template>
+
+      <template v-else>
+        <div v-if="auditResult" class="audit-summary" style="margin-bottom: 12px">
+          <ElTag v-if="auditResult.modelName" type="info" effect="plain">{{ auditResult.modelName }}</ElTag>
+          <ElTag effect="plain">耗时 {{ formatDuration(auditResult.durationMs) }}</ElTag>
+          <ElTag :type="(auditResult.errorCount || 0) > 0 ? 'danger' : 'success'" effect="plain">ERROR {{ auditResult.errorCount || 0 }}</ElTag>
+          <ElTag :type="(auditResult.warningCount || 0) > 0 ? 'warning' : 'success'" effect="plain">WARNING {{ auditResult.warningCount || 0 }}</ElTag>
+        </div>
+        <h4 class="dialog-section-title">{{ $tr('执行步骤') }}</h4>
+        <ElTimeline class="audit-steps">
+          <ElTimelineItem
+            v-for="(step, idx) in auditSteps"
+            :key="`${step.code}-${idx}`"
+            :type="stepStatusType(step.status)"
+            :timestamp="formatDuration(step.durationMs)"
+            placement="top"
+          >
+            <div class="step-title">
+              <strong>{{ step.title || step.code }}</strong>
+              <ElTag size="small" :type="stepStatusType(step.status)" effect="plain">{{ stepStatusLabel(step.status) }}</ElTag>
+            </div>
+            <div class="step-detail">{{ step.detail }}</div>
+          </ElTimelineItem>
+        </ElTimeline>
+
+        <template v-if="auditPhase === 'done' && auditResult">
+          <div v-if="auditResult.coverage" class="coverage-box">
+            <div class="coverage-title">{{ $tr('规则覆盖') }}</div>
+            <div class="coverage-grid">
+              <span>总数 {{ auditResult.coverage.totalRules ?? 0 }}</span>
+              <span>方言启用 {{ auditResult.coverage.activeRules ?? 0 }}</span>
+              <span>命中 {{ auditResult.coverage.hitRules ?? 0 }}</span>
+              <span>未命中 {{ auditResult.coverage.cleanRules ?? 0 }}</span>
+              <span>方言跳过 {{ auditResult.coverage.skippedByDialect ?? 0 }}</span>
+              <span>禁用 {{ auditResult.coverage.disabledRules ?? 0 }}</span>
+            </div>
+          </div>
+          <h4 class="dialog-section-title">{{ $tr('确定性规则结果') }}</h4>
+          <div class="report rule-report">{{ auditResult.ruleReportMarkdown }}</div>
+          <h4 class="dialog-section-title">{{ $tr('AI 审计建议') }}</h4>
+          <ElAlert
+            v-if="auditResult.aiStatus === 'failed'"
+            type="warning"
+            :closable="false"
+            :title="auditResult.aiError || 'AI 建议生成失败，规则结果仍可参考'"
+            style="margin-bottom: 8px"
+          />
+          <div v-if="auditResult.aiAdviceMarkdown" class="report ai-report">{{ auditResult.aiAdviceMarkdown }}</div>
+          <div v-else-if="auditResult.aiStatus !== 'failed'" class="report ai-report muted">暂无 AI 建议</div>
+        </template>
+        <ElAlert
+          v-else-if="auditPhase === 'running'"
+          type="info"
+          :closable="false"
+          title="规则预审已优先执行；大模型建议生成中。下方步骤为真实进度。"
+          style="margin-top: 8px"
+        />
+      </template>
+
+      <template #footer>
+        <template v-if="auditPhase === 'form'">
+          <ElButton @click="closeAuditDialog">{{ $tr('取消') }}</ElButton>
+          <ElButton type="primary" :loading="auditLoading" @click="runAudit">{{ $tr('开始审计') }}</ElButton>
+        </template>
+        <template v-else-if="auditPhase === 'running'">
+          <ElButton disabled :loading="true">{{ $tr('审计进行中') }}</ElButton>
+        </template>
+        <template v-else>
+          <ElButton type="primary" @click="closeAuditDialog">{{ $tr('完成') }}</ElButton>
+        </template>
+      </template>
     </ElDialog>
   </Page>
 </template>
@@ -368,5 +818,25 @@ watch(
 .detail h4 { margin: 20px 0 8px; font-size: 14px; letter-spacing: 0; }
 .code { max-height: 330px; overflow: auto; margin: 0; padding: 12px; border: 1px solid var(--el-border-color); background: var(--el-fill-color-light); white-space: pre-wrap; }
 .report { white-space: pre-wrap; line-height: 1.65; padding: 12px; border-left: 3px solid var(--el-color-primary); background: var(--el-fill-color-light); }
-@media (max-width: 900px) { .toolbar { flex-wrap: wrap; }.filters { width: 100%; margin-left: 0; flex-wrap: wrap; }.target-row { grid-template-columns: 1fr; } }
+.rule-report { border-left-color: var(--el-color-warning); }
+.ai-report { border-left-color: var(--el-color-success); }
+.hit-list { display: flex; flex-direction: column; gap: 4px; font-size: 12px; line-height: 1.4; }
+.audit-summary { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 10px; }
+.audit-steps { padding-left: 4px; }
+.step-title { display: flex; align-items: center; gap: 8px; }
+.step-detail { margin-top: 4px; color: var(--el-text-color-secondary); font-size: 13px; line-height: 1.45; }
+.coverage-box { margin: 10px 0 14px; padding: 10px 12px; border: 1px solid var(--el-border-color); background: var(--el-fill-color-blank); }
+.coverage-title { font-weight: 600; margin-bottom: 6px; font-size: 13px; }
+.coverage-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px 12px; font-size: 12px; }
+.coverage-codes { margin-top: 8px; font-size: 12px; line-height: 1.45; word-break: break-all; }
+.coverage-codes.muted { color: var(--el-text-color-secondary); }
+.audit-question { margin-bottom: 8px; font-size: 13px; color: var(--el-text-color-secondary); }
+.dialog-section-title { margin: 14px 0 8px; font-size: 14px; }
+@media (max-width: 900px) {
+  .toolbar { flex-wrap: wrap; }
+  .filters { width: 100%; margin-left: 0; flex-wrap: wrap; }
+  .target-row { grid-template-columns: 1fr; }
+  .coverage-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+.report.muted { color: var(--el-text-color-secondary); }
 </style>

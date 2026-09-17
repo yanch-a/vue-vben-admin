@@ -1287,10 +1287,17 @@
   "请输入个性签名": "Enter a signature",
   "导出临时查询记录": "Export Temporary Queries",
   "导入临时查询记录": "Import Temporary Queries",
+  "导出本连接查询记录": "Export This Connection's Queries",
+  "导入本连接查询记录": "Import Queries Into This Connection",
   "临时查询记录已导出": "Temporary queries exported",
   "临时查询记录已导入": "Temporary queries imported",
+  "本连接查询记录已导出": "Connection queries exported",
+  "本连接查询记录已导入": "Connection queries imported",
+  "当前连接没有可导出的查询": "This connection has no queries to export",
   "导入将覆盖当前已打开的连接和临时查询，是否继续？": "Importing will overwrite currently open connections and temporary queries. Continue?",
+  "导入将覆盖本连接下的临时查询，是否继续？": "Importing will overwrite temporary queries under this connection. Continue?",
   "继续导入": "Continue Import",
   "导入失败：文件不是有效的 JSON": "Import failed: the file is not valid JSON",
-  "导入失败：会话数据格式不正确或版本不兼容": "Import failed: invalid session format or incompatible version"
+  "导入失败：会话数据格式不正确或版本不兼容": "Import failed: invalid session format or incompatible version",
+  "导入失败：请选择本连接查询导出文件": "Import failed: please select a connection-queries export file"
 }

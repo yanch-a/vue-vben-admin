@@ -24,6 +24,7 @@ import {
   addSavedQuery,
   deleteSavedQuery,
   editSavedQuery,
+  getSavedQueryById,
 } from '#/api/visual/savedQuery';
 import { getDbConfigById } from '#/api/visual/vq';
 import { Page } from '@vben/common-ui';
@@ -72,6 +73,7 @@ import {
 import {
   applyQueryTabsSnapshot,
   getQueryTabsSnapshot,
+  replaceConnectionTabs,
   useQueryTabs,
 } from './composables/useQueryTabs';
 import { visualClientConfig } from './config';
@@ -206,6 +208,7 @@ const sessionPersist = setupClientSessionPersist({
   activeConnectionId,
   getTabsSnapshot: getQueryTabsSnapshot,
   applyTabsSnapshot: applyQueryTabsSnapshot,
+  replaceConnectionTabs,
   leftWidth,
   resultHeight,
 });
@@ -262,6 +265,71 @@ async function importTemporarySession(file: File) {
       return;
     }
     ElMessage.success('临时查询记录已导入');
+  } catch (e: any) {
+    if (e === 'cancel' || e?.action === 'cancel') return;
+    ElMessage.error(e?.message || '导入失败');
+  }
+}
+
+/**
+ * 导出指定连接下的查询 Tab（不含其它连接）。
+ */
+function exportConnectionQueries(sessionId: number | string) {
+  try {
+    const bundle = sessionPersist.exportConnectionQueries(sessionId);
+    if (!bundle) {
+      ElMessage.warning('当前连接没有可导出的查询');
+      return;
+    }
+    const stamp = new Date()
+      .toISOString()
+      .replace(/[:.]/g, '-')
+      .slice(0, 19);
+    const safeName = String(bundle.connection.dbName || 'connection')
+      .replace(/[^\w.-]+/g, '_')
+      .slice(0, 40);
+    const blob = new Blob([JSON.stringify(bundle, null, 2)], {
+      type: 'application/json;charset=utf-8',
+    });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `lemon-conn-queries-${safeName}-${stamp}.json`;
+    link.click();
+    URL.revokeObjectURL(url);
+    ElMessage.success('本连接查询记录已导出');
+  } catch (e: any) {
+    ElMessage.error(e?.message || '导出失败');
+  }
+}
+
+/**
+ * 把单连接查询包导入到指定连接，仅覆盖该连接的查询 Tab。
+ */
+async function importConnectionQueries(
+  sessionId: number | string,
+  file: File,
+) {
+  try {
+    const text = await file.text();
+    let raw: unknown;
+    try {
+      raw = JSON.parse(text);
+    } catch {
+      ElMessage.error('导入失败：文件不是有效的 JSON');
+      return;
+    }
+    await ElMessageBox.confirm(
+      '导入将覆盖本连接下的临时查询，是否继续？',
+      '导入本连接查询记录',
+      { type: 'warning', confirmButtonText: '继续导入', cancelButtonText: '取消' },
+    );
+    const bundle = sessionPersist.importConnectionQueries(sessionId, raw);
+    if (!bundle) {
+      ElMessage.error('导入失败：请选择本连接查询导出文件');
+      return;
+    }
+    ElMessage.success('本连接查询记录已导入');
   } catch (e: any) {
     if (e === 'cancel' || e?.action === 'cancel') return;
     ElMessage.error(e?.message || '导入失败');
@@ -1980,10 +2048,91 @@ async function loadEditorTables(instanceName: string) {
   return list;
 }
 
+/** Tab 标题可作为保存名时返回；默认 Query N 视为未命名 */
+function resolveDefaultQueryName(tab: { title?: string }): string {
+  return tab.title && !/^Query\s+\d+$/i.test(tab.title) ? tab.title : '';
+}
+
+/** 当前用户名下是否仍存在该已保存查询（导入/删库后 ID 可能失效） */
+async function checkSavedQueryMineExists(
+  id: number | string,
+): Promise<boolean> {
+  try {
+    const res: any = await getSavedQueryById(id);
+    const data = res?.data ?? res;
+    return data != null && data.id != null;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * 将当前 Tab 落库（新建或更新）。
+ * 更新前先按 ID 查库：不存在则改为新建，避免误改他人数据或更新幽灵 ID。
+ */
+async function persistActiveQuery(opts: {
+  preferUpdate: boolean;
+  queryName: string;
+}): Promise<boolean> {
+  if (!activeConnection.value || !activeTab.value) return false;
+  const name = opts.queryName.trim();
+  if (!name) {
+    ElMessage.warning('请输入查询名称');
+    return false;
+  }
+  if (saveDialog.saving) return false;
+
+  const instanceName = activeTab.value.instanceName!;
+  const sqlText = activeTab.value.sql;
+  saveDialog.saving = true;
+  try {
+    let doUpdate = false;
+    if (opts.preferUpdate && activeTab.value.savedQueryId != null) {
+      doUpdate = await checkSavedQueryMineExists(activeTab.value.savedQueryId);
+      if (!doUpdate) {
+        // 库中已无此记录：清空关联，按新建处理，名称不变
+        activeTab.value.savedQueryId = undefined;
+      }
+    }
+
+    if (doUpdate && activeTab.value.savedQueryId != null) {
+      await editSavedQuery({
+        id: activeTab.value.savedQueryId,
+        queryName: name,
+        sqlText,
+        dbConfigId: activeConnection.value.id,
+        instanceName,
+      });
+      activeTab.value.title = name;
+      markTabSaved(activeTab.value);
+      ElMessage.success('已更新保存');
+    } else {
+      const res: any = await addSavedQuery({
+        queryName: name,
+        sqlText,
+        dbConfigId: activeConnection.value.id,
+        instanceName,
+      });
+      const data = res?.data || res;
+      activeTab.value.savedQueryId = data?.id;
+      activeTab.value.title = name;
+      markTabSaved(activeTab.value);
+      ElMessage.success('已保存');
+    }
+    objectTreeRef.value?.reloadQueries?.(instanceName);
+    return true;
+  } catch (e: any) {
+    ElMessage.error(e?.msg || e?.message || '保存失败');
+    return false;
+  } finally {
+    saveDialog.saving = false;
+  }
+}
+
 /**
  * 保存当前编辑器 SQL。
- * - 已关联 savedQueryId：弹窗可改名后覆盖更新
- * - 未关联：另存为新记录
+ * - 已关联 savedQueryId：直接更新，不弹确认框；若库中无此 ID 则新建（保留名称）
+ * - 未关联：弹出命名框后新建
  */
 function onSaveQuery() {
   if (!activeConnection.value || !activeTab.value) return;
@@ -1995,11 +2144,19 @@ function onSaveQuery() {
     ElMessage.warning('SQL 内容为空，无法保存');
     return;
   }
-  saveDialog.mode = activeTab.value.savedQueryId ? 'update' : 'create';
-  saveDialog.queryName =
-    activeTab.value.title && !/^Query\s+\d+$/i.test(activeTab.value.title)
-      ? activeTab.value.title
-      : '';
+
+  // 已保存过：静默更新，不弹窗
+  if (activeTab.value.savedQueryId != null) {
+    const name =
+      resolveDefaultQueryName(activeTab.value) ||
+      String(activeTab.value.title || '').trim() ||
+      'untitled';
+    void persistActiveQuery({ preferUpdate: true, queryName: name });
+    return;
+  }
+
+  saveDialog.mode = 'create';
+  saveDialog.queryName = resolveDefaultQueryName(activeTab.value);
   saveDialog.visible = true;
 }
 
@@ -2040,7 +2197,7 @@ function onSaveQueryAs() {
     return;
   }
   saveDialog.mode = 'create';
-  saveDialog.queryName = '';
+  saveDialog.queryName = resolveDefaultQueryName(activeTab.value);
   saveDialog.visible = true;
 }
 
@@ -2051,41 +2208,11 @@ async function confirmSaveQuery() {
     ElMessage.warning('请输入查询名称');
     return;
   }
-  saveDialog.saving = true;
-  try {
-    const instanceName = activeTab.value.instanceName!;
-    const sqlText = activeTab.value.sql;
-    if (saveDialog.mode === 'update' && activeTab.value.savedQueryId) {
-      await editSavedQuery({
-        id: activeTab.value.savedQueryId,
-        queryName: name,
-        sqlText,
-        dbConfigId: activeConnection.value.id,
-        instanceName,
-      });
-      activeTab.value.title = name;
-      markTabSaved(activeTab.value);
-      ElMessage.success('已更新保存');
-    } else {
-      const res: any = await addSavedQuery({
-        queryName: name,
-        sqlText,
-        dbConfigId: activeConnection.value.id,
-        instanceName,
-      });
-      const data = res?.data || res;
-      activeTab.value.savedQueryId = data?.id;
-      activeTab.value.title = name;
-      markTabSaved(activeTab.value);
-      ElMessage.success('已保存');
-    }
-    saveDialog.visible = false;
-    objectTreeRef.value?.reloadQueries?.(instanceName);
-  } catch (e: any) {
-    ElMessage.error(e?.msg || e?.message || '保存失败');
-  } finally {
-    saveDialog.saving = false;
-  }
+  const ok = await persistActiveQuery({
+    preferUpdate: saveDialog.mode === 'update',
+    queryName: name,
+  });
+  if (ok) saveDialog.visible = false;
 }
 
 /**
@@ -2621,6 +2748,8 @@ onBeforeUnmount(() => {
         @open="onOpenConnection"
         @export-session="exportTemporarySession"
         @import-session="importTemporarySession"
+        @export-connection-queries="exportConnectionQueries"
+        @import-connection-queries="importConnectionQueries"
       />
 
       <div

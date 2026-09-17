@@ -139,10 +139,24 @@ export function applyQueryTabsSnapshot(data: {
   }
 
   for (const [key, list] of Object.entries(data.tabsByConnection || {})) {
-    const tabs: QueryTab[] = (list || []).map((t) => {
+    replaceConnectionTabs(key, list, data.activeTabByConnection?.[key]);
+  }
+}
+
+/**
+ * 仅替换某个连接下的查询 Tab（用于「本连接导入」），不影响其它连接。
+ */
+export function replaceConnectionTabs(
+  connectionId: number | string,
+  list: PersistedQueryTab[],
+  activeTabId?: string,
+) {
+  const key = connKey(connectionId);
+  const tabs: QueryTab[] = (list || [])
+    .slice(0, MAX_TABS)
+    .map((t) => {
       const sql = t.sql || '';
       const savedQueryId = t.savedQueryId;
-      // 旧快照无 baseline：用当前 sql 视为已同步，避免误标 *
       const savedSqlBaseline =
         t.savedSqlBaseline != null
           ? t.savedSqlBaseline
@@ -150,7 +164,7 @@ export function applyQueryTabsSnapshot(data: {
             ? sql
             : undefined;
       return {
-        id: t.id,
+        id: t.id || `q-${Date.now()}-${seq++}`,
         title: t.title || 'Query',
         sql,
         resultVisible: !!t.resultVisible,
@@ -161,13 +175,23 @@ export function applyQueryTabsSnapshot(data: {
         savedQueryId,
         savedSqlBaseline,
       };
-    });
-    if (tabs.length === 0) continue;
-    tabsByConnection[key] = tabs;
-    const aid = data.activeTabByConnection?.[key];
-    activeTabByConnection[key] =
-      aid && tabs.some((x) => x.id === aid) ? aid : tabs[0]!.id;
+    })
+    .filter((t) => !!t.id);
+
+  if (tabs.length === 0) {
+    const fallback = createTab('Query 1');
+    tabsByConnection[key] = [fallback];
+    activeTabByConnection[key] = fallback.id;
+    notifyClientSessionChange();
+    return;
   }
+
+  tabsByConnection[key] = tabs;
+  activeTabByConnection[key] =
+    activeTabId && tabs.some((x) => x.id === activeTabId)
+      ? activeTabId
+      : tabs[0]!.id;
+  notifyClientSessionChange();
 }
 
 export function useQueryTabs(connectionId: () => number | string | null) {
