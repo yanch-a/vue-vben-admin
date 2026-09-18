@@ -35,6 +35,8 @@ const emit = defineEmits<{
   close: [id: string];
   'close-all': [];
   'close-others': [keepId: string];
+  /** fromId 拖到 toId 之前；toId 空表示拖到末尾（+ 号前） */
+  reorder: [fromId: string, toId: string | null];
 }>();
 
 const ctxMenu = reactive({
@@ -47,6 +49,56 @@ const ctxMenu = reactive({
 function tabTitle(t: QueryTab) {
   return isQueryTabDirty(t) ? `${t.title} *` : t.title;
 }
+
+const dragFromId = { current: '' as string };
+
+function onTabDragStart(e: DragEvent, tab: QueryTab) {
+  dragFromId.current = tab.id;
+  try {
+    e.dataTransfer?.setData('text/plain', tab.id);
+    if (e.dataTransfer) e.dataTransfer.effectAllowed = 'move';
+  } catch {
+    /* ignore */
+  }
+  (e.currentTarget as HTMLElement | null)?.classList.add('dragging');
+}
+
+function onTabDragEnd(e: DragEvent) {
+  (e.currentTarget as HTMLElement | null)?.classList.remove('dragging');
+  dragFromId.current = '';
+  document
+    .querySelectorAll('.query-tabs .q-tab.drag-over')
+    .forEach((el) => el.classList.remove('drag-over'));
+}
+
+function onTabDragOver(e: DragEvent) {
+  e.preventDefault();
+  if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
+  const el = e.currentTarget as HTMLElement | null;
+  el?.classList.add('drag-over');
+}
+
+function onTabDragLeave(e: DragEvent) {
+  (e.currentTarget as HTMLElement | null)?.classList.remove('drag-over');
+}
+
+function onTabDrop(e: DragEvent, toTab: QueryTab) {
+  e.preventDefault();
+  (e.currentTarget as HTMLElement | null)?.classList.remove('drag-over');
+  const fromId =
+    dragFromId.current || e.dataTransfer?.getData('text/plain') || '';
+  if (!fromId || fromId === toTab.id) return;
+  emit('reorder', fromId, toTab.id);
+}
+
+function onEndDrop(e: DragEvent) {
+  e.preventDefault();
+  const fromId =
+    dragFromId.current || e.dataTransfer?.getData('text/plain') || '';
+  if (!fromId) return;
+  emit('reorder', fromId, null);
+}
+
 
 function closeCtxMenu() {
   ctxMenu.visible = false;
@@ -103,14 +155,20 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="query-tabs" :class="[`placement-${placement}`]">
-    <div
+        <div
       v-for="t in tabs"
       :key="t.id"
       class="q-tab"
       :class="{ active: t.id === activeId, dirty: isQueryTabDirty(t) }"
       :title="isQueryTabDirty(t) ? '有未保存到数据库的修改' : t.title"
+      draggable="true"
       @click="emit('change', t.id)"
       @contextmenu="onTabContextMenu($event, t)"
+      @dragstart="onTabDragStart($event, t)"
+      @dragend="onTabDragEnd"
+      @dragover="onTabDragOver"
+      @dragleave="onTabDragLeave"
+      @drop="onTabDrop($event, t)"
     >
       <span class="q-tab-title">{{ tabTitle(t) }}</span>
       <button type="button" class="close" @click.stop="emit('close', t.id)">
@@ -120,6 +178,8 @@ onBeforeUnmount(() => {
     <button
       type="button"
       class="add"
+      @dragover.prevent
+      @drop="onEndDrop"
       :disabled="tabs.length >= maxTabs"
       :title="$tr('新建查询')"
       @click="emit('add')"
@@ -192,6 +252,15 @@ onBeforeUnmount(() => {
   text-overflow: ellipsis;
   min-width: 0;
   flex: 1;
+}
+.q-tab.dragging {
+  opacity: 0.55;
+}
+.q-tab.drag-over {
+  outline: 1px dashed var(--el-color-primary);
+}
+.q-tab {
+  user-select: none;
 }
 .q-tab.active {
   background: var(--el-bg-color);

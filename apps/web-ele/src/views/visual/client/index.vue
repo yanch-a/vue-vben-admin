@@ -156,6 +156,7 @@ const {
   closeTab,
   closeAllTabs,
   closeOtherTabs,
+  reorderTabs,
   openSqlInNewTab,
   markTabSaved,
 } = useQueryTabs(() => activeConnectionId.value);
@@ -2799,6 +2800,7 @@ onBeforeUnmount(() => {
               @close="closeTab"
               @close-all="closeAllTabs"
               @close-others="closeOtherTabs"
+              @reorder="reorderTabs"
             />
           </div>
           <div
@@ -2818,6 +2820,7 @@ onBeforeUnmount(() => {
             @close="closeTab"
             @close-all="closeAllTabs"
             @close-others="closeOtherTabs"
+            @reorder="reorderTabs"
           />
           <div class="query-main">
           <!-- 禁浏览器右键，避免执行/格式化等按钮弹出系统菜单 -->

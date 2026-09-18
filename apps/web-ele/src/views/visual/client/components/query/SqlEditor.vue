@@ -273,7 +273,7 @@ function registerCompletion() {
           props.instanceName,
         );
         return {
-          suggestions: matched.slice(0, 100).map((t, i) => {
+          suggestions: matched.slice(0, 20).map((t, i) => {
             const label =
               ctx.schema || t.schema !== props.instanceName
                 ? `${t.schema ? t.schema + '.' : ''}${t.tableName}`
@@ -284,7 +284,12 @@ function registerCompletion() {
               kind: monaco.languages.CompletionItemKind.Class,
               insertText: insert,
               range,
-              sortText: String(i).padStart(4, '0'),
+              // 已按全词相关度排好序；pad 保证 Monaco 稳定采用该顺序
+              sortText: '!' + String(i).padStart(4, '0'),
+              // 用表名做过滤文本，避免 Monaco 默认分词把 gp_t_xxx 截断后误过滤
+              filterText: t.tableName,
+              // 感叹号确保排在默认文本建议之前，顺序仍由前面的 pad 决定
+              preselect: i === 0,
               detail: '表',
             } as monaco.languages.CompletionItem;
           }),
@@ -297,13 +302,14 @@ function registerCompletion() {
       const cols = await resolveColumns(ctx.schema, ctx.table);
       const matchedCols = matchColumnSuggestions(cols, ctx.prefix);
       return {
-        suggestions: matchedCols.slice(0, 200).map((c, i) => ({
+        suggestions: matchedCols.slice(0, 20).map((c, i) => ({
           label: c,
           kind: monaco.languages.CompletionItemKind.Field,
           insertText: c,
           range,
           sortText: String(i).padStart(4, '0'),
-          detail: `${ctx.table} 字段`,
+          filterText: c,
+          detail: '列',
         })),
       };
     },
@@ -321,6 +327,7 @@ onMounted(() => {
     fontSize: sqlEditorFontSize.value,
     tabSize: 2,
     scrollBeyondLastLine: false,
+    fixedOverflowWidgets: true,
     readOnly: !!props.readOnly,
     tabCompletion: 'on',
     suggestOnTriggerCharacters: true,
@@ -329,6 +336,10 @@ onMounted(() => {
       showWords: false,
       insertMode: 'replace',
       preview: true,
+      // 关闭优雅过滤/邻近加分，避免 Monaco 打乱我们按「全词前缀」排好的顺序
+      filterGraceful: false,
+      localityBonus: false,
+      snippetsPreventQuickSuggestions: false,
     },
     acceptSuggestionOnCommitCharacter: true,
     acceptSuggestionOnEnter: 'on',
@@ -366,6 +377,14 @@ onMounted(() => {
     contextMenuOrder: 1.5,
     run: () => emitViewTableInfo(),
   });
+  // SQL 标识符含下划线，避免 Monaco 默认分词把 gp_t_project 拆成多段导致过滤异常
+  if (!(window as any).__lemonSqlWordPattern) {
+    (window as any).__lemonSqlWordPattern = true;
+    monaco.languages.setLanguageConfiguration('sql', {
+      wordPattern:
+        /(-?\d*\.\d\w*)|([^\`\~\!\@\#\%\^\&\*\(\)\-\=\+\[\{\]\}\\\|\;\:\'\"\,\.\<\>\/\?\s]+)/g,
+    });
+  }
   registerCompletion();
 });
 
@@ -651,5 +670,11 @@ defineExpose({
   font-size: calc(var(--vc-ui-font-size, 13px) + 1px);
   font-weight: 600;
   z-index: 2;
+}
+
+/* 补全列表用 fixedOverflowWidgets 挂到外层，抬高层级避免被结果区挡住 */
+:deep(.monaco-editor .suggest-widget),
+:deep(.monaco-editor .editor-widget) {
+  z-index: 100 !important;
 }
 </style>

@@ -313,6 +313,24 @@ export function useQueryTabs(connectionId: () => number | string | null) {
     notifyClientSessionChange();
   }
 
+
+  /** 拖拽排序：将 fromId 移动到 toId 之前（toId 为空则移到末尾） */
+  function reorderTabs(fromId: string, toId?: string | null) {
+    const id = connectionId();
+    if (id == null) return;
+    const key = connKey(id);
+    const list = tabsByConnection[key];
+    if (!list || fromId === toId) return;
+    const fromIdx = list.findIndex((t) => t.id === fromId);
+    if (fromIdx < 0) return;
+    const [item] = list.splice(fromIdx, 1);
+    if (!item) return;
+    let toIdx = toId ? list.findIndex((t) => t.id === toId) : list.length;
+    if (toIdx < 0) toIdx = list.length;
+    list.splice(toIdx, 0, item);
+    notifyClientSessionChange();
+  }
+
   function openSqlInNewTab(
     sql: string,
     title?: string,
@@ -331,6 +349,7 @@ export function useQueryTabs(connectionId: () => number | string | null) {
     closeTab,
     closeAllTabs,
     closeOtherTabs,
+    reorderTabs,
     openSqlInNewTab,
     /** 保存成功后调用：把当前 SQL 记为已同步基线 */
     markTabSaved(tab: QueryTab) {

@@ -603,7 +603,46 @@ export function detectCompletionContext(
 }
 
 /**
- * 表名匹配：支持当前库表，以及用户手写 db.table（按 schema 过滤）
+ * 标识符补全相关度（越小越靠前）：
+ * 0 全词精确 → 1 全词前缀 → 2 分段前缀 → 3 较长子串包含
+ * 刻意不做「子序列模糊」（太松，短前缀会冒出大量不相干表）
+ */
+export function scoreIdentMatch(name: string, prefix: string): number | null {
+  const n = (name || '').toLowerCase();
+  const p = (prefix || '').toLowerCase();
+  if (!n) return null;
+  if (!p) return 50;
+  if (n === p) return 0;
+  // 整段输入的前缀匹配（gb_t_p → gb_t_project）——最高优先
+  if (n.startsWith(p)) return 1;
+
+  const nParts = n.split(/[_\-.]+/).filter(Boolean);
+  const pParts = p.split(/[_\-.]+/).filter(Boolean);
+
+  // 多段逐段前缀：gb + t + pro → gb_t_project
+  if (pParts.length > 1 && nParts.length >= pParts.length) {
+    let ok = true;
+    for (let i = 0; i < pParts.length; i++) {
+      if (!nParts[i]!.startsWith(pParts[i]!)) {
+        ok = false;
+        break;
+      }
+    }
+    if (ok) return 2;
+  }
+
+  // 仅当输入已较长时，才允许「某一段以整段输入开头」（避免 pro 扫出上百张表）
+  if (p.length >= 4 && nParts.some((part) => part.startsWith(p))) return 2;
+
+  // 包含：至少 3 字符，且更偏向名字较短的表（在 match 里二次排序）
+  if (p.length >= 3 && n.includes(p)) return 3;
+
+  return null;
+}
+
+/**
+ * 表名补全：整段输入前缀绝对优先；同档按「剩余未匹配长度」短的在前。
+ * 前缀命中与模糊命中分桶截断，避免短前缀被不相干表占满前 100。
  */
 export function matchTableSuggestions(
   tables: TableNameItem[],
@@ -612,25 +651,68 @@ export function matchTableSuggestions(
 ): TableNameItem[] {
   const prefix = (ctx.prefix || '').toLowerCase();
   const schemaFilter = (ctx.schema || '').toLowerCase();
+  const prefixLen = prefix.length;
 
-  return tables.filter((t) => {
-    const name = t.tableName.toLowerCase();
+  const scored: { item: TableNameItem; score: number; name: string; rest: number }[] =
+    [];
+  for (const t of tables) {
+    const name = (t.tableName || '').toLowerCase();
     const sch = (t.schema || currentInstance || '').toLowerCase();
-    if (schemaFilter && sch && sch !== schemaFilter) return false;
-    if (!prefix) return true;
-    return name.startsWith(prefix) || name.includes(prefix);
-  });
+    if (schemaFilter && sch && sch !== schemaFilter) continue;
+    const score = scoreIdentMatch(t.tableName, prefix);
+    if (score == null) continue;
+    const rest =
+      score <= 1 && prefixLen > 0
+        ? Math.max(0, name.length - prefixLen)
+        : name.length;
+    scored.push({ item: t, score, name, rest });
+  }
+
+  scored.sort(
+    (a, b) =>
+      a.score - b.score ||
+      a.rest - b.rest ||
+      a.name.localeCompare(b.name),
+  );
+
+  const prefixHits = scored.filter((s) => s.score <= 1);
+  const segmentHits = scored.filter((s) => s.score === 2);
+  const otherHits = scored.filter((s) => s.score >= 3);
+
+  // 前缀档尽量留足名额，模糊档严格限额
+  const merged = [
+    ...prefixHits.slice(0, 20),
+    ...segmentHits.slice(0, 8),
+    ...otherHits.slice(0, 5),
+  ];
+  return merged.slice(0, 20).map((x) => x.item);
 }
 
 export function matchColumnSuggestions(
   columns: string[],
   prefix: string,
 ): string[] {
-  const p = (prefix || '').toLowerCase();
-  if (!p) return columns.slice();
-  return columns.filter(
-    (c) => c.toLowerCase().startsWith(p) || c.toLowerCase().includes(p),
+  const p = prefix || '';
+  const scored: { name: string; score: number; rest: number }[] = [];
+  for (const c of columns) {
+    const score = scoreIdentMatch(c, p);
+    if (score == null) continue;
+    const name = c.toLowerCase();
+    const rest =
+      score <= 1 && p.length > 0
+        ? Math.max(0, name.length - p.length)
+        : name.length;
+    scored.push({ name: c, score, rest });
+  }
+  scored.sort(
+    (a, b) =>
+      a.score - b.score ||
+      a.rest - b.rest ||
+      a.name.toLowerCase().localeCompare(b.name.toLowerCase()),
   );
+  const prefixHits = scored.filter((s) => s.score <= 1);
+  const restHits = scored.filter((s) => s.score > 1);
+  return [...prefixHits, ...restHits.slice(0, 40)].map((x) => x.name);
 }
 
 // ─────────────────────────── 客户端表清单 / 字段缓存 ───────────────────────────
