@@ -30,6 +30,11 @@ import { getDbConfigById } from '#/api/visual/vq';
 import { Page } from '@vben/common-ui';
 
 import { ElMessage, ElMessageBox } from 'element-plus';
+import {
+  downloadBlobAsFile,
+  readBlobErrorMessage,
+  unwrapFileBlob,
+} from '#/utils/blobDownload';
 import { Aim } from '@element-plus/icons-vue';
 
 import type { TreeCtxAction } from './components/object-tree/ObjectTreeContextMenu.vue';
@@ -683,17 +688,14 @@ function goSavedQueryManage() {
   router.push({ name: 'SavedQuerys' });
 }
 
-/** 从 SQL 工作台直接进入统一大屏入口的图表库页签。 */
+/** 跳转图表库（后台菜单路由名 Dashboard） */
 function goChartLibrary() {
-  router.push({ name: 'VisualDashboardWorkbench', query: { tab: 'charts' } });
+  router.push({ name: 'Dashboard' });
 }
 
-function goSqlWorkOrder() {
-  router.push({ name: 'SqlWorkOrder' });
-}
-
+/** 跳转 Redis 工作台（后台菜单路由名 Redis） */
 function goRedisConsole() {
-  router.push({ name: 'RedisConsole' });
+  router.push({ name: 'Redis' });
 }
 
 function onAddQueryTab() {
@@ -1975,14 +1977,9 @@ function buildSelectAllSql(
  * 从接口响应中取出真正的 Blob（兼容直出 Blob 与历史 { data: Blob } 包装）
  * @author yanch
  */
-function unwrapFileBlob(res: any): Blob | null {
-  if (res instanceof Blob) return res;
-  if (res?.data instanceof Blob) return res.data;
-  return null;
-}
-
 /**
- * 通用文件流下载（Excel / SQL INSERT 共用）
+ * 通用文件下载（Excel / SQL INSERT 等）
+ * 业务失败常为 HTTP 200 + JSON blob，需嗅探内容再 toast
  * @author yanch
  */
 async function downloadFileBlob(
@@ -1998,23 +1995,12 @@ async function downloadFileBlob(
       ElMessage.error('导出失败：未收到有效文件');
       return;
     }
-    if (fileBlob.type && fileBlob.type.includes('application/json')) {
-      const text = await fileBlob.text();
-      let msg = '导出失败';
-      try {
-        msg = JSON.parse(text)?.msg || msg;
-      } catch {
-        /* ignore */
-      }
-      ElMessage.error(msg);
+    const errMsg = await readBlobErrorMessage(fileBlob);
+    if (errMsg) {
+      ElMessage.error(errMsg);
       return;
     }
-    const url = window.URL.createObjectURL(fileBlob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = downloadName;
-    link.click();
-    window.URL.revokeObjectURL(url);
+    await downloadBlobAsFile(fileBlob, downloadName);
     ElMessage.success(successTip);
   } catch (e: any) {
     ElMessage.error(e?.msg || e?.message || '导出失败');
@@ -2022,6 +2008,7 @@ async function downloadFileBlob(
     exporting.value = false;
   }
 }
+
 
 /** 补全：按需加载字段并写入客户端缓存 */
 async function loadEditorColumns(instanceName: string, tableName: string) {
@@ -2727,7 +2714,6 @@ onBeforeUnmount(() => {
         @relation="goRelation"
         @saved-queries="goSavedQueryManage"
         @chart-library="goChartLibrary"
-        @work-order="goSqlWorkOrder"
         @redis="goRedisConsole"
         @progress="onOpenTaskPanel"
         @system="onOpenSystemFunctions"

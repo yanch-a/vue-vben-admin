@@ -117,6 +117,9 @@
       const grants = ref([])
       const searchKeyword = ref('')
       const tableGrants = ref([])
+      const authBaselineUserIds = ref([])
+      const authBaselineTableKeys = ref([])
+      const tableAuthMode = computed(() => (tableGrants.value && tableGrants.value.length ? 'WHITELIST' : 'OPEN'))
       const tableCandidates = ref([])
       const tableCandidatesLoading = ref(false)
       const tableInstanceName = ref('')
@@ -356,6 +359,10 @@
             canWriteSchema: g.canWriteSchema == null ? 0 : g.canWriteSchema,
           }))
           tableGrants.value = existingTables || []
+          authBaselineUserIds.value = grants.value.map((g) => String(g.memberUserId))
+          authBaselineTableKeys.value = tableGrants.value.map(
+            (g) => [g.subjectType, g.subjectId, g.instanceName, g.tableName].join(':'),
+          )
           await enrichGrantNames(grants.value)
           if (tableInstanceName.value) await loadTableCandidates()
         } catch (e) {
@@ -498,11 +505,35 @@
 
       const saveAuth = async () => {
         if (!authDbConfigId.value) return
+        const uniqueGrants = Array.from(
+          new Map(grants.value.map((g) => [String(g.memberUserId), g])).values(),
+        )
+        const newUserIds = uniqueGrants.map((g) => String(g.memberUserId))
+        const newTableKeys = tableGrants.value.map(
+          (g) => `${g.subjectType}:${g.subjectId}:${g.instanceName}:${g.tableName}`,
+        )
+        const removedUsers = (authBaselineUserIds.value || []).filter((id) => !newUserIds.includes(id))
+        const removedTables = (authBaselineTableKeys.value || []).filter((k) => !newTableKeys.includes(k))
+        const clearingUsers = uniqueGrants.length === 0 && (authBaselineUserIds.value || []).length > 0
+        const clearingTables = tableGrants.value.length === 0 && (authBaselineTableKeys.value || []).length > 0
+        if (clearingUsers || clearingTables || removedUsers.length || removedTables.length) {
+          const lines = []
+          if (clearingUsers) lines.push('将清空全部连接级成员授权')
+          else if (removedUsers.length) lines.push(`将移除 ${removedUsers.length} 个已授权用户`)
+          if (clearingTables) lines.push('将清空全部表级授权（恢复为开放模式）')
+          else if (removedTables.length) lines.push(`将移除 ${removedTables.length} 条表级授权`)
+          try {
+            await ElMessageBox.confirm(
+              lines.join('；') + '。确定保存？',
+              '授权变更确认',
+              { type: 'warning', confirmButtonText: '确定保存', cancelButtonText: '取消' },
+            )
+          } catch {
+            return
+          }
+        }
         authSaving.value = true
         try {
-          const uniqueGrants = Array.from(
-            new Map(grants.value.map((g) => [String(g.memberUserId), g])).values(),
-          )
           await replaceDbConfigUsers({
             dbConfigId: authDbConfigId.value,
             grants: uniqueGrants.map((g) => ({
@@ -961,6 +992,21 @@
       destroy-on-close
     >
       <div class="auth-layout">
+      <el-alert
+        :title="(tableGrants && tableGrants.length) ? '白名单模式：仅可见/可操作已授权表' : '开放模式：未配置表级授权时，连接内表不受表白名单限制（仍受连接 canUse/写标志约束）'"
+        :type="(tableGrants && tableGrants.length) ? 'warning' : 'info'"
+        show-icon
+        :closable="false"
+        style="margin-bottom: 8px"
+      />
+      <el-alert
+        type="info"
+        :closable="false"
+        show-icon
+        style="margin-bottom: 8px"
+        title="写权限需同时满足：连接级 canWriteData/canWriteSchema 与表级对应标志（白名单模式）；开放模式（无表级授权）仅看连接级标志。用户授权与部门授权取并集，任一允许即可。"
+      />
+
         <div class="auth-left">
           <div class="auth-section-title">{{ $tr('查找用户') }}</div>
           <div class="auth-user-tools">
@@ -1145,13 +1191,14 @@
 
   .db-config-toolbar__right {
     display: flex;
-    flex-wrap: wrap;
+    flex-wrap: nowrap;
+    flex-shrink: 0;
     align-items: center;
     gap: 8px;
   }
 
   .db-config-search {
-    width: min(240px, 100%);
+    width: 240px;
   }
 
   .db-config-empty {

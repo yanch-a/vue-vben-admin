@@ -61,7 +61,7 @@ const routes: RouteRecordRaw[] = [
     },
   },
   {
-    name: 'RedisConsole',
+    name: 'Redis',
     path: '/lSql/redisConsole',
     component: () => import('#/views/visual/redisConsole/index.vue'),
     meta: {

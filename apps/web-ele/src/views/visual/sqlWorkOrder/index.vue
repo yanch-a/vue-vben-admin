@@ -1,5 +1,10 @@
 <script lang="ts" setup>
 import type { SqlAuditResult, SqlAuditStep, SqlWorkOrder } from '#/api/visual/sqlWorkOrder';
+import {
+  downloadBlobAsFile,
+  readBlobErrorMessage,
+  unwrapFileBlob,
+} from '#/utils/blobDownload';
 
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
@@ -38,6 +43,7 @@ const rows = ref<SqlWorkOrder[]>([]);
 const total = ref(0);
 const dba = ref(false);
 const canForceSubmit = ref(false);
+const canAudit = ref(false);
 const roleReady = ref(false);
 const scope = ref<'mine' | 'review'>('mine');
 const query = reactive({ pageNum: 1, pageSize: 20, status: '', title: '' });
@@ -232,6 +238,7 @@ async function loadCapabilities() {
   const data = unbox(await workOrderCapabilities());
   dba.value = Boolean(data?.dba);
   canForceSubmit.value = Boolean(data?.canForceSubmit);
+  canAudit.value = Boolean(data?.canAudit);
   scope.value = dba.value ? 'review' : 'mine';
   roleReady.value = true;
 }
@@ -504,12 +511,22 @@ async function execute(row: SqlWorkOrder) {
 }
 
 async function downloadRollback(row: SqlWorkOrder) {
-  const data: any = await downloadWorkOrderRollback(row.id);
-  const blob = data instanceof Blob ? data : data?.data;
-  const href = URL.createObjectURL(blob);
-  const anchor = document.createElement('a');
-  anchor.href = href; anchor.download = `work-order-${row.id}-rollback.sql`; anchor.click();
-  URL.revokeObjectURL(href);
+  try {
+    const data: any = await downloadWorkOrderRollback(row.id);
+    const blob = unwrapFileBlob(data);
+    if (!blob) {
+      ElMessage.error('下载失败：未收到有效文件');
+      return;
+    }
+    const errMsg = await readBlobErrorMessage(blob);
+    if (errMsg) {
+      ElMessage.error(errMsg);
+      return;
+    }
+    await downloadBlobAsFile(blob, `work-order-${row.id}-rollback.sql`);
+  } catch (e: any) {
+    ElMessage.error(e?.msg || e?.message || '下载失败');
+  }
 }
 
 onMounted(async () => {
@@ -580,7 +597,7 @@ watch(
             <ElButton v-if="!dba && ['DRAFT','REJECTED'].includes(row.status)" link @click="editOrder(row)">{{ $tr('编辑') }}</ElButton>
             <ElButton v-if="!dba && ['DRAFT','REJECTED'].includes(row.status)" link type="primary" @click="submit(row)">{{ $tr('提交') }}</ElButton>
             <template v-if="dba">
-              <ElButton v-if="['PENDING','APPROVED'].includes(row.status)" link type="primary" @click="openDetail(row).then(() => openAudit())">{{ $tr('AI 审计') }}</ElButton>
+              <ElButton v-if="canAudit && ['PENDING','APPROVED'].includes(row.status)" link type="primary" @click="openDetail(row).then(() => openAudit())">{{ $tr('AI 审计') }}</ElButton>
               <ElButton v-if="row.status === 'PENDING'" link type="success" @click="review(row, true)">{{ $tr('通过') }}</ElButton>
               <ElButton v-if="row.status === 'PENDING'" link type="danger" @click="review(row, false)">{{ $tr('驳回') }}</ElButton>
               <ElButton v-if="row.status === 'APPROVED'" link type="warning" :loading="executing" :disabled="executing" @click="execute(row)">{{ $tr('执行') }}</ElButton>

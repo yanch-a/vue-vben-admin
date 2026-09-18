@@ -9,6 +9,11 @@
 import { computed, reactive, ref, watch } from 'vue';
 
 import { exportSqlDump, getTables } from '#/api/visual/database';
+import {
+  downloadBlobAsFile,
+  readBlobErrorMessage,
+  unwrapFileBlob,
+} from '#/utils/blobDownload';
 import { visualClientConfig } from '../config';
 import { resolveSqlDialect } from '../dialect/sqlDialect';
 
@@ -171,38 +176,22 @@ async function onExport() {
     });
     // 兼容直出 Blob 与历史 { data: Blob } 包装，避免伪 .sql 文件
     // @author yanch
-    const fileBlob =
-      res instanceof Blob
-        ? res
-        : res?.data instanceof Blob
-          ? res.data
-          : null;
+    const fileBlob = unwrapFileBlob(res);
     if (!fileBlob) {
       ElMessage.error('导出失败：未收到有效文件');
       return;
     }
-    if (fileBlob.type && fileBlob.type.includes('application/json')) {
-      const text = await fileBlob.text();
-      let msg = '导出失败';
-      try {
-        msg = JSON.parse(text)?.msg || msg;
-      } catch {
-        /* ignore */
-      }
-      ElMessage.error(msg);
+    const errMsg = await readBlobErrorMessage(fileBlob);
+    if (errMsg) {
+      ElMessage.error(errMsg);
       return;
     }
-    const url = window.URL.createObjectURL(fileBlob);
-    const link = document.createElement('a');
-    link.href = url;
     const extension = await resolveDownloadExtension(fileBlob, res);
-    link.download = withExtension(
-      fileName.value || `dump${extension}`,
-      extension,
+    await downloadBlobAsFile(
+      fileBlob,
+      withExtension(fileName.value || `dump${extension}`, extension),
     );
-    link.click();
-    window.URL.revokeObjectURL(url);
-    ElMessage.success('数据导出成功');
+    ElMessage.success('备份导出成功');
     visible.value = false;
   } catch (e: any) {
     ElMessage.error(e?.msg || e?.message || '导出失败');

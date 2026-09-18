@@ -1,4 +1,5 @@
 import { requestClient } from '#/api/request';
+import { readBlobErrorMessage } from '#/utils/blobDownload';
 
 /**
  * 兼容 admin-plus 的 request({ url, method, params, data }) 写法。
@@ -44,10 +45,17 @@ export default async function request(config: {
     });
   }
 
-  // 文件流（xlsx / sql 等）直接返回 Blob，切勿包成 { code, data }，
-  // 否则调用方 new Blob([包装对象]) 会得到伪文件，Excel 报「扩展名或格式错误」。
+  // 文件下载：直接返回 Blob；若实为业务失败 JSON（常见 HTTP 200），拒绝并抛出 msg
   // @author yanch
   if (config.responseType === 'blob') {
+    if (body instanceof Blob) {
+      const errMsg = await readBlobErrorMessage(body);
+      if (errMsg) {
+        return Promise.reject(
+          Object.assign(new Error(errMsg), { msg: errMsg, code: 500 }),
+        );
+      }
+    }
     return body;
   }
 

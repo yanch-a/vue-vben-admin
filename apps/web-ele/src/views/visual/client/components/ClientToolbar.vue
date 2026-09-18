@@ -25,7 +25,7 @@ const emit = defineEmits<{
   relation: [];
   /** 已保存查询文件管理 */
   savedQueries: [];
-  /** 跳转到数据大屏工作台的图表库 */
+  /** 跳转到图表库（路由名 Dashboard） */
   chartLibrary: [];
   /** 打开右上角任务进度 */
   progress: [];
@@ -43,9 +43,7 @@ const emit = defineEmits<{
   history: [];
   /** 管理服务端官方数据库客户端 */
   tools: [];
-  /** SQL 上线工单 */
-  workOrder: [];
-  /** Redis 管理工作台 */
+  /** Redis 管理工作台（路由名 Redis） */
   redis: [];
 }>();
 
@@ -83,9 +81,6 @@ function onSystemCommand(cmd: string | number) {
     </ElButton>
     <ElButton size="small" @click="emit('chartLibrary')">
       {{ $tr('图表库') }}
-    </ElButton>
-    <ElButton size="small" @click="emit('workOrder')">
-      {{ $tr('SQL 工单') }}
     </ElButton>
     <ElButton size="small" @click="emit('redis')">
       Redis
