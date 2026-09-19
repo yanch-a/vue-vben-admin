@@ -386,26 +386,78 @@ export function parseTableRefsFromStatement(stmt: string): SqlTableRef[] {
   const masked = maskSqlNoise(stmt);
   const ident =
     '(?:[a-zA-Z0-9_$#]+|`[^`]+`|"[^"]+"|\\[[^\\]]+\\])';
-  const re = new RegExp(
-    `\\b(?:FROM|JOIN)\\s+(?:(${ident})\\s*\\.\\s*)?(${ident})(?:\\s+(?:AS\\s+)?(${ident}))?`,
-    'gi',
-  );
   const out: SqlTableRef[] = [];
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(masked)) !== null) {
-    const schema = stripIdentQuotes(m[1] || '');
-    const table = stripIdentQuotes(m[2] || '');
-    if (!table) continue;
-    let alias = stripIdentQuotes(m[3] || '');
+  const seen = new Set<string>();
+
+  const push = (schema: string, table: string, aliasRaw: string) => {
+    if (!table) return;
+    let alias = aliasRaw;
     if (alias && ALIAS_STOP_WORDS.has(alias.toLowerCase())) {
       alias = '';
     }
+    const a = alias || table;
+    const key = `${(schema || '').toLowerCase()}::${table.toLowerCase()}::${a.toLowerCase()}`;
+    if (seen.has(key)) return;
+    seen.add(key);
     out.push({
       schema: schema || undefined,
       table,
-      alias: alias || table,
+      alias: a,
     });
+  };
+
+  // FROM / JOIN 表（含 schema.table 与可选别名）
+  const fromJoinRe = new RegExp(
+    `\\b(?:FROM|JOIN)\\s+(?:(${ident})\\s*\\.\\s*)?(${ident})(?:\\s+(?:AS\\s+)?(${ident}))?`,
+    'gi',
+  );
+  let m: RegExpExecArray | null;
+  while ((m = fromJoinRe.exec(masked)) !== null) {
+    push(
+      stripIdentQuotes(m[1] || ''),
+      stripIdentQuotes(m[2] || ''),
+      stripIdentQuotes(m[3] || ''),
+    );
   }
+
+  // 逗号联表：仅扫描 FROM … 到 WHERE/GROUP/ORDER/LIMIT/HAVING/UNION/; 之前的片段
+  const fromHeader = /\bFROM\b/i.exec(masked);
+  if (fromHeader) {
+    const fromStart = fromHeader.index! + fromHeader[0].length;
+    const rest = masked.slice(fromStart);
+    const endM = /\b(WHERE|GROUP\s+BY|ORDER\s+BY|LIMIT|HAVING|UNION|INTERSECT|EXCEPT)\b|;/i.exec(
+      rest,
+    );
+    const fromClause = endM ? rest.slice(0, endM.index) : rest;
+    // 按逗号拆开的「表项」（JOIN 段里也有逗号极少见；JOIN 已在上面解析）
+    // 跳过已含 JOIN 关键字的子段，避免重复
+    const parts = fromClause.split(',');
+    const itemRe = new RegExp(
+      `^\\s*(?:(${ident})\\s*\\.\\s*)?(${ident})(?:\\s+(?:AS\\s+)?(${ident}))?\\s*`,
+      'i',
+    );
+    for (let i = 0; i < parts.length; i++) {
+      let part = parts[i] || '';
+      // 第一段以 FROM 后内容开头，可能含 JOIN … —— 只取 JOIN 之前
+      if (/\bJOIN\b/i.test(part)) {
+        part = part.split(/\bJOIN\b/i)[0] || '';
+      }
+      // 去掉开头可能残留的 JOIN 类型词
+      part = part.replace(
+        /^\s*(?:LEFT|RIGHT|INNER|OUTER|FULL|CROSS|NATURAL)\s+/i,
+        '',
+      );
+      const im = itemRe.exec(part);
+      if (!im) continue;
+      // 第一段已由 fromJoinRe 解析过 FROM 主表，仍 push（seen 去重）
+      push(
+        stripIdentQuotes(im[1] || ''),
+        stripIdentQuotes(im[2] || ''),
+        stripIdentQuotes(im[3] || ''),
+      );
+    }
+  }
+
   return out;
 }
 
@@ -506,12 +558,25 @@ export function detectCompletionContext(
 
   const primary = parsePrimaryTableFromStatement(stmtAll);
 
-  // 形如 alias. / table. / schema.table —— 第二段当字段或表名
+  // 别名.字段 / 表.字段 / schema.表名（第二段）
   if (dotted.length >= 2) {
     const left = dotted[0] || '';
-    // lookback 以点结束（刚输入完左标识）或 raw 含点
     const afterDotTable = TABLE_HINT_RE.test(lookback.replace(/\.\s*$/, ' '));
-    // 优先：别名 / 表名 → 字段（JOIN ON a. / b.）
+    // 字段补全只替换点号后的字段名，避免选中后冲掉别名/表前缀（a.id → id）
+    const fieldReplaceFrom = pos - prefix.length;
+
+    // FROM/JOIN/UPDATE 后的 schema.table：优先当「表补全」，不要把 schema 误当成别名去补字段
+    // 例：JOIN other_db.lm_  → 表补全；WHERE a.  → 字段补全
+    if (TABLE_HINT_RE.test(lookback) || afterDotTable) {
+      return {
+        kind: 'table',
+        prefix,
+        schema: left,
+        replaceFrom: fieldReplaceFrom,
+        replaceTo,
+      };
+    }
+
     const byAlias = resolveTableRefByAlias(stmtAll, left);
     if (byAlias.table) {
       return {
@@ -519,11 +584,11 @@ export function detectCompletionContext(
         prefix,
         schema: byAlias.schema || primary.schema,
         table: byAlias.table,
-        replaceFrom,
+        replaceFrom: fieldReplaceFrom,
         replaceTo,
       };
     }
-    // 若 left 已是已知主表名
+    // left 就是已知表名（无别名）
     if (
       primary.table &&
       left.toLowerCase() === primary.table.toLowerCase()
@@ -533,26 +598,27 @@ export function detectCompletionContext(
         prefix,
         schema: primary.schema,
         table: primary.table,
-        replaceFrom,
+        replaceFrom: fieldReplaceFrom,
         replaceTo,
       };
     }
-    // UPDATE/FROM 后的 schema.table
-    if (TABLE_HINT_RE.test(lookback) || afterDotTable || !primary.table) {
+    // 无法解析时：若像 schema.table（无表上下文）仍走表补全
+    if (!primary.table) {
       return {
         kind: 'table',
         prefix,
         schema: left,
-        replaceFrom,
+        replaceFrom: fieldReplaceFrom,
         replaceTo,
       };
     }
+    // 兜底：把 left 当表名做字段补全（可能跨库未解析到）
     return {
       kind: 'column',
       prefix,
       schema: primary.schema,
       table: left,
-      replaceFrom,
+      replaceFrom: fieldReplaceFrom,
       replaceTo,
     };
   }

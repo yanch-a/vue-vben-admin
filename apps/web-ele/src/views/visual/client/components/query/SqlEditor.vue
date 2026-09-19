@@ -88,6 +88,9 @@ const wrapEl = ref<HTMLDivElement>();
 const dragOver = ref(false);
 let editor: monaco.editor.IStandaloneCodeEditor | null = null;
 let completionDisposable: monaco.IDisposable | null = null;
+/** 跨实例拉表进行中的 Promise，避免连敲触发重复 getTables */
+const tablesLoadInflight = new Map<string, Promise<string[]>>();
+
 
 function themeName() {
   return isDark.value ? 'vs-dark' : 'vs';
@@ -190,24 +193,47 @@ async function resolveTableNames(schemaHint?: string): Promise<
   const inst = props.instanceName || '';
   if (dbId == null) return [];
 
-  if (schemaHint) {
-    let list = getRememberedTables(dbId, schemaHint);
-    if (!list.length && props.loadTables) {
-      const names = await props.loadTables(schemaHint);
-      list = names.map((tableName) => ({ tableName, schema: schemaHint }));
+  async function ensureTables(instanceName: string): Promise<
+    { tableName: string; schema?: string }[]
+  > {
+    let list = getRememberedTables(dbId, instanceName);
+    if (list.length || !props.loadTables) return list;
+    const key = `${dbId}::${instanceName}`;
+    let pending = tablesLoadInflight.get(key);
+    if (!pending) {
+      pending = props.loadTables(instanceName)
+        .then((names) => {
+          const arr = (names || []).filter(Boolean);
+          // loadEditorTables 内部也会 remember；这里再兜底一次
+          return arr;
+        })
+        .finally(() => {
+          tablesLoadInflight.delete(key);
+        });
+      tablesLoadInflight.set(key, pending);
     }
-    return list;
+    const names = await pending;
+    list = getRememberedTables(dbId, instanceName);
+    if (list.length) return list;
+    return (names || []).map((tableName) => ({
+      tableName,
+      schema: instanceName,
+    }));
   }
 
-  let list = inst ? getRememberedTables(dbId, inst) : [];
-  if (!list.length && inst && props.loadTables) {
-    const names = await props.loadTables(inst);
-    list = names.map((tableName) => ({ tableName, schema: inst }));
+  // 显式写了 schema/实例名：只补全该实例下的表（可与当前 Tab 选中库不同）
+  if (schemaHint) {
+    return ensureTables(schemaHint);
   }
+
+  let list = inst ? await ensureTables(inst) : [];
   const all = getAllRememberedTables(dbId);
   const map = new Map<string, { tableName: string; schema?: string }>();
   [...list, ...all].forEach((t) => {
-    map.set(`${(t.schema || '').toLowerCase()}.${t.tableName.toLowerCase()}`, t);
+    map.set(
+      `${(t.schema || '').toLowerCase()}.${t.tableName.toLowerCase()}`,
+      t,
+    );
   });
   return [...map.values()];
 }
@@ -270,7 +296,8 @@ function registerCompletion() {
         const matched = matchTableSuggestions(
           tables,
           ctx,
-          props.instanceName,
+          // 有显式 schema 时以该实例为准，避免用当前 Tab 库名误过滤
+          ctx.schema || props.instanceName,
         );
         return {
           suggestions: matched.slice(0, 20).map((t, i) => {

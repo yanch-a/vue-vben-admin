@@ -41,6 +41,8 @@ const props = defineProps<{
   dbConfigId: number | string;
   dbType: string;
   filterText?: string;
+  /** SQL 编辑器当前选中的库/实例，对象树对应节点后显示绿点 */
+  activeInstanceName?: string;
 }>();
 
 const emit = defineEmits<{
@@ -659,7 +661,18 @@ defineExpose({
               !!locateKey && String(data.id) === String(locateKey),
           }"
           @dblclick.stop="onNodeDblClick(data)"
-        >{{ formatNodeLabel(data, node) }}</span>
+        >
+          <span class="tree-node-text">{{ formatNodeLabel(data, node) }}</span>
+          <span
+            v-if="
+              data?.nodeType === 'instance' &&
+              props.activeInstanceName &&
+              data.instanceName === props.activeInstanceName
+            "
+            class="instance-active-dot"
+            :title="$tr('当前 SQL 编辑器选中的库实例')"
+          />
+        </span>
       </template>
     </ElTree>
     <ObjectTreeContextMenu
@@ -682,6 +695,24 @@ defineExpose({
   min-height: 0;
   padding: 4px;
   overflow: auto;
+}
+.tree-node-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.tree-node-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+.instance-active-dot {
+  flex-shrink: 0;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--el-color-success);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--el-color-success) 28%, transparent);
 }
 .tree-node-label {
   flex: 1;

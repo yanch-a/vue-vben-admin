@@ -56,6 +56,7 @@ import DatabaseToolDialog from './components/DatabaseToolDialog.vue';
 import ClientTaskPanel from './components/ClientTaskPanel.vue';
 import SystemFunctionsDialog from './components/SystemFunctionsDialog.vue';
 import TableInfoDialog from './components/TableInfoDialog.vue';
+import TableDesignerDialog from './components/TableDesignerDialog.vue';
 import ClientPreferencesDialog from './components/ClientPreferencesDialog.vue';
 import LicenseDialog from './components/LicenseDialog.vue';
 import AiChatWindow from './components/ai/AiChatWindow.vue';
@@ -83,6 +84,7 @@ import {
 } from './composables/useQueryTabs';
 import { visualClientConfig } from './config';
 import { resolveSqlDialect, resolveTableIdent } from './dialect/sqlDialect';
+import type { TableDesignSqlResult } from './dialect/tableDesignerDialect';
 import { isDestructiveDdl, looksLikeControlledDdl } from './utils/controlledDdl';
 import {
   metadataTableName,
@@ -363,16 +365,6 @@ const saveDialog = reactive({
   saving: false,
 });
 
-/** 创建库 / 创建表 / 执行脚本 等简易对话框（建库已拆到 CreateDatabaseDialog） */
-const promptDialog = reactive({
-  visible: false,
-  title: '',
-  mode: '' as TreeCtxAction | '',
-  instanceName: '',
-  input: '',
-  sqlPreview: '',
-});
-
 /** 按方言族选项创建数据库 / Schema / 用户 */
 const createDbDialog = reactive({
   visible: false,
@@ -406,6 +398,21 @@ const tableInfoDialog = reactive({
   loading: false,
   /** 打开时默认页签；编辑器入口为 columns，对象树入口为 basic */
   defaultTab: 'basic' as 'basic' | 'columns' | 'ddl' | 'indexes',
+  info: null as any,
+});
+
+/**
+ * 新建/修改表共用的可视化设计器状态。
+ * 修改表先读取后端聚合的字段、索引、外键和属性，再打开弹窗，避免用户看到半成品。
+ */
+const tableDesigner = reactive({
+  visible: false,
+  mode: 'create' as 'alter' | 'create',
+  instanceName: '',
+  schemaName: '',
+  tableName: '',
+  loading: false,
+  saving: false,
   info: null as any,
 });
 
@@ -1158,12 +1165,16 @@ async function onTreeContextAction(payload: {
       sqlScriptDialog.visible = true;
       return;
     case 'createTable':
-      promptDialog.mode = action;
-      promptDialog.title = `在 ${instanceName} 中创建表`;
-      promptDialog.instanceName = instanceName;
-      promptDialog.input = 'new_table';
-      promptDialog.sqlPreview = '';
-      promptDialog.visible = true;
+      if (!activeConnection.value) {
+        ElMessage.warning('请先打开数据库连接');
+        return;
+      }
+      tableDesigner.mode = 'create';
+      tableDesigner.instanceName = instanceName;
+      tableDesigner.schemaName = node.schemaName || '';
+      tableDesigner.tableName = 'new_table';
+      tableDesigner.info = null;
+      tableDesigner.visible = true;
       return;
     case 'dropTable':
       if (!activeConnection.value) {
@@ -1240,10 +1251,31 @@ async function onTreeContextAction(payload: {
       }
       return;
     case 'alterTable':
-      await openProgramObjectScript(
-        { ...node, nodeType: 'table', objectKind: 'table', name: tableName },
-        'alter',
-      );
+      if (!activeConnection.value) {
+        ElMessage.warning('请先打开数据库连接');
+        return;
+      }
+      tableDesigner.mode = 'alter';
+      tableDesigner.instanceName = instanceName;
+      tableDesigner.schemaName = node.schemaName || '';
+      tableDesigner.tableName = tableName;
+      tableDesigner.info = null;
+      tableDesigner.loading = true;
+      tableDesigner.visible = true;
+      try {
+        const res: any = await getTableInfo(
+          activeConnection.value.id,
+          instanceName,
+          tableName,
+        );
+        tableDesigner.info = res?.data || res;
+        tableDesigner.schemaName = tableDesigner.info?.schemaName || node.schemaName || '';
+      } catch (e: any) {
+        tableDesigner.visible = false;
+        ElMessage.error(e?.msg || e?.message || '读取表结构失败');
+      } finally {
+        tableDesigner.loading = false;
+      }
       return;
     case 'copyDdl': {
       try {
@@ -1412,42 +1444,31 @@ async function openProgramObjectScript(
   }
 }
 
-async function confirmPromptDialog() {
-  const mode = promptDialog.mode;
-  const name = promptDialog.input.trim();
-  const inst = promptDialog.instanceName;
-  const d = activeDialect.value;
-
-  if (mode === 'createTable') {
-    if (!name) {
-      ElMessage.warning('请输入表名');
-      return;
+/**
+ * 按预览顺序执行设计器生成的结构语句。
+ * 每条语句都继续走后端受控 DDL 权限与审计，不绕过原有安全边界。
+ */
+async function saveTableDesign(result: TableDesignSqlResult) {
+  if (!activeConnection.value || tableDesigner.saving) return;
+  tableDesigner.saving = true;
+  try {
+    for (const sql of result.statements) {
+      await executeDdl({
+        dbConfigId: activeConnection.value.id,
+        instanceName: tableDesigner.instanceName,
+        permissionTableName:
+          tableDesigner.mode === 'alter' ? tableDesigner.tableName : undefined,
+        sql,
+      });
     }
-    const ident = resolveTableIdent(activeConnection.value?.dbType, {
-      instanceName: inst,
-      tableName: name,
-    });
-    let sql = d.createTableStubSql(ident.schema, ident.table);
-    if (activeConnection.value?.id) {
-      try {
-        const res: any = await getObjectScript({
-          dbConfigId: activeConnection.value.id,
-          instanceName: inst,
-          objectKind: 'table',
-          action: 'create',
-          objectName: name,
-        });
-        const data = res?.data || res || {};
-        if (data.sql) {
-          sql = String(data.sql).trim();
-        }
-      } catch {
-        // 后端模板不可用时退回前端方言 stub
-      }
-    }
-    openSqlInNewTab(sql, `Create ${name}`, inst);
+    ElMessage.success(tableDesigner.mode === 'create' ? '表创建成功' : '表结构修改成功');
+    tableDesigner.visible = false;
+    objectTreeRef.value?.reloadTables?.(tableDesigner.instanceName);
+  } catch (e: any) {
+    ElMessage.error(e?.msg || e?.message || '保存表结构失败');
+  } finally {
+    tableDesigner.saving = false;
   }
-  promptDialog.visible = false;
 }
 
 /** 建库成功：刷新对象树，并尽量切到新实例 */
@@ -2763,6 +2784,7 @@ onBeforeUnmount(() => {
             :db-config-id="activeConnection.id"
             :db-type="activeConnection.dbType"
             :filter-text="filterText"
+            :active-instance-name="activeTab?.instanceName || ''"
             @open-table="onOpenTable"
             @insert-name="onInsertName"
             @select-instance="onSelectInstance"
@@ -2825,7 +2847,7 @@ onBeforeUnmount(() => {
           <div class="query-main">
           <!-- 禁浏览器右键，避免执行/格式化等按钮弹出系统菜单 -->
           <div class="query-actions" @contextmenu.prevent>
-            <ElSelect
+                        <ElSelect
               v-if="activeTab"
               v-model="activeTab.instanceName"
               filterable
@@ -2834,12 +2856,31 @@ onBeforeUnmount(() => {
               class="instance-select"
               :placeholder="`选择${instanceLabel}`"
             >
+              <template #label="{ label }">
+                <span class="instance-select-label">
+                  <span>{{ label }}</span>
+                  <span
+                    v-if="label"
+                    class="instance-active-dot"
+                    :title="$tr('当前 SQL 编辑器选中的库实例')"
+                  />
+                </span>
+              </template>
               <ElOption
                 v-for="name in instanceOptions"
                 :key="name"
                 :label="name"
                 :value="name"
-              />
+              >
+                <span class="instance-option-row">
+                  <span>{{ name }}</span>
+                  <span
+                    v-if="name === activeTab.instanceName"
+                    class="instance-active-dot"
+                    :title="$tr('当前 SQL 编辑器选中的库实例')"
+                  />
+                </span>
+              </ElOption>
             </ElSelect>
             <ElButton
               type="primary"
@@ -3022,6 +3063,19 @@ onBeforeUnmount(() => {
       :default-tab="tableInfoDialog.defaultTab"
     />
 
+    <TableDesignerDialog
+      v-model="tableDesigner.visible"
+      :mode="tableDesigner.mode"
+      :db-type="activeConnection?.dbType"
+      :instance-name="tableDesigner.instanceName"
+      :schema-name="tableDesigner.schemaName"
+      :table-name="tableDesigner.tableName"
+      :info="tableDesigner.info"
+      :loading="tableDesigner.loading"
+      :saving="tableDesigner.saving"
+      @save="saveTableDesign"
+    />
+
     <CopyDatabaseDialog
       v-model="copyDb.visible"
       :source-connection="activeConnection"
@@ -3070,25 +3124,6 @@ onBeforeUnmount(() => {
           @click="confirmSaveQuery"
         >
           {{ $tr(saveDialog.mode === 'update' ? '更新' : '保存') }}
-        </ElButton>
-      </template>
-    </ElDialog>
-
-    <ElDialog
-      v-model="promptDialog.visible"
-      :title="promptDialog.title"
-      width="560px"
-      destroy-on-close
-    >
-      <ElForm label-width="100px">
-        <ElFormItem :label="$tr('表名')">
-          <ElInput v-model="promptDialog.input" clearable />
-        </ElFormItem>
-      </ElForm>
-      <template #footer>
-        <ElButton @click="promptDialog.visible = false">{{ $tr('取消') }}</ElButton>
-        <ElButton type="primary" @click="confirmPromptDialog">
-          {{ $tr('生成 SQL') }}
         </ElButton>
       </template>
     </ElDialog>
@@ -3198,8 +3233,24 @@ onBeforeUnmount(() => {
   flex-wrap: wrap;
 }
 .instance-select {
-  width: 180px;
+  width: 200px;
 }
+.instance-select-label,
+.instance-option-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+}
+.instance-active-dot {
+  flex-shrink: 0;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--el-color-success);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--el-color-success) 28%, transparent);
+}
+
 .editor-area {
   min-height: 100px;
   overflow: hidden;

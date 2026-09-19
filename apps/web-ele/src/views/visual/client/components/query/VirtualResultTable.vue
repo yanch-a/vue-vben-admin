@@ -20,8 +20,16 @@ defineOptions({ name: 'VirtualResultTable' });
 
 const ROW_HEIGHT = 32;
 const CHECK_WIDTH = 42;
-const COL_MIN_WIDTH = 80;
+const COL_MIN_WIDTH = 64;
 const COL_DEFAULT_WIDTH = 120;
+/** 内容超过该字符数时列宽固定为 COL_OVERFLOW_WIDTH，并省略号截断 */
+const COL_CONTENT_CHAR_LIMIT = 200;
+const COL_OVERFLOW_WIDTH = 150;
+/** 12px 字体下单字符近似宽度（中英混排取折中） */
+const CHAR_PX = 7.2;
+const CELL_PAD_PX = 20;
+/** 估算列宽时最多扫描的行数（虚拟表全量量 DOM 不可行） */
+const WIDTH_SAMPLE_ROWS = 200;
 const OVERSCAN = 8;
 
 const props = defineProps<{
@@ -63,19 +71,53 @@ const colCount = computed(() => props.columns?.length || 0);
  * 每列宽度。拖动只改这一份数字，虚拟表只重绘可视行，
  * 和结果总行数无关，所以不按 1000 行关掉调列宽。
  */
+/**
+ * 每列宽度：按内容智能估算（采样前 WIDTH_SAMPLE_ROWS 行）。
+ * - 列内最长展示文本 ≤ 200 字：按内容撑开，完整显示（不出现 ...）
+ * - 超过 200 字：固定 150px，CSS 省略号
+ * - 内容很少：按内容自适应（不低于 COL_MIN_WIDTH）
+ * 用户拖拽改宽后不再自动重算。
+ */
 const colWidths = ref<number[]>([]);
-/** 用户拖过列后不再随容器均分 */
+/** 用户手改列宽后不再自动按内容重算 */
 const userResized = ref(false);
 const resizingIndex = ref(-1);
 
-function defaultColWidth() {
-  const n = colCount.value;
-  if (n <= 0) return COL_DEFAULT_WIDTH;
-  const available = Math.max(
-    viewportWidth.value - CHECK_WIDTH,
-    n * COL_DEFAULT_WIDTH,
-  );
-  return Math.max(COL_DEFAULT_WIDTH, Math.floor(available / n));
+function cellTextLen(value: unknown): number {
+  try {
+    return props.formatCell(value).length;
+  } catch {
+    if (value == null) return 0;
+    return String(value).length;
+  }
+}
+
+function widthFromMaxChars(maxChars: number): number {
+  if (maxChars > COL_CONTENT_CHAR_LIMIT) return COL_OVERFLOW_WIDTH;
+  const px = Math.ceil(maxChars * CHAR_PX + CELL_PAD_PX);
+  return Math.max(COL_MIN_WIDTH, px);
+}
+
+function estimateColWidths(): number[] {
+  const cols = props.columns || [];
+  const n = cols.length;
+  if (n <= 0) return [];
+
+  const rows = props.rows || [];
+  const sample = Math.min(rows.length, WIDTH_SAMPLE_ROWS);
+  const maxLens = cols.map((col) => String(col || '').length);
+
+  for (let r = 0; r < sample; r++) {
+    const row = rows[r];
+    if (!row) continue;
+    for (let c = 0; c < n; c++) {
+      const col = cols[c]!;
+      const len = cellTextLen(row[col]);
+      if (len > maxLens[c]!) maxLens[c] = len;
+    }
+  }
+
+  return maxLens.map((len) => widthFromMaxChars(len));
 }
 
 function initColWidths() {
@@ -84,9 +126,9 @@ function initColWidths() {
     colWidths.value = [];
     return;
   }
-  const w = defaultColWidth();
-  colWidths.value = Array.from({ length: n }, () => w);
+  colWidths.value = estimateColWidths();
 }
+
 
 function widthAt(index: number) {
   return colWidths.value[index] || COL_DEFAULT_WIDTH;
@@ -289,7 +331,7 @@ onMounted(() => {
   if (scrollRef.value && typeof ResizeObserver !== 'undefined') {
     ro = new ResizeObserver(() => {
       measure();
-      if (!userResized.value) initColWidths();
+      // 列宽按内容估算，视口变化不强制重均分（避免把长列又压成一样宽）
     });
     ro.observe(scrollRef.value);
   }
@@ -302,7 +344,12 @@ onBeforeUnmount(() => {
 });
 
 watch(
-  () => props.columns.join('\0'),
+  () => [
+    props.columns.join('\0'),
+    props.rows?.length || 0,
+    // 同一长度换结果时也重算（取首行签名）
+    props.rows?.[0] ? props.columns.map((c) => String(props.rows[0]?.[c] ?? '')).join('\0') : '',
+  ],
   () => {
     userResized.value = false;
     initColWidths();

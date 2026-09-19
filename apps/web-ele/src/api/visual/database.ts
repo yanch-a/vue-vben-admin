@@ -200,6 +200,8 @@ export function executeDml(data: {
 export function executeDdl(data: {
   dbConfigId: number | string
   instanceName?: string
+  /** DROP INDEX 等不携带表名的语法，用于后端核对索引归属与表级权限 */
+  permissionTableName?: string
   sql: string
 }) {
   return request({
