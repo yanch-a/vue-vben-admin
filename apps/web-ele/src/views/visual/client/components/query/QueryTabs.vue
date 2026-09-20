@@ -170,6 +170,7 @@ onBeforeUnmount(() => {
       @dragleave="onTabDragLeave"
       @drop="onTabDrop($event, t)"
     >
+      <span v-if="t.id === activeId" class="active-marker" aria-hidden="true" />
       <span class="q-tab-title">{{ tabTitle(t) }}</span>
       <button type="button" class="close" @click.stop="emit('close', t.id)">
         ×
@@ -228,15 +229,18 @@ onBeforeUnmount(() => {
   overflow-y: auto;
 }
 .q-tab {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 6px 10px;
+  padding: 6px 12px 8px;
   font-size: var(--vc-ui-font-size, 13px);
   cursor: pointer;
   border: 1px solid transparent;
   white-space: nowrap;
   min-width: 0;
+  color: var(--el-text-color-regular);
+  transition: background-color 0.15s ease, color 0.15s ease, box-shadow 0.15s ease;
 }
 .placement-top .q-tab {
   border-bottom: none;
@@ -246,6 +250,10 @@ onBeforeUnmount(() => {
   border-right: none;
   border-radius: 0 4px 4px 0;
   margin-right: 0;
+  padding: 8px 10px 8px 12px;
+}
+.q-tab:hover:not(.active) {
+  background: var(--el-fill-color);
 }
 .q-tab-title {
   overflow: hidden;
@@ -262,14 +270,31 @@ onBeforeUnmount(() => {
 .q-tab {
   user-select: none;
 }
+/* 主题主色高亮当前查询页签 */
 .q-tab.active {
-  background: var(--el-bg-color);
-  border-color: var(--el-border-color);
+  background: color-mix(in srgb, var(--el-color-primary) 16%, var(--el-bg-color));
+  border-color: var(--el-color-primary-light-5);
+  color: var(--el-color-primary);
+  font-weight: 600;
+  box-shadow: inset 0 -3px 0 0 var(--el-color-primary);
+  z-index: 1;
 }
 .placement-left .q-tab.active {
-  border-right-color: var(--el-bg-color);
+  box-shadow: inset -3px 0 0 0 var(--el-color-primary);
+  border-right-color: transparent;
+}
+.active-marker {
+  flex-shrink: 0;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--el-color-primary);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--el-color-primary) 28%, transparent);
 }
 .q-tab.dirty .q-tab-title {
+  color: var(--el-color-warning);
+}
+.q-tab.active.dirty .q-tab-title {
   color: var(--el-color-warning);
 }
 .close,
@@ -280,6 +305,9 @@ onBeforeUnmount(() => {
   font-size: 14px;
   color: var(--el-text-color-secondary);
   flex-shrink: 0;
+}
+.q-tab.active .close {
+  color: var(--el-color-primary);
 }
 .add {
   padding: 4px 8px;

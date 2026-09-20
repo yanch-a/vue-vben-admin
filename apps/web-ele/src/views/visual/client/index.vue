@@ -2854,6 +2854,7 @@ onBeforeUnmount(() => {
               clearable
               size="small"
               class="instance-select"
+              :class="{ 'has-instance': !!activeTab.instanceName }"
               :placeholder="`选择${instanceLabel}`"
             >
               <template #label="{ label }">
@@ -3233,7 +3234,16 @@ onBeforeUnmount(() => {
   flex-wrap: wrap;
 }
 .instance-select {
-  width: 200px;
+  width: 220px;
+}
+/* 已选库时用主题主色底，亮/暗色与品牌色自动适配 */
+.instance-select.has-instance :deep(.el-select__wrapper) {
+  background: color-mix(in srgb, var(--el-color-primary) 14%, var(--el-bg-color));
+  box-shadow: 0 0 0 1px var(--el-color-primary-light-5) inset;
+}
+.instance-select.has-instance :deep(.el-select__selected-item) {
+  color: var(--el-color-primary);
+  font-weight: 600;
 }
 .instance-select-label,
 .instance-option-row {
@@ -3247,8 +3257,8 @@ onBeforeUnmount(() => {
   width: 8px;
   height: 8px;
   border-radius: 50%;
-  background: var(--el-color-success);
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--el-color-success) 28%, transparent);
+  background: var(--el-color-primary);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--el-color-primary) 28%, transparent);
 }
 
 .editor-area {

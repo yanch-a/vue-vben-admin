@@ -39,6 +39,7 @@ const emit = defineEmits<{
 }>();
 
 const { preferences, setConnectionColor } = useClientPreferences();
+const barRef = ref<HTMLElement>();
 const importInputRef = ref<HTMLInputElement>();
 const connectionImportInputRef = ref<HTMLInputElement>();
 /** 连接级导入时锁定目标 sessionId，避免异步选文件后串连接 */
@@ -72,11 +73,32 @@ function tabLabel(c: DbConnection) {
 
 function tabStyle(c: DbConnection) {
   const bg = preferences.connectionColors[String(c.id)];
+  const isActive = c.sessionId === props.activeId;
+  // 自定义颜色时仍用主题主色描边/底边，保证当前连接一眼可辨
   if (!bg) return undefined;
+  if (isActive) {
+    return {
+      backgroundColor: bg,
+      borderColor: 'var(--el-color-primary)',
+      boxShadow: 'inset 0 -3px 0 0 var(--el-color-primary)',
+    };
+  }
   return {
     backgroundColor: bg,
     borderColor: 'transparent',
+    opacity: 0.78,
   };
+}
+
+/** 竖向滚轮转为横向滚动，便于浏览多个连接页签 */
+function onBarWheel(e: WheelEvent) {
+  const el = barRef.value;
+  if (!el || el.scrollWidth <= el.clientWidth) return;
+  // 已有明显横向位移时交给浏览器默认行为
+  if (Math.abs(e.deltaX) > Math.abs(e.deltaY)) return;
+  if (e.deltaY === 0) return;
+  e.preventDefault();
+  el.scrollLeft += e.deltaY;
 }
 
 function closeCtx() {
@@ -181,10 +203,13 @@ function onDocClick() {
 onMounted(() => {
   document.addEventListener('click', onDocClick);
   document.addEventListener('scroll', closeCtx, true);
+  // passive: false 才能 preventDefault，把竖向滚轮转成横向滚动
+  barRef.value?.addEventListener('wheel', onBarWheel, { passive: false });
 });
 onBeforeUnmount(() => {
   document.removeEventListener('click', onDocClick);
   document.removeEventListener('scroll', closeCtx, true);
+  barRef.value?.removeEventListener('wheel', onBarWheel);
 });
 
 /** 供 Electron 原生菜单复用同一套文件选择器 */
@@ -194,16 +219,22 @@ defineExpose({
 </script>
 
 <template>
-  <div class="connection-tabs" @contextmenu="onBarContextMenu">
+  <div
+    ref="barRef"
+    class="connection-tabs"
+    @contextmenu="onBarContextMenu"
+  >
     <div
       v-for="c in connections"
       :key="c.sessionId"
       class="conn-tab"
       :class="{ active: c.sessionId === activeId }"
       :style="tabStyle(c)"
+      :title="`${tabLabel(c)} · ${c.dbType} · ${c.dbHost || ''}`"
       @click="emit('change', c.sessionId)"
       @contextmenu="onTabContextMenu($event, c)"
     >
+      <span v-if="c.sessionId === activeId" class="active-marker" aria-hidden="true" />
       <span class="name">{{ tabLabel(c) }}</span>
       <span class="meta">{{ c.dbType }} · {{ c.dbHost || '' }}</span>
       <button
@@ -289,26 +320,53 @@ defineExpose({
   display: flex;
   align-items: stretch;
   gap: 2px;
-  min-height: 36px;
+  min-height: 38px;
   border-bottom: 1px solid var(--el-border-color);
   background: var(--el-fill-color-light);
   overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: thin;
 }
 .conn-tab {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 6px 10px;
+  padding: 6px 12px 8px;
   cursor: pointer;
   border: 1px solid transparent;
   border-bottom: none;
   border-radius: 4px 4px 0 0;
   white-space: nowrap;
   font-size: var(--vc-ui-font-size, 13px);
+  color: var(--el-text-color-regular);
+  transition: background-color 0.15s ease, color 0.15s ease, box-shadow 0.15s ease;
 }
+.conn-tab:hover:not(.active) {
+  background: var(--el-fill-color);
+}
+/* 主题主色高亮当前连接，随亮/暗色与品牌色变化 */
 .conn-tab.active {
-  background: var(--el-bg-color);
-  border-color: var(--el-border-color);
+  background: color-mix(in srgb, var(--el-color-primary) 16%, var(--el-bg-color));
+  border-color: var(--el-color-primary-light-5);
+  color: var(--el-color-primary);
+  box-shadow: inset 0 -3px 0 0 var(--el-color-primary);
+  z-index: 1;
+}
+.conn-tab.active .name {
+  font-weight: 700;
+}
+.conn-tab.active .meta {
+  color: var(--el-color-primary);
+  opacity: 0.88;
+}
+.active-marker {
+  flex-shrink: 0;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--el-color-primary);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--el-color-primary) 28%, transparent);
 }
 .add-connection {
   flex: 0 0 auto;
@@ -335,6 +393,9 @@ defineExpose({
   font-size: 16px;
   line-height: 1;
   color: var(--el-text-color-secondary);
+}
+.conn-tab.active .close {
+  color: var(--el-color-primary);
 }
 .empty {
   padding: 8px 4px;
