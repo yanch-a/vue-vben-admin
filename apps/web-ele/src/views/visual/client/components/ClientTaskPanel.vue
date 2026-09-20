@@ -1,30 +1,31 @@
 <script lang="ts" setup>
+import type { ClientTask } from '../composables/useClientTasks';
+
 /**
  * 右上角悬浮任务进度：进行中 / 近 7 天已完成。
  * 数据来自 useClientTasks（复制 + 结构文档）。
  * @author yanch
  */
 import { computed } from 'vue';
+
 import { Refresh } from '@element-plus/icons-vue';
 import { ElMessageBox } from 'element-plus';
-
-import type { ClientTask } from '../composables/useClientTasks';
 
 defineOptions({ name: 'ClientTaskPanel' });
 
 const props = defineProps<{
-  modelValue: boolean;
-  tab: 'running' | 'done';
-  running: ClientTask[];
   done: ClientTask[];
+  modelValue: boolean;
   refreshing?: boolean;
+  running: ClientTask[];
+  tab: 'done' | 'running';
 }>();
 
 const emit = defineEmits<{
-  'update:modelValue': [boolean];
-  'update:tab': ['running' | 'done'];
   cancel: [task: ClientTask];
   refresh: [];
+  'update:modelValue': [boolean];
+  'update:tab': ['done' | 'running'];
 }>();
 
 const visible = computed({
@@ -94,7 +95,7 @@ function durationText(ms?: number) {
 }
 
 function canCancel(t: ClientTask) {
-  return isRunningStatus(t.status);
+  return isRunningStatus(t.status) && !t.cancelRequested;
 }
 
 async function onCancel(t: ClientTask) {
@@ -154,6 +155,12 @@ async function onCancel(t: ClientTask) {
         </div>
         <div class="meta">
           <span v-if="t.total">{{ t.done }} / {{ t.total }}</span>
+          <span v-if="t.source === 'copy' && t.currentRows && isRunning(t)">
+            {{ $tr('当前表') }} {{ t.currentRows }} {{ $tr('行') }}
+          </span>
+          <span v-if="t.source === 'copy' && t.copiedRows">
+            {{ $tr('累计') }} {{ t.copiedRows }} {{ $tr('行') }}
+          </span>
           <span v-if="durationText(t.elapsedMs)">{{ $tr('耗时') }} {{ durationText(t.elapsedMs) }}</span>
           <span v-if="t.current && isRunning(t)">{{ $tr('对象') }} {{ t.current }}</span>
           <span class="time">{{ timeText(t.updateTime || t.createTime) }}</span>
@@ -166,6 +173,9 @@ async function onCancel(t: ClientTask) {
         </div>
         <div v-if="canCancel(t)" class="actions">
           <ElButton size="small" type="danger" plain @click="onCancel(t)">{{ $tr('取消') }}</ElButton>
+        </div>
+        <div v-else-if="t.cancelRequested && isRunning(t)" class="actions">
+          <ElButton size="small" disabled>{{ $tr('取消中…') }}</ElButton>
         </div>
       </div>
     </ElScrollbar>

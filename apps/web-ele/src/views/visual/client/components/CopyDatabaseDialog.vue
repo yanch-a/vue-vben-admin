@@ -1,4 +1,6 @@
 <script lang="ts" setup>
+import type { DbConnection } from '../composables/useConnectionStore';
+
 /**
  * 将数据库/表复制到不同主机（参考 SQLyog）
  * - 左侧：来源对象勾选（第一期仅表可勾选，其它类型置灰）
@@ -9,30 +11,30 @@
  */
 import { computed, reactive, ref, watch } from 'vue';
 
+import { ElMessage } from 'element-plus';
+
 import { getInstances, getTables } from '#/api/visual/database';
-import { startDbCopy, type DbCopyTaskVO } from '#/api/visual/dbCopy';
+import { type DbCopyTaskVO, startDbCopy } from '#/api/visual/dbCopy';
 import { getDbConfigList } from '#/api/visual/vq';
+
 import { visualClientConfig } from '../config';
 import { resolveSqlDialect } from '../dialect/sqlDialect';
-import type { DbConnection } from '../composables/useConnectionStore';
-
-import { ElMessage } from 'element-plus';
 
 defineOptions({ name: 'CopyDatabaseDialog' });
 
 const props = defineProps<{
   modelValue: boolean;
-  sourceConnection: DbConnection | null;
-  sourceInstance: string;
-  /** 右键单表时预勾选 */
-  preselectedTables?: string[];
   /** 已打开的连接（优先作为目标候选） */
   openConnections?: DbConnection[];
+  /** 右键单表时预勾选 */
+  preselectedTables?: string[];
+  sourceConnection: DbConnection | null;
+  sourceInstance: string;
 }>();
 
 const emit = defineEmits<{
-  'update:modelValue': [boolean];
   started: [task: DbCopyTaskVO];
+  'update:modelValue': [boolean];
 }>();
 
 const visible = computed({
@@ -65,14 +67,16 @@ const checkedTables = ref<string[]>([]);
 const tablesExpanded = ref(true);
 
 const targetConfigs = ref<
-  { id: number | string; label: string; dbType?: string }[]
+  { dbType?: string; id: number | string; label: string; }[]
 >([]);
 const targetInstances = ref<string[]>([]);
+/** 目标连接快速切换时，只允许最后一次实例请求更新下拉框。 */
+let targetInstanceRequestId = 0;
 
 const form = reactive({
-  targetDbConfigId: null as number | string | null,
+  targetDbConfigId: null as null | number | string,
   targetInstance: '',
-  mode: 'both' as 'structure' | 'both',
+  mode: 'both' as 'both' | 'structure',
   dropIfExists: true,
   bulkInsert: true,
   ignoreDefiner: false,
@@ -124,7 +128,7 @@ async function loadTargetConfigs() {
       dbType: c.dbType,
     }));
     // 合并：已打开优先，去重
-    const map = new Map<string, { id: number | string; label: string; dbType?: string }>();
+    const map = new Map<string, { dbType?: string; id: number | string; label: string; }>();
     [...fromOpen, ...fromAll].forEach((item) => {
       map.set(String(item.id), item);
     });
@@ -141,14 +145,22 @@ async function loadTargetConfigs() {
 }
 
 async function loadTargetInstances() {
+  const requestId = ++targetInstanceRequestId;
   if (!form.targetDbConfigId) {
     targetInstances.value = [];
     form.targetInstance = '';
     return;
   }
+  const targetDbConfigId = form.targetDbConfigId;
   loadingInstances.value = true;
   try {
-    const res: any = await getInstances(form.targetDbConfigId);
+    const res: any = await getInstances(targetDbConfigId);
+    if (
+      requestId !== targetInstanceRequestId ||
+      String(targetDbConfigId) !== String(form.targetDbConfigId)
+    ) {
+      return;
+    }
     const trees = res?.data || res || [];
     const instances = trees[0]?.instances || [];
     targetInstances.value = (instances || [])
@@ -163,10 +175,13 @@ async function loadTargetInstances() {
       form.targetInstance = '';
     }
   } catch {
+    if (requestId !== targetInstanceRequestId) return;
     targetInstances.value = [];
     form.targetInstance = '';
   } finally {
-    loadingInstances.value = false;
+    if (requestId === targetInstanceRequestId) {
+      loadingInstances.value = false;
+    }
   }
 }
 

@@ -6,9 +6,8 @@
  * 已完成只展示近 7 天。
  * @author yanch
  */
-import { computed, ref, watch } from 'vue';
+import { computed, effectScope, ref, watch } from 'vue';
 
-import { getDesktopScopedStorageKey } from '#/desktop/runtime';
 import {
   cancelSchemaDocTask,
   schemaDocTask,
@@ -16,9 +15,9 @@ import {
 } from '#/api/ai/schemaDoc';
 import {
   cancelDbCopyTask,
+  type DbCopyTaskVO,
   getDbCopyTask,
   listDbCopyTasks,
-  type DbCopyTaskVO,
 } from '#/api/visual/dbCopy';
 import {
   cancelSqlScriptTask,
@@ -26,16 +25,19 @@ import {
   listSqlScriptTasks,
   type SqlScriptTaskVO,
 } from '#/api/visual/sqlScript';
+import { getDesktopScopedStorageKey } from '#/desktop/runtime';
 
 export type ClientTaskKind =
   | 'COPY'
-  | 'SQL_SCRIPT'
-  | 'SCHEMA_INIT'
+  | 'SCHEMA_ANALYZE'
   | 'SCHEMA_GENERATE'
-  | 'SCHEMA_ANALYZE';
+  | 'SCHEMA_INIT'
+  | 'SQL_SCRIPT';
 export type ClientTaskSource = 'copy' | 'schema' | 'sqlScript';
 
 export interface ClientTask {
+  cancelRequested?: boolean;
+  copiedRows?: number;
   id: string;
   source: ClientTaskSource;
   kind: ClientTaskKind;
@@ -45,6 +47,7 @@ export interface ClientTask {
   total: number;
   done: number;
   current?: string;
+  currentRows?: number;
   message?: string;
   createTime: number;
   updateTime?: number;
@@ -64,12 +67,14 @@ const DONE_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 
 const tasks = ref<ClientTask[]>([]);
 const panelVisible = ref(false);
-const activeTab = ref<'running' | 'done'>('running');
+const activeTab = ref<'done' | 'running'>('running');
 const polling = ref(false);
 const refreshing = ref(false);
-let timer: ReturnType<typeof setInterval> | null = null;
+let timer: null | ReturnType<typeof setInterval> = null;
 /** 当前 timer 用的间隔，切换可见/后台时要重建 */
 let timerMs = 0;
+/** 脱离页面组件作用域，路由卸载后监听不会失效；模块生命周期内只创建一次。 */
+const panelWatchScope = effectScope(true);
 let panelWatchBound = false;
 
 /** 后端可能给字符串，复制任务枚举序列化偶发成对象 */
@@ -117,6 +122,8 @@ function copyTitle(raw: DbCopyTaskVO) {
 
 function fromCopy(raw: DbCopyTaskVO): ClientTask {
   return {
+    cancelRequested: raw.cancelRequested,
+    copiedRows: raw.copiedRows,
     id: raw.taskId,
     source: 'copy',
     kind: 'COPY',
@@ -126,6 +133,7 @@ function fromCopy(raw: DbCopyTaskVO): ClientTask {
     total: raw.totalObjects || 0,
     done: raw.processedObjects || 0,
     current: raw.currentObject,
+    currentRows: raw.currentTableRows,
     message: raw.message,
     createTime: raw.createTime || 0,
     updateTime: raw.updateTime,
@@ -257,20 +265,27 @@ export function useClientTasks() {
       listSqlScriptTasks(showErrorMessage),
     ]);
     const next: ClientTask[] = [];
+    const failedSources = new Set<ClientTaskSource>();
     if (copyRes.status === 'fulfilled') {
       for (const raw of unwrapList(copyRes.value)) {
         if (raw?.taskId) next.push(fromCopy(raw));
       }
+    } else {
+      failedSources.add('copy');
     }
     if (schemaRes.status === 'fulfilled') {
       for (const raw of unwrapList(schemaRes.value)) {
         if (raw?.taskId) next.push(fromSchema(raw));
       }
+    } else {
+      failedSources.add('schema');
     }
     if (scriptRes.status === 'fulfilled') {
       for (const raw of unwrapList(scriptRes.value)) {
         if (raw?.taskId) next.push(fromSqlScript(raw));
       }
+    } else {
+      failedSources.add('sqlScript');
     }
     // 刚提交的任务列表可能还没带上，进行中即使不在列表里也先钉住，再 refreshOne。
     const seen = new Set(next.map((t) => `${t.source}:${t.id}`));
@@ -278,17 +293,18 @@ export function useClientTasks() {
       const key = `${t.source}:${t.id}`;
       // 服务端已带回同一条（含终态）时，绝不能再留本地 PENDING
       if (seen.has(key)) return false;
-      if (!isActive(t.status)) return false;
-      return true;
+      // 某一类列表接口临时失败时，其历史任务也必须保留，不能让已完成记录闪退。
+      return isActive(t.status) || failedSources.has(t.source);
     });
     tasks.value = [...next, ...leftover];
     pruneCompleted();
     persistRunning();
 
     // 列表里还没有、或该侧接口失败：逐条问详情，避免刚提交的任务被抹掉
-    if (leftover.length) {
+    const activeLeftover = leftover.filter((t) => isActive(t.status));
+    if (activeLeftover.length) {
       await Promise.all(
-        leftover.map((t) => refreshOne(t, showErrorMessage)),
+        activeLeftover.map((t) => refreshOne(t, showErrorMessage)),
       );
       pruneCompleted();
       persistRunning();
@@ -379,7 +395,7 @@ export function useClientTasks() {
     syncPolling();
   }
 
-  function openPanel(tab: 'running' | 'done' = 'running') {
+  function openPanel(tab: 'done' | 'running' = 'running') {
     const alreadyOpen = panelVisible.value;
     activeTab.value = tab;
     panelVisible.value = true;
@@ -462,11 +478,11 @@ export function useClientTasks() {
     } else {
       await cancelSchemaDocTask(task.id);
     }
-    // 本地立刻标取消：僵尸任务后端也会写成 CANCELLED，避免刷新后又变进行中
+    // 取消是协作式的：数据库当前语句真正结束、事务回滚后，后端才会返回 CANCELLED。
+    // 此处保留进行中状态，让轮询继续，避免界面先结束而后台仍在写数据。
     upsert({
       ...task,
-      status: 'CANCELLED',
-      message: '已取消',
+      message: '正在取消，等待当前数据库操作结束',
     });
     persistRunning();
     try {
@@ -476,13 +492,11 @@ export function useClientTasks() {
     }
   }
 
-  /** 页面进入恢复角标；有进行中先拉一次，再按后台间隔继续刷 */
+  /** 页面进入先以服务端为准恢复任务；本地缓存只负责在请求返回前提供角标。 */
   async function bootstrap() {
     restoreCache();
     pruneCompleted();
-    if (hasRunning.value) {
-      await refreshAll();
-    }
+    await refreshAll(false);
     syncPolling();
   }
 
@@ -492,13 +506,15 @@ export function useClientTasks() {
 
   if (!panelWatchBound) {
     panelWatchBound = true;
-    watch(panelVisible, (open) => {
-      if (open) {
-        void onPanelOpened();
-      } else {
-        // 收起后面板不关轮询，只把间隔从 5s 换成 20s
-        syncPolling();
-      }
+    panelWatchScope.run(() => {
+      watch(panelVisible, (open) => {
+        if (open) {
+          void onPanelOpened();
+        } else {
+          // 收起后面板不关轮询，只把间隔从 5s 换成 20s
+          syncPolling();
+        }
+      });
     });
   }
 
