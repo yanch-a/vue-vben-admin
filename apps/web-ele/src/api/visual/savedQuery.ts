@@ -12,6 +12,7 @@ const savedQueryGroupUrl = adminUrl + '/savedQueryGroup/';
 export function listSavedQueries(params: {
   dbConfigId: number | string;
   instanceName: string;
+  schemaName?: string;
 }) {
   return request({
     url: savedQueryUrl + 'listMine',
@@ -24,6 +25,7 @@ export function listSavedQueries(params: {
 export function listAllSavedQueries(params?: {
   dbConfigId?: number | string;
   instanceName?: string;
+  schemaName?: string;
 }) {
   return request({
     url: savedQueryUrl + 'listAllMine',
@@ -64,6 +66,7 @@ export function addSavedQuery(data: {
   sqlText: string;
   dbConfigId: number | string;
   instanceName: string;
+  schemaName?: string;
   groupId?: number | string | null;
   description?: string;
   orderNum?: number;
@@ -81,6 +84,7 @@ export function editSavedQuery(data: {
   sqlText?: string;
   dbConfigId?: number | string;
   instanceName?: string;
+  schemaName?: string;
   /** 传 0 表示移出分组 */
   groupId?: number | string | null;
   description?: string;

@@ -48,6 +48,22 @@ export interface ConnectionQueriesBundle {
   activeTabId?: string;
 }
 
+/** 会话持久化控制器，同时提供整会话和单连接查询的导入导出。 */
+export interface ClientSessionPersistController {
+  stop: () => void;
+  restore: () => ClientSessionSnapshot | null;
+  flushNow: () => void;
+  exportSnapshot: () => ClientSessionSnapshot;
+  importSnapshot: (raw: unknown) => ClientSessionSnapshot | null;
+  exportConnectionQueries: (
+    sessionId: number | string,
+  ) => ConnectionQueriesBundle | null;
+  importConnectionQueries: (
+    sessionId: number | string,
+    raw: unknown,
+  ) => ConnectionQueriesBundle | null;
+}
+
 export interface PersistHandles {
   openConnections: Ref<DbConnection[]>;
   activeConnectionId: Ref<number | string | null>;
@@ -112,6 +128,10 @@ function sanitizeTab(t: QueryTab | PersistedQueryTab): PersistedQueryTab | null 
     instanceName:
       (t as any).instanceName != null
         ? String((t as any).instanceName).slice(0, 200)
+        : undefined,
+    schemaName:
+      (t as any).schemaName != null
+        ? String((t as any).schemaName).slice(0, 200)
         : undefined,
     savedQueryId: (t as any).savedQueryId,
     savedSqlBaseline:
@@ -306,11 +326,9 @@ function writeSnapshot(snap: ClientSessionSnapshot) {
  * 启动持久化：change debounce + 每 10s 定时落盘；挂载时 restore
  * @author yanch
  */
-export function setupClientSessionPersist(h: PersistHandles): {
-  stop: () => void;
-  restore: () => ClientSessionSnapshot | null;
-  flushNow: () => void;
-} {
+export function setupClientSessionPersist(
+  h: PersistHandles,
+): ClientSessionPersistController {
   let timer: ReturnType<typeof setTimeout> | null = null;
   let intervalId: ReturnType<typeof setInterval> | null = null;
   let stopped = false;

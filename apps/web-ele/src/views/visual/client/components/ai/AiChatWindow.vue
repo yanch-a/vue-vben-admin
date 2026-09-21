@@ -133,7 +133,9 @@ onMounted(async () => {
 async function openConvList() {
   convDrawer.value = true;
   const res: any = await listConversations({ dbConfigId: props.dbConfigId as any });
-  convs.value = res?.data || [];
+  convs.value = (res?.data || []).filter(
+    (item: any) => String(item.instanceName || '') === String(props.instanceName || ''),
+  );
 }
 
 /** 新建会话并重新继承当前数据库连接的脱敏默认值。 */
@@ -179,11 +181,12 @@ async function beforeMaskChange() {
   }
 }
 
-// 切换数据库连接时清空旧库会话，避免上下文与脱敏策略串到新连接。
+// 切换连接或实例时清空旧会话，避免历史上下文在另一数据库上继续执行工具。
 watch(
-  () => props.dbConfigId,
+  () => [props.dbConfigId, props.instanceName],
   (next, previous) => {
-    if (String(next ?? '') === String(previous ?? '')) return;
+    if (String(next?.[0] ?? '') === String(previous?.[0] ?? '')
+      && String(next?.[1] ?? '') === String(previous?.[1] ?? '')) return;
     if (running.value) stop();
     newConversation();
     pendingContext.value = {};

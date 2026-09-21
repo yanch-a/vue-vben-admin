@@ -36,6 +36,8 @@ export interface QueryTab {
   result: QueryResultState | null;
   /** 当前编辑器所属数据库/Schema（因库类型含义不同） */
   instanceName?: string;
+  /** PG/Oracle 族当前 Schema/Owner；MySQL 族留空。 */
+  schemaName?: string;
   /** 已关联的保存查询 ID（有则 Ctrl+S 可覆盖更新） */
   savedQueryId?: number | string;
   /**
@@ -53,13 +55,15 @@ export interface PersistedQueryTab {
   resultVisible: boolean;
   resultTab: 'result' | 'messages';
   instanceName?: string;
+  schemaName?: string;
   savedQueryId?: number | string;
   savedSqlBaseline?: string;
 }
 
-/** 已关联保存查询且内容相对上次保存有改动 */
+/** 未保存的新查询有内容，或已保存查询相对保存基线有改动。 */
 export function isQueryTabDirty(tab: QueryTab | null | undefined): boolean {
-  if (!tab || tab.savedQueryId == null) return false;
+  if (!tab) return false;
+  if (tab.savedQueryId == null) return !!tab.sql?.trim();
   const baseline =
     tab.savedSqlBaseline != null ? tab.savedSqlBaseline : tab.sql;
   return tab.sql !== baseline;
@@ -83,6 +87,7 @@ function createTab(
   sql = '',
   instanceName?: string,
   savedQueryId?: number | string,
+  schemaName?: string,
 ): QueryTab {
   const id = `q-${Date.now()}-${seq++}`;
   return {
@@ -94,6 +99,7 @@ function createTab(
     executing: false,
     result: null,
     instanceName,
+    schemaName,
     savedQueryId,
     // 从已保存查询打开时，基线=当前内容（干净）
     savedSqlBaseline: savedQueryId != null ? sql : undefined,
@@ -154,7 +160,7 @@ export function replaceConnectionTabs(
   const key = connKey(connectionId);
   const tabs: QueryTab[] = (list || [])
     .slice(0, MAX_TABS)
-    .map((t) => {
+    .map((t): QueryTab => {
       const sql = t.sql || '';
       const savedQueryId = t.savedQueryId;
       const savedSqlBaseline =
@@ -172,6 +178,7 @@ export function replaceConnectionTabs(
         executing: false,
         result: null,
         instanceName: t.instanceName,
+        schemaName: t.schemaName,
         savedQueryId,
         savedSqlBaseline,
       };
@@ -224,6 +231,7 @@ export function useQueryTabs(connectionId: () => number | string | null) {
     title?: string;
     sql?: string;
     instanceName?: string;
+    schemaName?: string;
     savedQueryId?: number | string;
     activate?: boolean;
   }) {
@@ -248,6 +256,7 @@ export function useQueryTabs(connectionId: () => number | string | null) {
         }
         exist.title = opts.title || exist.title;
         exist.instanceName = opts.instanceName || exist.instanceName;
+        exist.schemaName = opts.schemaName || exist.schemaName;
         notifyClientSessionChange();
         return exist;
       }
@@ -257,6 +266,7 @@ export function useQueryTabs(connectionId: () => number | string | null) {
       opts?.sql || '',
       opts?.instanceName,
       opts?.savedQueryId,
+      opts?.schemaName,
     );
     list.push(tab);
     if (opts?.activate !== false) {
@@ -336,8 +346,9 @@ export function useQueryTabs(connectionId: () => number | string | null) {
     title?: string,
     instanceName?: string,
     savedQueryId?: number | string,
+    schemaName?: string,
   ) {
-    return addTab({ title, sql, instanceName, savedQueryId, activate: true });
+    return addTab({ title, sql, instanceName, savedQueryId, schemaName, activate: true });
   }
 
   return {

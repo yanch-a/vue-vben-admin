@@ -7,7 +7,7 @@
   import { useRouter } from 'vue-router'
 
   import { getMemberUser } from '@/api/member/memberUser'
-  import { getTables, testConnection } from '@/api/visual/database'
+  import { getTableTree, testConnection } from '@/api/visual/database'
   import {
     deleteDbConfig,
     editDbConfig,
@@ -429,8 +429,14 @@
         }
         tableCandidatesLoading.value = true
         try {
-          const { data } = await getTables(authDbConfigId.value, tableInstanceName.value.trim())
-          tableCandidates.value = data || []
+          const { data } = await getTableTree(authDbConfigId.value, tableInstanceName.value.trim())
+          tableCandidates.value = (data || []).flatMap((schema) =>
+            (schema.tables || []).map((table) => ({
+              ...table,
+              schemaName: table.schemaName || schema.schemaName,
+              qualifiedName: table.qualifiedName || table.tableName,
+            })),
+          )
         } catch (e) {
           console.error(e)
           tableCandidates.value = []
@@ -454,13 +460,14 @@
         const duplicate = tableGrants.value.some((row) => row.subjectType === tableSubjectType.value
           && String(row.subjectId) === String(tableSubjectId.value)
           && String(row.instanceName).toLowerCase() === instanceName.toLowerCase()
-          && String(row.tableName).toLowerCase() === String(table.tableName).toLowerCase())
+          && String(row.tableName).toLowerCase() === String(table.qualifiedName || table.tableName).toLowerCase())
         if (duplicate) return ElMessage.info('该表已在授权列表中')
         tableGrants.value.push({
           subjectType: tableSubjectType.value,
           subjectId: tableSubjectId.value,
           instanceName,
-          tableName: table.tableName,
+          // 始终保存 schema/owner 限定名，避免 public 与其它命名空间同名表发生串权。
+          tableName: table.qualifiedName || table.tableName,
           canRead: 1,
           canWriteData: 0,
           canWriteSchema: 0,
@@ -1129,7 +1136,10 @@
       </div>
       <div class="table-auth-layout">
         <el-table v-loading="tableCandidatesLoading" :data="tableCandidates" border size="small" height="250">
-          <el-table-column prop="tableName" :label="$tr('可选表')" min-width="150" />
+          <el-table-column prop="schemaName" :label="$tr('Schema / Owner')" min-width="110" />
+          <el-table-column prop="rawTableName" :label="$tr('可选表')" min-width="150">
+            <template #default="{ row }">{{ row.rawTableName || row.tableName }}</template>
+          </el-table-column>
           <el-table-column :label="$tr('操作')" width="70" align="center"><template #default="{ row }"><el-button link type="primary" @click="addTableGrant(row)">{{ $tr('加入') }}</el-button></template></el-table-column>
         </el-table>
         <el-table :data="tableGrants" border size="small" height="250">

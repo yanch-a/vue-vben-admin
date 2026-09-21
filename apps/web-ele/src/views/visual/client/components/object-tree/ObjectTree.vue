@@ -2,7 +2,10 @@
 /**
  * 对象浏览器（SQLyog 风格，全库通用）
  *
- * 树结构：实例(库/模式) → Tables/Views/Procedures/Functions/Triggers/Events/Queries → 叶子
+ * 树结构：
+ * 默认是 MySQL 族树：实例 → Tables/Views/... → 对象。
+ * PostgreSqlObjectTree / OracleObjectTree 通过 schemaMode 启用：
+ * 实例 → Schema/Owner → Tables/Views/.../Queries → 对象。
  * 表节点可再展开字段。使用 ElTree lazy：每层展开时再请求。
  *
  * 库差异只体现在 dbTypes.ts 的能力开关上（不支持的分类不渲染文件夹），
@@ -20,6 +23,7 @@ import {
   getInstances,
   getProcedures,
   getTableColumns,
+  getTableTree,
   getTables,
   getTriggers,
   getViews,
@@ -43,6 +47,8 @@ const props = defineProps<{
   filterText?: string;
   /** SQL 编辑器当前选中的库/实例，对象树对应节点后显示绿点 */
   activeInstanceName?: string;
+  /** 仅由 PG/Oracle 族包装组件传入；默认不启用，保持 MySQL 树路径独立。 */
+  schemaMode?: 'oracle' | 'postgresql';
 }>();
 
 const emit = defineEmits<{
@@ -52,6 +58,8 @@ const emit = defineEmits<{
   insertName: [name: string];
   /** 单击库节点：同步编辑器当前库 */
   selectInstance: [instanceName: string];
+  /** 单击 schema/owner：同步编辑器当前命名空间。 */
+  selectSchema: [payload: { instanceName: string; schemaName: string }];
   /** 单击表节点：供 F11 打开表 */
   selectTable: [
     payload: { instanceName: string; tableName: string; schemaName?: string },
@@ -62,6 +70,7 @@ const emit = defineEmits<{
       queryName: string;
       sqlText: string;
       instanceName: string;
+      schemaName?: string;
     },
   ];
   contextAction: [
@@ -84,6 +93,9 @@ const capabilities = computed(() => resolveCapabilities(props.dbType));
 /** 右键菜单文案：Oracle/达梦一级节点是「模式」而非「数据库」 */
 const instanceLabel = computed(() => instanceLabelOf(props.dbType));
 
+/** schema 分层只由独立的 PG/Oracle 包装组件开启，不根据 dbType 隐式改变 MySQL 树。 */
+const hasSchemaLayer = computed(() => !!props.schemaMode);
+
 const ctxMenu = reactive({
   visible: false,
   x: 0,
@@ -101,10 +113,15 @@ const propsTree = {
 
 /**
  * 实例下的对象文件夹，按当前库的能力开关裁剪。
+ * schema 分层数据库会在 schema 下单独构造 Tables，因此实例级可以关闭 Tables。
  * Queries 恒定存在：存的是「当前登录用户 + 当前连接 + 当前库」的已保存 SQL，
  * 属于客户端自身数据，与数据库是否支持 Event Scheduler 无关。
  */
-function buildFolderNodes(instanceName: string) {
+function buildFolderNodes(
+  instanceName: string,
+  schemaName?: string,
+  prefetched?: Record<string, any[]>,
+) {
   const caps = capabilities.value;
   const specs: Array<{ enabled: boolean; kind: string; label: string }> = [
     { kind: 'tables', label: 'Tables', enabled: true },
@@ -118,11 +135,13 @@ function buildFolderNodes(instanceName: string) {
   return specs
     .filter((s) => s.enabled)
     .map((s) => ({
-      id: `${s.kind}-${instanceName}`,
+      id: `${s.kind}-${instanceName}${schemaName ? `-${schemaName}` : ''}`,
       label: s.label,
       nodeType: 'folder',
       objectKind: s.kind,
       instanceName,
+      schemaName,
+      prefetchedNodes: prefetched?.[s.kind],
       isLeaf: false,
     }));
 }
@@ -166,51 +185,182 @@ const OBJECT_API: Record<string, (a: any, b: any) => Promise<any>> = {
   events: getEvents,
 };
 
-/** 展开「Tables/Views/...」文件夹时拉取对应对象列表 */
-async function loadFolder(node: any, resolve: (data: any[]) => void) {
-  const { objectKind, instanceName } = node.data;
+/**
+ * 将后端表元数据转为树节点。
+ * qualifiedName 用于权限判断和元数据请求，rawTableName 仅用于展示与 SQL 拆分。
+ */
+function toTableNode(instanceName: string, table: any) {
+  return {
+    id: `table-${instanceName}-${table.qualifiedName || table.tableName}`,
+    label:
+      table.displayName && table.displayName !== (table.rawTableName || table.tableName)
+        ? `${table.rawTableName || table.tableName} (${table.displayName})`
+        : table.rawTableName || table.tableName,
+    name: table.qualifiedName || table.tableName,
+    rawTableName: table.rawTableName || table.tableName,
+    qualifiedName: table.qualifiedName || table.tableName,
+    displayName: table.displayName || '',
+    nodeType: 'table',
+    instanceName,
+    schemaName: table.schemaName || undefined,
+    isLeaf: false,
+  };
+}
+
+/** 将视图/例程/触发器等元数据转为树节点，保留 schema 身份。 */
+function toProgramNode(instanceName: string, objectKind: string, object: any) {
+  const qualifiedName = object.objectName || '';
+  const rawName = object.schemaName && qualifiedName.includes('.')
+    ? qualifiedName.slice(qualifiedName.indexOf('.') + 1)
+    : qualifiedName;
+  return {
+    id: `${objectKind}-${instanceName}-${object.schemaName || ''}-${qualifiedName}`,
+    label: object.displayName && object.displayName !== qualifiedName
+      ? `${rawName} (${object.displayName})`
+      : rawName,
+    name: qualifiedName,
+    rawObjectName: rawName,
+    nodeType: objectKind,
+    objectKind,
+    instanceName,
+    schemaName: object.schemaName || undefined,
+    isLeaf: true,
+  };
+}
+
+/** 将已保存查询转为 Queries 叶子节点。 */
+function toSavedQueryNode(instanceName: string, query: any) {
+  return {
+    id: `saved-${query.id}`,
+    label: query.queryName,
+    name: query.queryName,
+    nodeType: 'savedQuery',
+    objectKind: 'queries',
+    instanceName,
+    schemaName: query.schemaName || undefined,
+    savedQueryId: query.id,
+    sqlText: query.sqlText,
+    isLeaf: true,
+  };
+}
+
+/** 读取可选对象列表；单类对象无权时不影响其它 schema 节点。 */
+async function readOptionalList(loader: () => Promise<any>): Promise<any[]> {
   try {
-    let list: any[] = [];
-    if (objectKind === 'tables') {
-      const res: any = await getTables(props.dbConfigId, instanceName);
-      const raw = res?.data || res || [];
-      // 写入客户端表清单，供 SQL 编辑器表名补全
-      rememberInstanceTables(
-        props.dbConfigId,
+    const res: any = await loader();
+    return res?.data || res || [];
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * 展开实例时构造第一层对象。
+ * PG/瀚高与 Oracle 族先按 schema/owner 分组，避免同名表混在一起；
+ * 其他数据库保持原来的实例级 Tables 文件夹。
+ */
+async function loadInstanceChildren(instanceName: string, resolve: (data: any[]) => void) {
+  if (!hasSchemaLayer.value) {
+    resolve(buildFolderNodes(instanceName));
+    return;
+  }
+  try {
+    const caps = capabilities.value;
+    const [schemas, views, procedures, functions, triggers, events, queries] = await Promise.all([
+      readOptionalList(() => getTableTree(props.dbConfigId, instanceName)),
+      caps.views ? readOptionalList(() => getViews(props.dbConfigId, instanceName)) : [],
+      caps.procedures ? readOptionalList(() => getProcedures(props.dbConfigId, instanceName)) : [],
+      caps.functions ? readOptionalList(() => getFunctions(props.dbConfigId, instanceName)) : [],
+      caps.triggers ? readOptionalList(() => getTriggers(props.dbConfigId, instanceName)) : [],
+      caps.events ? readOptionalList(() => getEvents(props.dbConfigId, instanceName)) : [],
+      readOptionalList(() => listSavedQueries({ dbConfigId: props.dbConfigId, instanceName })),
+    ]);
+    const allTables = schemas.flatMap((schema: any) => schema.tables || []);
+    rememberInstanceTables(
+      props.dbConfigId,
+      instanceName,
+      allTables.map((table: any) => table.qualifiedName || table.tableName).filter(Boolean),
+    );
+    const grouped = new Map<string, Record<string, any[]>>();
+    const ensureSchema = (schemaName: string) => {
+      const key = String(schemaName || '').trim();
+      if (!key) return undefined;
+      if (!grouped.has(key)) {
+        grouped.set(key, {
+          tables: [], views: [], procedures: [], functions: [],
+          triggers: [], events: [], queries: [],
+        });
+      }
+      return grouped.get(key);
+    };
+    for (const schema of schemas) {
+      const bucket = ensureSchema(schema.schemaName);
+      if (bucket) {
+        bucket.tables = (schema.tables || []).map((table: any) => toTableNode(instanceName, table));
+      }
+    }
+    const objectLists: Array<[string, any[]]> = [
+      ['views', views], ['procedures', procedures], ['functions', functions],
+      ['triggers', triggers], ['events', events],
+    ];
+    for (const [kind, objects] of objectLists) {
+      for (const object of objects) {
+        const bucket = ensureSchema(object.schemaName);
+        if (bucket) bucket[kind]!.push(toProgramNode(instanceName, kind, object));
+      }
+    }
+    // 旧版查询没有 schemaName：PG 归 public，Oracle 归当前可见的第一个 owner。
+    const fallbackSchema = props.schemaMode === 'postgresql'
+      ? 'public'
+      : (grouped.keys().next().value || instanceName);
+    for (const query of queries) {
+      const schemaName = query.schemaName || fallbackSchema;
+      const bucket = ensureSchema(schemaName);
+      if (bucket) bucket.queries!.push(toSavedQueryNode(instanceName, { ...query, schemaName }));
+    }
+    if (grouped.size === 0) ensureSchema(fallbackSchema);
+    const schemaNodes = [...grouped.entries()]
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([schemaName, objectNodes]) => ({
+        id: `schema-${instanceName}-${schemaName}`,
+        label: schemaName,
+        name: schemaName,
+        nodeType: 'schema',
         instanceName,
-        raw.map((t: any) => t.tableName).filter(Boolean),
-      );
-      list = raw.map((t: any) => ({
-        id: `table-${instanceName}-${t.tableName}`,
-        label:
-          t.displayName && t.displayName !== t.tableName
-            ? `${t.tableName} (${t.displayName})`
-            : t.tableName,
-        name: t.tableName,
-        /** 表注释，隐藏备注时展示只用 name */
-        displayName: t.displayName || '',
-        nodeType: 'table',
-        instanceName,
-        /** 真实 schema（PG=public；达梦=OWNER）；打开表 SQL 优先用此字段 */
-        schemaName: t.schemaName || undefined,
+        schemaName,
+        objectNodes,
         isLeaf: false,
       }));
+    resolve(schemaNodes);
+  } catch (error: any) {
+    ElMessage.error(error?.message || '加载 Schema 失败');
+    resolve([]);
+  }
+}
+
+/** 展开「Tables/Views/...」文件夹时拉取对应对象列表 */
+async function loadFolder(node: any, resolve: (data: any[]) => void) {
+  const { objectKind, instanceName, prefetchedNodes } = node.data;
+  try {
+    let list: any[] = [];
+    if (Array.isArray(prefetchedNodes)) {
+      // schema 下各分类已在实例展开时并行预取，避免重复扫描数据库目录。
+      list = prefetchedNodes;
+    } else if (objectKind === 'tables') {
+        const res: any = await getTables(props.dbConfigId, instanceName);
+        const raw = res?.data || res || [];
+        rememberInstanceTables(
+          props.dbConfigId,
+          instanceName,
+          raw.map((table: any) => table.qualifiedName || table.tableName).filter(Boolean),
+        );
+        list = raw.map((table: any) => toTableNode(instanceName, table));
     } else if (objectKind === 'queries') {
       const res: any = await listSavedQueries({
         dbConfigId: props.dbConfigId,
         instanceName,
       });
-      list = (res?.data || res || []).map((q: any) => ({
-        id: `saved-${q.id}`,
-        label: q.queryName,
-        name: q.queryName,
-        nodeType: 'savedQuery',
-        objectKind: 'queries',
-        instanceName,
-        savedQueryId: q.id,
-        sqlText: q.sqlText,
-        isLeaf: true,
-      }));
+      list = (res?.data || res || []).map((q: any) => toSavedQueryNode(instanceName, q));
     } else {
       const api = OBJECT_API[objectKind];
       if (!api) {
@@ -218,20 +368,12 @@ async function loadFolder(node: any, resolve: (data: any[]) => void) {
         return;
       }
       const res: any = await api(props.dbConfigId, instanceName);
-      list = (res?.data || res || []).map((o: any) => ({
-        id: `${objectKind}-${instanceName}-${o.objectName}`,
-        label: o.objectName,
-        name: o.objectName,
-        nodeType: objectKind,
-        instanceName,
-        isLeaf: true,
-      }));
+      list = (res?.data || res || []).map((o: any) => toProgramNode(instanceName, objectKind, o));
     }
-    resolve(
-      props.filterText
-        ? list.filter((n) => matchFilter(n.name || n.label))
-        : list,
-    );
+    if (props.filterText) {
+      list = list.filter((n) => matchFilter(n.name || n.label));
+    }
+    resolve(list);
   } catch (error: any) {
     ElMessage.error(error?.message || '加载失败');
     resolve([]);
@@ -261,7 +403,8 @@ async function loadColumns(node: any, resolve: (data: any[]) => void) {
 
 /**
  * ElTree lazy 回调：
- * - 展开库 → 返回对象文件夹
+ * - 展开库 → schema/owner 节点或对象文件夹
+ * - 展开 schema/owner → Tables 文件夹
  * - 展开文件夹 → 请求远端对象
  * - 展开表 → 请求字段
  * 注意：lazy 首次展开一定会调 load，切勿 resolve([]) 覆盖子节点。
@@ -278,11 +421,15 @@ function loadNode(node: any, resolve: (data: any[]) => void) {
     return;
   }
   if (data.nodeType === 'instance') {
-    resolve(buildFolderNodes(data.instanceName));
+    loadInstanceChildren(data.instanceName, resolve);
     return;
   }
   if (data.nodeType === 'folder') {
     loadFolder(node, resolve);
+    return;
+  }
+  if (data.nodeType === 'schema') {
+    resolve(buildFolderNodes(data.instanceName, data.schemaName, data.objectNodes || {}));
     return;
   }
   if (data.nodeType === 'table') {
@@ -308,6 +455,7 @@ function onNodeDblClick(data: any) {
       queryName: data.name || data.label,
       sqlText: data.sqlText || '',
       instanceName: data.instanceName,
+      schemaName: data.schemaName,
     });
     return;
   }
@@ -333,7 +481,7 @@ function onNodeDblClick(data: any) {
 function onNodeClick(data: any, node: any) {
   // 实例、二级目录：点击名称行展开/收起（表节点除外）
   if (
-    (data?.nodeType === 'instance' || data?.nodeType === 'folder') &&
+    (data?.nodeType === 'instance' || data?.nodeType === 'folder' || data?.nodeType === 'schema') &&
     node
   ) {
     if (node.expanded) {
@@ -344,6 +492,12 @@ function onNodeClick(data: any, node: any) {
   }
   if (data?.nodeType === 'instance' && data.instanceName) {
     emit('selectInstance', data.instanceName);
+  }
+  if (data?.nodeType === 'schema' && data.instanceName && data.schemaName) {
+    emit('selectSchema', {
+      instanceName: data.instanceName,
+      schemaName: data.schemaName,
+    });
   }
   if (data?.nodeType === 'table' && data.name) {
     emit('selectTable', {
@@ -411,13 +565,21 @@ function onCtxAction(action: TreeCtxAction) {
 
 function filterNode(value: string, data: any) {
   if (!value) return true;
-  return (data.label || '').toLowerCase().includes(value.toLowerCase());
+  const keyword = value.toLowerCase();
+  if ((data.label || '').toLowerCase().includes(keyword)) return true;
+  return data.nodeType === 'schema'
+    && Object.values(data.objectNodes || {}).some((nodes: any) =>
+      (nodes || []).some((child: any) =>
+        String(child.rawTableName || child.rawObjectName || child.name || child.label || '')
+          .toLowerCase().includes(keyword),
+      ),
+    );
 }
 
 /** 勾选「隐藏表备注」后，表节点只显示物理表名 */
 function formatNodeLabel(data: any, node: any) {
   if (data?.nodeType === 'table' && preferences.hideTableComments) {
-    return data.name || node.label;
+    return data.rawTableName || data.name || node.label;
   }
   return node.label;
 }
@@ -444,6 +606,14 @@ function findTreeNode(tree: any, id: string) {
 function reloadFolder(objectKind: string, instanceName: string) {
   const tree = treeRef.value;
   if (!tree || !instanceName) return;
+  if (hasSchemaLayer.value) {
+    const ins = findTreeNode(tree, `ins-${instanceName}`);
+    if (!ins) return;
+    ins.loaded = false;
+    if (ins.expanded) ins.collapse?.();
+    ins.expand();
+    return;
+  }
   const node = findTreeNode(tree, `${objectKind}-${instanceName}`);
   if (!node) {
     const ins = findTreeNode(tree, `ins-${instanceName}`);
@@ -477,7 +647,7 @@ async function reloadInstance(instanceName: string) {
     insNode.collapse?.();
   }
   await waitExpand(insNode);
-  const kinds = [
+  const kinds = hasSchemaLayer.value ? [] : [
     'tables',
     'views',
     'procedures',
@@ -550,6 +720,7 @@ function waitExpand(node: any): Promise<void> {
  */
 async function locateTarget(opts: {
   instanceName?: string;
+  schemaName?: string;
   savedQueryId?: number | string;
 }) {
   const tree = treeRef.value;
@@ -576,7 +747,36 @@ async function locateTarget(opts: {
     return;
   }
 
-  const folderKey = `queries-${instanceName}`;
+  let folderKey = `queries-${instanceName}`;
+  if (hasSchemaLayer.value) {
+    const schemaName = (opts.schemaName || '').trim();
+    let schemaNode = schemaName
+      ? findTreeNode(tree, `schema-${instanceName}-${schemaName}`)
+      : null;
+    if (!schemaNode && opts.savedQueryId != null) {
+      // 兼容旧保存查询：没有 schemaName 时依次展开 schema 定位。
+      const instanceChildren = insNode.childNodes || [];
+      for (const candidate of instanceChildren) {
+        await waitExpand(candidate);
+        const queryFolder = (candidate.childNodes || []).find(
+          (child: any) => child.data?.objectKind === 'queries',
+        );
+        if (!queryFolder) continue;
+        await waitExpand(queryFolder);
+        if (findTreeNode(tree, `saved-${opts.savedQueryId}`)) {
+          schemaNode = candidate;
+          break;
+        }
+      }
+    }
+    if (!schemaNode) {
+      ElMessage.warning('未找到查询所属 Schema');
+      applyLocateHighlight(insKey);
+      return;
+    }
+    await waitExpand(schemaNode);
+    folderKey = `queries-${instanceName}-${schemaNode.data.schemaName}`;
+  }
   const folderNode = tree.getNode(folderKey);
   if (!folderNode) {
     ElMessage.warning('未找到 Queries 目录');

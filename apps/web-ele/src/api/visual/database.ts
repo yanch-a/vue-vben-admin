@@ -81,7 +81,28 @@ export function getInstances(dbConfigId: any) {
  */
 export function getTables(dbConfigId: any, instanceName: any) {
   return request({
-    url: databaseUrl + 'getTables/' + dbConfigId + '/' + instanceName,
+    url:
+      databaseUrl +
+      'getTables/' +
+      encodeURIComponent(dbConfigId) +
+      '/' +
+      encodeURIComponent(instanceName),
+    method: 'get',
+  })
+}
+
+/**
+ * 获取按 schema/owner 分组的表树。
+ * PostgreSQL 族返回 schema，Oracle 族返回 owner，避免前端再从表名猜测命名空间。
+ */
+export function getTableTree(dbConfigId: any, instanceName: any) {
+  return request({
+    url:
+      databaseUrl +
+      'getTableTree/' +
+      encodeURIComponent(dbConfigId) +
+      '/' +
+      encodeURIComponent(instanceName),
     method: 'get',
   })
 }

@@ -11,6 +11,7 @@ export interface PendingSavedQueryOpen {
   queryName: string;
   sqlText: string;
   instanceName: string;
+  schemaName?: string;
   dbConfigId: number | string;
 }
 

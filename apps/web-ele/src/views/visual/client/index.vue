@@ -44,6 +44,8 @@ import ConnectionDialog from './components/ConnectionDialog.vue';
 import ConnectionTabs from './components/ConnectionTabs.vue';
 import EmptyWorkspace from './components/EmptyWorkspace.vue';
 import ObjectTree from './components/object-tree/ObjectTree.vue';
+import OracleObjectTree from './components/object-tree/OracleObjectTree.vue';
+import PostgreSqlObjectTree from './components/object-tree/PostgreSqlObjectTree.vue';
 import QueryTabs from './components/query/QueryTabs.vue';
 import ResultPanel from './components/query/ResultPanel.vue';
 import SqlEditor from './components/query/SqlEditor.vue';
@@ -79,11 +81,13 @@ import {
 import {
   applyQueryTabsSnapshot,
   getQueryTabsSnapshot,
+  isQueryTabDirty,
   replaceConnectionTabs,
   useQueryTabs,
 } from './composables/useQueryTabs';
 import { visualClientConfig } from './config';
 import { resolveSqlDialect, resolveTableIdent } from './dialect/sqlDialect';
+import { resolveDialectFamily } from './dialect/dbTypes';
 import type { TableDesignSqlResult } from './dialect/tableDesignerDialect';
 import { isDestructiveDdl, looksLikeControlledDdl } from './utils/controlledDdl';
 import {
@@ -127,7 +131,7 @@ const {
   activeConnectionId,
   activeConnection,
   openConnection,
-  closeConnection,
+  closeConnection: closeConnectionDirect,
   setActiveConnection,
   updateConnection,
 } = useConnectionStore();
@@ -155,13 +159,53 @@ const {
   activeTabId,
   activeTab,
   addTab,
-  closeTab,
-  closeAllTabs,
-  closeOtherTabs,
+  closeTab: closeTabDirect,
+  closeAllTabs: closeAllTabsDirect,
+  closeOtherTabs: closeOtherTabsDirect,
   reorderTabs,
   openSqlInNewTab,
   markTabSaved,
 } = useQueryTabs(() => activeConnectionId.value);
+
+/** 关闭查询页签前统一保护未保存 SQL，避免单关、全关、关其它三条路径静默丢稿。 */
+async function confirmDiscardQueryTabs(targets: typeof tabs.value) {
+  if (!targets.some((tab) => isQueryTabDirty(tab))) return true;
+  try {
+    await ElMessageBox.confirm(
+      '要关闭的页签中有未保存 SQL，关闭后这些修改将丢失。是否继续？',
+      '未保存的查询',
+      { type: 'warning', confirmButtonText: '继续关闭', cancelButtonText: '取消' },
+    );
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function closeTab(tabId: string) {
+  const target = tabs.value.find((tab) => tab.id === tabId);
+  if (target && !(await confirmDiscardQueryTabs([target]))) return;
+  closeTabDirect(tabId);
+}
+
+async function closeAllTabs() {
+  if (!(await confirmDiscardQueryTabs(tabs.value))) return;
+  closeAllTabsDirect();
+}
+
+async function closeOtherTabs(keepTabId: string) {
+  const targets = tabs.value.filter((tab) => tab.id !== keepTabId);
+  if (!(await confirmDiscardQueryTabs(targets))) return;
+  closeOtherTabsDirect(keepTabId);
+}
+
+/** 关闭连接会一并隐藏其查询页签，因此同样检查该连接下的未保存 SQL。 */
+async function closeConnection(sessionId: number | string) {
+  const snapshot = getQueryTabsSnapshot();
+  const connectionTabs = snapshot.tabsByConnection[String(sessionId)] || [];
+  if (!(await confirmDiscardQueryTabs(connectionTabs))) return;
+  closeConnectionDirect(sessionId);
+}
 
 const { queryTabsPlacement, queryTabsLeftWidth, TABS_LEFT_MIN, TABS_LEFT_MAX } =
   useClientPreferences();
@@ -183,7 +227,17 @@ const licenseForce = ref(false);
 const licenseHint = ref('');
 const licenseAllowed = ref(true);
 const sqlEditorRef = ref<InstanceType<typeof SqlEditor>>();
-const objectTreeRef = ref<InstanceType<typeof ObjectTree>>();
+const objectTreeRef = ref<any>();
+/**
+ * 不同方言族使用独立 Vue 组件入口。
+ * ObjectTree 始终保持 MySQL/通用扁平树，PG 与 Oracle 的 Schema 层不会反向影响它。
+ */
+const objectTreeComponent = computed(() => {
+  const family = resolveDialectFamily(activeConnection.value?.dbType);
+  if (family === 'POSTGRES_LIKE') return PostgreSqlObjectTree;
+  if (family === 'ORACLE_LIKE') return OracleObjectTree;
+  return ObjectTree;
+});
 const connectionTabsRef = ref<InstanceType<typeof ConnectionTabs>>();
 /** Electron 原生菜单订阅的取消函数 */
 let offDesktopSessionExport: (() => void) | undefined;
@@ -459,7 +513,17 @@ watch(
 /** 左侧单击库 → 当前编辑器所属库跟随变化 */
 function onSelectInstance(instanceName: string) {
   if (!activeTab.value || !instanceName) return;
+  if (activeTab.value.instanceName !== instanceName) {
+    activeTab.value.schemaName = undefined;
+  }
   activeTab.value.instanceName = instanceName;
+}
+
+/** 单击 PG/Oracle Schema：同步当前 Tab，供保存查询和新建对象确定归属。 */
+function onSelectSchema(payload: { instanceName: string; schemaName: string }) {
+  if (!activeTab.value || !payload.instanceName || !payload.schemaName) return;
+  activeTab.value.instanceName = payload.instanceName;
+  activeTab.value.schemaName = payload.schemaName;
 }
 
 /** 结果集对应表：仅用「已执行 SQL」解析，避免编辑时反复触发副作用 */
@@ -712,6 +776,7 @@ function onAddQueryTab() {
       activeTab.value?.instanceName ||
       activeConnection.value?.schemaName ||
       instanceOptions.value[0],
+    schemaName: activeTab.value?.schemaName,
   });
   if (!t) ElMessage.warning(`最多 ${MAX_TABS} 个查询`);
 }
@@ -898,6 +963,8 @@ async function tryConsumePendingSavedQuery() {
     );
     if (!tab) {
       ElMessage.warning(`同一连接最多 ${MAX_TABS} 个查询编辑器`);
+    } else {
+      tab.schemaName = pending.schemaName;
     }
   } finally {
     consumingPendingSavedQuery = false;
@@ -922,6 +989,7 @@ async function openTableInNewEditor(payload: {
     ElMessage.warning(`同一连接最多 ${MAX_TABS} 个查询编辑器`);
     return;
   }
+  tab.schemaName = payload.schemaName;
   await nextTick();
   // 仅「打开表」给默认 1:5，之后用户拖拽高度不再被普通查询覆盖
   applyEditorResultRatio(1, 5);
@@ -989,6 +1057,7 @@ function onOpenSavedQuery(payload: {
   queryName: string;
   sqlText: string;
   instanceName: string;
+  schemaName?: string;
 }) {
   const tab = openSqlInNewTab(
     payload.sqlText || '',
@@ -998,7 +1067,9 @@ function onOpenSavedQuery(payload: {
   );
   if (!tab) {
     ElMessage.warning(`同一连接最多 ${MAX_TABS} 个查询编辑器`);
+    return;
   }
+  tab.schemaName = payload.schemaName;
 }
 
 function onInsertName(name: string) {
@@ -1414,8 +1485,10 @@ async function openProgramObjectScript(
     node.nodeType === 'folder'
       ? node.objectKind
       : node.nodeType || node.objectKind || '';
-  const objectName =
-    action === 'create' ? undefined : node.name || node.objectName || undefined;
+  const createBaseName = `new_${String(objectKind || 'object').replace(/s$/, '')}`;
+  const objectName = action === 'create'
+    ? (node.schemaName ? `${node.schemaName}.${createBaseName}` : undefined)
+    : node.name || node.objectName || undefined;
   if (action !== 'create' && !objectName) {
     ElMessage.warning('对象名称不能为空');
     return;
@@ -1434,11 +1507,12 @@ async function openProgramObjectScript(
       ElMessage.warning('未生成脚本');
       return;
     }
-    openSqlInNewTab(
+    const tab = openSqlInNewTab(
       sql,
       data.title || `${action} ${objectName || objectKind}`,
       instanceName,
     );
+    if (tab) tab.schemaName = node.schemaName;
   } catch (e: any) {
     ElMessage.error(e?.msg || e?.message || '生成脚本失败');
   }
@@ -1828,6 +1902,7 @@ function locateCurrentInTree() {
   }
   objectTreeRef.value?.locateTarget?.({
     instanceName,
+    schemaName: tab.schemaName,
     savedQueryId: tab.savedQueryId,
   });
 }
@@ -2111,6 +2186,7 @@ async function persistActiveQuery(opts: {
         sqlText,
         dbConfigId: activeConnection.value.id,
         instanceName,
+        schemaName: activeTab.value.schemaName,
       });
       activeTab.value.title = name;
       markTabSaved(activeTab.value);
@@ -2121,6 +2197,7 @@ async function persistActiveQuery(opts: {
         sqlText,
         dbConfigId: activeConnection.value.id,
         instanceName,
+        schemaName: activeTab.value.schemaName,
       });
       const data = res?.data || res;
       activeTab.value.savedQueryId = data?.id;
@@ -2779,7 +2856,8 @@ onBeforeUnmount(() => {
               placeholder="Search As Input"
             />
           </div>
-          <ObjectTree
+          <component
+            :is="objectTreeComponent"
             ref="objectTreeRef"
             :db-config-id="activeConnection.id"
             :db-type="activeConnection.dbType"
@@ -2788,6 +2866,7 @@ onBeforeUnmount(() => {
             @open-table="onOpenTable"
             @insert-name="onInsertName"
             @select-instance="onSelectInstance"
+            @select-schema="onSelectSchema"
             @select-table="onSelectTreeTable"
             @open-saved-query="onOpenSavedQuery"
             @context-action="onTreeContextAction"

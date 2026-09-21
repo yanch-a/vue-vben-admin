@@ -291,6 +291,8 @@ function patchFullscreenRouteMeta(
       ...route,
       meta: {
         ...route.meta,
+        // RouteRecordStringComponent 要求 title 必填；异常后端菜单回落到路由名/路径。
+        title: route.meta?.title || String(route.name || route.path || ''),
         hideInMenu: true,
         hideInTab: true,
         hideInBreadcrumb: true,

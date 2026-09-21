@@ -201,15 +201,18 @@ function startAuditProgressPreview() {
   let index = 0;
   const tick = () => {
     const list = auditSteps.value;
-    if (index > 0 && list[index - 1] && list[index - 1].status === 'running') {
-      list[index - 1] = { ...list[index - 1], status: 'success', detail: '已完成（等待最终结果确认）' };
+    const previous = index > 0 ? list[index - 1] : undefined;
+    if (previous?.status === 'running') {
+      list[index - 1] = { ...previous, status: 'success', detail: '已完成（等待最终结果确认）' };
     }
     if (index >= list.length) {
       stopAuditProgressPreview();
       return;
     }
+    const current = list[index];
+    if (!current) return;
     list[index] = {
-      ...list[index],
+      ...current,
       status: 'running',
       detail: index === 4 ? '正在等待大模型返回…' : '执行中…',
     };
@@ -386,12 +389,10 @@ async function runAudit() {
   auditLoading.value = true;
   auditPhase.value = 'running';
   auditResult.value = null;
-  stopAuditProgressPreview();
-  auditSteps.value = [
-    { code: 'PARSE', title: '解析 SQL 语句', status: 'running', detail: '规则预审进行中…' },
-  ];
+  startAuditProgressPreview();
   try {
     const rulesRes: any = await auditWorkOrderRules(order.id);
+    stopAuditProgressPreview();
     const rules = unbox(rulesRes) as SqlAuditResult;
     const ruleSteps = Array.isArray(rules?.steps) ? [...rules.steps] : [];
     const liveSteps = ruleSteps.map((step) => {
@@ -437,6 +438,7 @@ async function runAudit() {
       ElMessage.error(errorMessage(error, 'AI 审计失败'));
     }
   } finally {
+    stopAuditProgressPreview();
     auditLoading.value = false;
   }
 }

@@ -47,6 +47,7 @@ interface TreeNode {
   dbConfigId?: number | string;
   dbName?: string;
   instanceName?: string;
+  schemaName?: string;
   sqlText?: string;
   description?: string;
   children?: TreeNode[];
@@ -88,6 +89,7 @@ function mapTree(nodes: any[]): TreeNode[] {
     dbConfigId: n.dbConfigId,
     dbName: n.dbName,
     instanceName: n.instanceName,
+    schemaName: n.schemaName,
     sqlText: n.sqlText,
     description: n.description,
     children: n.children?.length ? mapTree(n.children) : undefined,
@@ -283,6 +285,7 @@ async function openInEditor(payload: {
   queryName: string;
   sqlText: string;
   instanceName: string;
+  schemaName?: string;
   dbConfigId: number | string;
 }) {
   if (payload.dbConfigId == null) {
@@ -316,6 +319,9 @@ async function openInEditor(payload: {
         username: cfg.username,
         description: cfg.description,
         connectionStatus: cfg.connectionStatus,
+        aiEnabled: cfg.aiEnabled == null ? 1 : Number(cfg.aiEnabled),
+        aiAllowSampleData:
+          cfg.aiAllowSampleData == null ? 0 : Number(cfg.aiAllowSampleData),
       });
       if (!result.ok) {
         if (result.reason === 'max') {
@@ -336,6 +342,7 @@ async function openInEditor(payload: {
     queryName: payload.queryName,
     sqlText: payload.sqlText || '',
     instanceName: payload.instanceName,
+    schemaName: payload.schemaName,
     dbConfigId: payload.dbConfigId,
   });
   router.push({ name: 'VisualClient' });
@@ -348,6 +355,7 @@ function onNodeDblClick(data: TreeNode) {
     queryName: data.label,
     sqlText: data.sqlText || '',
     instanceName: data.instanceName || '',
+    schemaName: data.schemaName,
     dbConfigId: data.dbConfigId!,
   });
 }
@@ -421,6 +429,7 @@ onBeforeUnmount(() => {
               queryName: row.queryName,
               sqlText: row.sqlText,
               instanceName: row.instanceName,
+              schemaName: row.schemaName,
               dbConfigId: row.dbConfigId,
             })
           "
@@ -429,6 +438,7 @@ onBeforeUnmount(() => {
             <span class="name">{{ row.queryName }}</span>
             <span class="meta">
               {{ row.dbName || row.dbConfigId }} / {{ row.instanceName }}
+              <template v-if="row.schemaName"> / {{ row.schemaName }}</template>
               <template v-if="row.groupName"> · {{ row.groupName }}</template>
             </span>
           </div>
@@ -444,6 +454,7 @@ onBeforeUnmount(() => {
                   queryName: row.queryName,
                   sqlText: row.sqlText,
                   instanceName: row.instanceName,
+                  schemaName: row.schemaName,
                   dbConfigId: row.dbConfigId,
                 })
               "

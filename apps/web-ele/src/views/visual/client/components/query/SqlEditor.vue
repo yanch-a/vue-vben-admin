@@ -192,13 +192,15 @@ async function resolveTableNames(schemaHint?: string): Promise<
   const dbId = props.dbConfigId;
   const inst = props.instanceName || '';
   if (dbId == null) return [];
+  // 跨入异步内层函数后 TypeScript 不保留 props 派生值的窄化，固定成非空局部常量。
+  const resolvedDbId: number | string = dbId;
 
   async function ensureTables(instanceName: string): Promise<
     { tableName: string; schema?: string }[]
   > {
-    let list = getRememberedTables(dbId, instanceName);
+    let list = getRememberedTables(resolvedDbId, instanceName);
     if (list.length || !props.loadTables) return list;
-    const key = `${dbId}::${instanceName}`;
+    const key = `${resolvedDbId}::${instanceName}`;
     let pending = tablesLoadInflight.get(key);
     if (!pending) {
       pending = props.loadTables(instanceName)
@@ -213,7 +215,7 @@ async function resolveTableNames(schemaHint?: string): Promise<
       tablesLoadInflight.set(key, pending);
     }
     const names = await pending;
-    list = getRememberedTables(dbId, instanceName);
+    list = getRememberedTables(resolvedDbId, instanceName);
     if (list.length) return list;
     return (names || []).map((tableName) => ({
       tableName,
