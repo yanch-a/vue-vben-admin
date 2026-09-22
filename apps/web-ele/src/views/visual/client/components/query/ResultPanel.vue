@@ -118,7 +118,19 @@ const selectedRows = ref<Record<string, any>[]>([]);
 const tableElRef = ref<{
   getSelectionRows?: () => Record<string, any>[];
   clearSelection?: () => void;
+  scrollToRow?: (index: number) => void;
 } | null>(null);
+/** 结果面板根节点：用于判断 Ctrl+F 是否落在结果区 */
+const panelRef = ref<HTMLElement | null>(null);
+const findInputRef = ref<HTMLInputElement | null>(null);
+/** 最近一次点击落在结果面板内（避免抢走 SQL 编辑器的 Ctrl+F） */
+const resultFocused = ref(false);
+
+const findVisible = ref(false);
+const findQuery = ref('');
+const findMatchIndex = ref(0);
+type FindHit = { col: string; row: number };
+const findHits = shallowRef<FindHit[]>([]);
 
 const ctxMenu = reactive({
   visible: false,
@@ -307,6 +319,42 @@ const resultTabLabel = computed(() => {
   if (!r?.columns?.length) return 'Result';
   const n = r.rowCount ?? r.rows?.length ?? 0;
   return `Result (${n})`;
+});
+
+/** 状态栏展示的总行数（优先服务端 rowCount） */
+const statusRowCount = computed(() => {
+  const r = props.result;
+  if (!r?.columns?.length) return 0;
+  return r.rowCount ?? r.rows?.length ?? 0;
+});
+
+/** 修改弹窗 label 按最长列名自适应，避免截断 */
+const editLabelWidth = computed(() => {
+  let max = 0;
+  for (const c of columns.value) {
+    max = Math.max(max, String(c || '').length);
+  }
+  return `${Math.min(320, Math.max(140, max * 13 + 20))}px`;
+});
+
+const findMatchKeys = computed(() => {
+  const set = new Set<string>();
+  for (const h of findHits.value) {
+    set.add(`${h.row}\0${h.col}`);
+  }
+  return set;
+});
+
+const findActiveKey = computed(() => {
+  const hit = findHits.value[findMatchIndex.value];
+  return hit ? `${hit.row}\0${hit.col}` : null;
+});
+
+const findStatusText = computed(() => {
+  const n = findHits.value.length;
+  if (!findQuery.value.trim()) return '';
+  if (!n) return '无结果';
+  return `${findMatchIndex.value + 1}/${n}`;
 });
 
 function closeCtxMenu() {
@@ -878,10 +926,12 @@ async function onHidePanel() {
   if (!(await confirmLeaveSheet('隐藏结果区'))) return;
   editMode.value = false;
   dirtyCount.value = 0;
+  closeFind();
   emit('update:visible', false);
 }
 
 async function onSwitchResultTab(v: any) {
+  if (v !== 'result') closeFind();
   emit('update:activeTab', v);
 }
 
@@ -969,14 +1019,154 @@ function onGlobalClick() {
   if (ctxMenu.visible) closeCtxMenu();
 }
 
+function onPanelMouseDown() {
+  resultFocused.value = true;
+}
+
+function onDocumentMouseDown(e: MouseEvent) {
+  const t = e.target as Node | null;
+  if (!panelRef.value || !t || !panelRef.value.contains(t)) {
+    resultFocused.value = false;
+  }
+}
+
+/** 在单元格文本中重建 Ctrl+F 命中列表 */
+function rebuildFindHits() {
+  const q = findQuery.value.trim().toLowerCase();
+  if (!q) {
+    findHits.value = [];
+    findMatchIndex.value = 0;
+    return;
+  }
+  const rows = displayRows.value;
+  const cols = columns.value;
+  const hits: FindHit[] = [];
+  for (let i = 0; i < rows.length; i++) {
+    const row = rows[i];
+    if (!row) continue;
+    for (const col of cols) {
+      if (displayCell(row[col]).toLowerCase().includes(q)) {
+        hits.push({ row: i, col });
+      }
+    }
+  }
+  findHits.value = hits;
+  if (!hits.length) {
+    findMatchIndex.value = 0;
+    return;
+  }
+  if (findMatchIndex.value >= hits.length) {
+    findMatchIndex.value = 0;
+  }
+}
+
+function revealFindHit(index: number) {
+  const hit = findHits.value[index];
+  if (!hit) return;
+  findMatchIndex.value = index;
+  tableElRef.value?.scrollToRow?.(hit.row);
+  onCurrentChange(displayRows.value[hit.row], hit.row);
+}
+
+function goFind(delta: number) {
+  const n = findHits.value.length;
+  if (!n) return;
+  const next = (findMatchIndex.value + delta + n) % n;
+  revealFindHit(next);
+}
+
+function openFind() {
+  findVisible.value = true;
+  resultFocused.value = true;
+  nextTick(() => {
+    findInputRef.value?.focus();
+    findInputRef.value?.select();
+  });
+  rebuildFindHits();
+  if (findHits.value.length) {
+    revealFindHit(findMatchIndex.value);
+  }
+}
+
+function closeFind() {
+  findVisible.value = false;
+  findQuery.value = '';
+  findHits.value = [];
+  findMatchIndex.value = 0;
+}
+
+function onFindQueryInput() {
+  findMatchIndex.value = 0;
+  rebuildFindHits();
+  if (findHits.value.length) {
+    revealFindHit(0);
+  }
+}
+
+function onFindInputKeydown(e: KeyboardEvent) {
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    goFind(e.shiftKey ? -1 : 1);
+  } else if (e.key === 'Escape') {
+    e.preventDefault();
+    closeFind();
+  }
+}
+
+function onDocumentKeydown(e: KeyboardEvent) {
+  if (!props.visible) return;
+
+  const isFindShortcut =
+    (e.ctrlKey || e.metaKey) &&
+    !e.altKey &&
+    (e.key === 'f' || e.key === 'F');
+
+  if (isFindShortcut) {
+    if (props.activeTab !== 'result') return;
+    // SQL 编辑器内的 Ctrl+F 交给 Monaco
+    if ((document.activeElement as HTMLElement | null)?.closest?.('.monaco-editor')) {
+      return;
+    }
+    if (!resultFocused.value && !findVisible.value) return;
+    e.preventDefault();
+    e.stopPropagation();
+    openFind();
+    return;
+  }
+
+  if (!findVisible.value) return;
+
+  if (e.key === 'Escape') {
+    e.preventDefault();
+    closeFind();
+    return;
+  }
+
+  if (e.key === 'F3') {
+    e.preventDefault();
+    goFind(e.shiftKey ? -1 : 1);
+  }
+}
+
 onMounted(() => {
   document.addEventListener('click', onGlobalClick);
   document.addEventListener('scroll', onGlobalClick, true);
+  document.addEventListener('mousedown', onDocumentMouseDown, true);
+  document.addEventListener('keydown', onDocumentKeydown, true);
 });
 onBeforeUnmount(() => {
   document.removeEventListener('click', onGlobalClick);
   document.removeEventListener('scroll', onGlobalClick, true);
+  document.removeEventListener('mousedown', onDocumentMouseDown, true);
+  document.removeEventListener('keydown', onDocumentKeydown, true);
 });
+
+watch(
+  () => [props.result?.rows, props.result?.columns, editMode.value] as const,
+  () => {
+    if (findVisible.value) rebuildFindHits();
+  },
+);
 
 watch(
   () => props.result,
@@ -986,6 +1176,7 @@ watch(
     selectedRows.value = [];
     tableElRef.value?.clearSelection?.();
     closeCtxMenu();
+    closeFind();
     if (expectResultRefresh.value) {
       expectResultRefresh.value = false;
       if (editMode.value) resetEditCopies();
@@ -1002,7 +1193,13 @@ watch(
 </script>
 
 <template>
-  <div v-show="visible" class="result-panel">
+  <div
+    v-show="visible"
+    ref="panelRef"
+    class="result-panel"
+    tabindex="-1"
+    @mousedown="onPanelMouseDown"
+  >
     <div class="result-header">
       <ElTabs
         :model-value="activeTab"
@@ -1093,6 +1290,40 @@ watch(
           {{ $tr('单击单元格编辑，改过的行会整行标黄。主键也可以改，保存时按修改前的原值定位。NULL 显示为 NULL，空着保存仍是 NULL。') }}
         </template>
       </p>
+      <!-- Ctrl+F 查找条（结果区聚焦时可用） -->
+      <div v-if="activeTab === 'result' && findVisible" class="find-bar">
+        <input
+          ref="findInputRef"
+          v-model="findQuery"
+          class="find-input"
+          type="text"
+          :placeholder="$tr('在结果中查找')"
+          @input="onFindQueryInput"
+          @keydown="onFindInputKeydown"
+        />
+        <span class="find-count">{{ findStatusText }}</span>
+        <ElButton
+          link
+          size="small"
+          :disabled="!findHits.length"
+          :title="$tr('上一个 (Shift+Enter)')"
+          @click="goFind(-1)"
+        >
+          ↑
+        </ElButton>
+        <ElButton
+          link
+          size="small"
+          :disabled="!findHits.length"
+          :title="$tr('下一个 (Enter)')"
+          @click="goFind(1)"
+        >
+          ↓
+        </ElButton>
+        <ElButton link size="small" :title="$tr('关闭 (Esc)')" @click="closeFind">
+          ×
+        </ElButton>
+      </div>
       <template v-if="activeTab === 'result'">
         <div v-if="result?.columns?.length" class="table-fill">
           <VirtualResultTable
@@ -1106,6 +1337,8 @@ watch(
             :dirty-indexes="dirtyIndexSet"
             :format-cell="displayCell"
             :is-null-cell="isNullCell"
+            :find-match-keys="findMatchKeys"
+            :find-active-key="findActiveKey"
             @current-change="onCurrentChange"
             @selection-change="onSelectionChange"
             @row-contextmenu="onRowContextMenu"
@@ -1135,6 +1368,33 @@ watch(
           </ElButton>
         </div>
       </template>
+    </div>
+
+    <div
+      v-if="activeTab === 'result' && result?.columns?.length"
+      class="result-status"
+    >
+      <span>{{ $tr('共') }} {{ statusRowCount }} {{ $tr('行') }}</span>
+      <span v-if="selectedIndex >= 0">
+        · {{ $tr('当前第') }} {{ selectedIndex + 1 }} {{ $tr('行') }}
+      </span>
+      <span v-if="selectedRows.length">
+        · {{ $tr('已选') }} {{ selectedRows.length }} {{ $tr('行') }}
+      </span>
+      <span
+        v-if="result?.elapsedMs != null && !Number.isNaN(result.elapsedMs)"
+        class="status-time"
+      >
+        · {{ $tr('服务端查询耗时') }}: {{ result.elapsedMs }} ms
+      </span>
+      <span
+        v-if="
+          result?.clientElapsedMs != null && !Number.isNaN(result.clientElapsedMs)
+        "
+        class="status-time"
+      >
+        · {{ $tr('响应到前台耗时') }}: {{ result.clientElapsedMs }} ms
+      </span>
     </div>
 
     <Teleport to="body">
@@ -1181,9 +1441,10 @@ watch(
             ? '修改行（按主键更新）'
             : '修改行（无主键）'
       "
-      width="640px"
+      width="860px"
       destroy-on-close
       append-to-body
+      class="result-edit-dialog"
     >
       <p v-if="isJoinQuery" class="pk-hint">
         {{ $tr('联表只能按各表主键定位。改哪张表，结果里就要带上该表主键；同名 id 请写成 别名.id。') }}
@@ -1194,7 +1455,7 @@ watch(
       <p v-else class="pk-hint warn">
         {{ $tr('当前表没有主键，保存时按结果列旧值匹配，可能影响其它行。') }}
       </p>
-      <ElForm label-width="140px" class="edit-form">
+      <ElForm :label-width="editLabelWidth" class="edit-form">
         <ElFormItem v-for="col in columns" :key="col" :label="col">
           <ElInput
             :model-value="
@@ -1292,6 +1553,49 @@ watch(
   flex: 1;
   min-height: 0;
 }
+.find-bar {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-bottom: 1px solid var(--el-border-color-lighter);
+  background: var(--el-fill-color-lighter);
+}
+.find-input {
+  flex: 1;
+  min-width: 120px;
+  max-width: 360px;
+  height: 26px;
+  padding: 0 8px;
+  font-size: 12px;
+  color: var(--el-text-color-primary);
+  background: var(--el-bg-color);
+  border: 1px solid var(--el-border-color);
+  border-radius: 4px;
+  outline: none;
+}
+.find-input:focus {
+  border-color: var(--el-color-primary);
+}
+.find-count {
+  min-width: 52px;
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+  white-space: nowrap;
+}
+.result-status {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 10px;
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+  border-top: 1px solid var(--el-border-color-lighter);
+  background: var(--el-fill-color-lighter);
+  user-select: none;
+}
 .empty {
   padding: 16px;
   color: var(--el-text-color-secondary);
@@ -1310,6 +1614,15 @@ watch(
   max-height: 55vh;
   overflow: auto;
   padding-right: 8px;
+}
+/* 长列名允许换行，避免被固定 label 宽度裁切 */
+.edit-form :deep(.el-form-item__label) {
+  height: auto;
+  line-height: 1.35;
+  white-space: normal;
+  word-break: break-all;
+  align-items: flex-start;
+  padding-top: 6px;
 }
 </style>
 

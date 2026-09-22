@@ -20,6 +20,8 @@ defineOptions({ name: 'VirtualResultTable' });
 
 const ROW_HEIGHT = 32;
 const CHECK_WIDTH = 42;
+/** 行号列宽（1-based，最多约 7 位数字） */
+const ROW_NUM_WIDTH = 56;
 const COL_MIN_WIDTH = 64;
 const COL_DEFAULT_WIDTH = 120;
 /** 内容超过该字符数时列宽固定为 COL_OVERFLOW_WIDTH，并省略号截断 */
@@ -42,6 +44,10 @@ const props = defineProps<{
   dirtyIndexes?: Set<number>;
   formatCell: (value: unknown) => string;
   isNullCell: (value: unknown) => boolean;
+  /** Ctrl+F 命中的单元格，key = `${rowIndex}\0${col}` */
+  findMatchKeys?: Set<string>;
+  /** 当前定位到的命中单元格 */
+  findActiveKey?: null | string;
 }>();
 
 const emit = defineEmits<{
@@ -136,8 +142,24 @@ function widthAt(index: number) {
 
 const tableWidth = computed(() => {
   const sum = colWidths.value.reduce((s, w) => s + w, 0);
-  return CHECK_WIDTH + (sum || colCount.value * COL_DEFAULT_WIDTH);
+  return (
+    CHECK_WIDTH +
+    ROW_NUM_WIDTH +
+    (sum || colCount.value * COL_DEFAULT_WIDTH)
+  );
 });
+
+function findKey(rowIndex: number, col: string) {
+  return `${rowIndex}\0${col}`;
+}
+
+function isFindMatch(rowIndex: number, col: string) {
+  return !!props.findMatchKeys?.has(findKey(rowIndex, col));
+}
+
+function isFindActive(rowIndex: number, col: string) {
+  return props.findActiveKey === findKey(rowIndex, col);
+}
 
 const bodyHeight = computed(() => rowCount.value * ROW_HEIGHT);
 
@@ -276,6 +298,21 @@ function clearSelection() {
   currentIndex.value = -1;
 }
 
+/** 滚动到指定行（尽量置于可视区中部），供 Ctrl+F 定位 */
+function scrollToRow(index: number) {
+  const el = scrollRef.value;
+  if (!el || index < 0) return;
+  const max = Math.max(0, rowCount.value - 1);
+  const i = Math.min(max, index);
+  const target = Math.max(
+    0,
+    i * ROW_HEIGHT - Math.max(0, (viewportHeight.value - ROW_HEIGHT) / 2),
+  );
+  el.scrollTop = target;
+  scrollTop.value = target;
+  currentIndex.value = i;
+}
+
 /** 接收 Vue 模板 ref 的完整联合类型，仅保留原生输入框实例。 */
 function setInputRef(el: ComponentPublicInstance | Element | null) {
   inputRef.value = el instanceof HTMLInputElement ? el : null;
@@ -369,6 +406,7 @@ watch(
 defineExpose({
   getSelectionRows,
   clearSelection,
+  scrollToRow,
 });
 </script>
 
@@ -393,6 +431,13 @@ defineExpose({
             :indeterminate="partialSelected"
             @change="toggleAll"
           />
+        </div>
+        <div
+          class="vrt-th vrt-rownum"
+          :style="{ width: ROW_NUM_WIDTH + 'px' }"
+          :title="$tr('行号')"
+        >
+          #
         </div>
         <div
           v-for="(col, i) in columns"
@@ -451,6 +496,12 @@ defineExpose({
               />
             </div>
             <div
+              class="vrt-td vrt-rownum"
+              :style="{ width: ROW_NUM_WIDTH + 'px' }"
+            >
+              {{ item.index + 1 }}
+            </div>
+            <div
               v-for="(col, i) in columns"
               :key="col"
               class="vrt-td"
@@ -458,6 +509,8 @@ defineExpose({
                 'is-null': isNullCell(item.row[col]),
                 'is-editable': editMode,
                 'is-editing': isEditing(item.index, col),
+                'is-find-match': isFindMatch(item.index, col),
+                'is-find-active': isFindActive(item.index, col),
               }"
               :style="{ width: widthAt(i) + 'px' }"
               :title="formatCell(item.row[col])"
@@ -567,9 +620,34 @@ defineExpose({
   background: inherit;
   border-right: 1px solid var(--el-border-color);
 }
-.vrt-header .vrt-check {
+.vrt-rownum {
+  position: sticky;
+  left: 42px;
+  z-index: 2;
+  flex: none;
+  padding: 0 4px;
+  text-align: right;
+  color: var(--el-text-color-secondary);
+  background: inherit;
+  border-right: 1px solid var(--el-border-color);
+  user-select: none;
+}
+.vrt-header .vrt-check,
+.vrt-header .vrt-rownum {
   z-index: 5;
   background: var(--el-fill-color-light);
+}
+.vrt-header .vrt-rownum {
+  text-align: center;
+  color: var(--el-text-color-regular);
+}
+.vrt-td.is-find-match {
+  background: color-mix(in srgb, #ffe566 70%, transparent);
+}
+.vrt-td.is-find-active {
+  background: color-mix(in srgb, #ff9632 75%, transparent);
+  outline: 1px solid var(--el-color-warning);
+  outline-offset: -1px;
 }
 .vrt-space {
   position: relative;
@@ -593,7 +671,8 @@ defineExpose({
 .vrt-tr.is-dirty-row {
   background: color-mix(in srgb, var(--el-color-warning) 28%, transparent);
 }
-.vrt-tr .vrt-check {
+.vrt-tr .vrt-check,
+.vrt-tr .vrt-rownum {
   background: inherit;
 }
 .vrt-td.is-null {
