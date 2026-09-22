@@ -13,6 +13,10 @@ export interface DbCopyStartPayload {
   sourceInstance: string;
   targetDbConfigId: number | string;
   targetInstance: string;
+  /** PG schema / Oracle owner；达梦等一级已是模式时可省略 */
+  targetSchema?: string;
+  /** 可选：限定源侧名称空间 */
+  sourceSchema?: string;
   tableNames: string[];
   mode?: 'structure' | 'both';
   dropIfExists?: boolean;

@@ -4,8 +4,8 @@ import type { DbConnection } from '../composables/useConnectionStore';
 /**
  * 将数据库/表复制到不同主机（参考 SQLyog）
  * - 左侧：来源对象勾选（第一期仅表可勾选，其它类型置灰）
- * - 右侧：目标连接与实例、结构/数据选项
- * - 确认后异步启动任务，由父组件打开进度面板
+ * - 右侧：目标连接 / 实例 / 名称空间(schema|owner)、结构/数据选项
+ * - PG/Oracle 族目标必须选到名称空间；达梦一级已是模式，不再套一层
  *
  * @author yanch
  */
@@ -13,11 +13,16 @@ import { computed, reactive, ref, watch } from 'vue';
 
 import { ElMessage } from 'element-plus';
 
-import { getInstances, getTables } from '#/api/visual/database';
+import { getInstances, getTables, getTableTree } from '#/api/visual/database';
 import { type DbCopyTaskVO, startDbCopy } from '#/api/visual/dbCopy';
 import { getDbConfigList } from '#/api/visual/vq';
 
 import { visualClientConfig } from '../config';
+import {
+  resolveDbType,
+  resolveDialectFamily,
+  type SqlDialectFamily,
+} from '../dialect/dbTypes';
 import { resolveSqlDialect } from '../dialect/sqlDialect';
 
 defineOptions({ name: 'CopyDatabaseDialog' });
@@ -26,8 +31,10 @@ const props = defineProps<{
   modelValue: boolean;
   /** 已打开的连接（优先作为目标候选） */
   openConnections?: DbConnection[];
-  /** 右键单表时预勾选 */
+  /** 右键单表时预勾选（建议传 qualifiedName） */
   preselectedTables?: string[];
+  /** 右键带来的源 schema，用于默认过滤 */
+  sourceSchema?: string;
   sourceConnection: DbConnection | null;
   sourceInstance: string;
 }>();
@@ -46,7 +53,8 @@ const sourceLabel = computed(() => {
   const c = props.sourceConnection;
   if (!c) return '-';
   const host = c.dbHost || c.dbName || String(c.id);
-  return `${host} - ${props.sourceInstance || ''}`;
+  const schema = form.sourceSchema ? `.${form.sourceSchema}` : '';
+  return `${host} - ${props.sourceInstance || ''}${schema}`;
 });
 
 const sourceDialect = computed(() =>
@@ -57,25 +65,63 @@ const showIgnoreDefiner = computed(
   () => sourceDialect.value.family === 'MYSQL_LIKE',
 );
 
+/** PG / 真 Oracle：实例之下还有 schema/owner；达梦 instanceKind=SCHEMA 则否 */
+function needsNamespace(dbType?: string) {
+  const d = resolveDbType(dbType);
+  if (d.family === 'POSTGRES_LIKE') return true;
+  if (d.family === 'ORACLE_LIKE' && d.instanceKind === 'DATABASE') return true;
+  return false;
+}
+
+const sourceNeedsNamespace = computed(() =>
+  needsNamespace(props.sourceConnection?.dbType),
+);
+
+const targetDbType = computed(() => {
+  const id = form.targetDbConfigId;
+  const hit = targetConfigs.value.find((c) => String(c.id) === String(id));
+  return hit?.dbType;
+});
+
+const targetNeedsNamespace = computed(() => needsNamespace(targetDbType.value));
+
+const targetInstanceLabel = computed(() => {
+  const d = resolveDbType(targetDbType.value);
+  if (d.family === 'ORACLE_LIKE' && d.instanceKind === 'DATABASE') return '服务';
+  if (d.instanceKind === 'SCHEMA') return '模式';
+  return '数据库';
+});
+
+const targetSchemaLabel = computed(() => {
+  const family = resolveDialectFamily(targetDbType.value) as SqlDialectFamily;
+  return family === 'ORACLE_LIKE' ? 'Owner' : 'Schema';
+});
+
 const loadingTables = ref(false);
 const loadingTargets = ref(false);
 const loadingInstances = ref(false);
+const loadingSchemas = ref(false);
 const submitting = ref(false);
 
 const tableNames = ref<string[]>([]);
 const checkedTables = ref<string[]>([]);
 const tablesExpanded = ref(true);
+const sourceSchemaOptions = ref<string[]>([]);
 
 const targetConfigs = ref<
-  { dbType?: string; id: number | string; label: string; }[]
+  { dbType?: string; id: number | string; label: string }[]
 >([]);
 const targetInstances = ref<string[]>([]);
+const targetSchemas = ref<string[]>([]);
 /** 目标连接快速切换时，只允许最后一次实例请求更新下拉框。 */
 let targetInstanceRequestId = 0;
+let targetSchemaRequestId = 0;
 
 const form = reactive({
   targetDbConfigId: null as null | number | string,
   targetInstance: '',
+  targetSchema: '',
+  sourceSchema: '' as string,
   mode: 'both' as 'both' | 'structure',
   dropIfExists: true,
   bulkInsert: true,
@@ -85,27 +131,77 @@ const form = reactive({
   maxRows: visualClientConfig.exportMaxRows,
 });
 
+function tableDisplayName(qualified: string) {
+  return qualified;
+}
+
 async function loadTables() {
   if (!props.sourceConnection?.id || !props.sourceInstance) {
     tableNames.value = [];
     checkedTables.value = [];
+    sourceSchemaOptions.value = [];
     return;
   }
   loadingTables.value = true;
   try {
-    const res: any = await getTables(
-      props.sourceConnection.id,
-      props.sourceInstance,
-    );
-    const list = (res?.data || res || [])
-      .map((t: any) => t.tableName)
-      .filter(Boolean);
+    let list: string[] = [];
+    if (sourceNeedsNamespace.value) {
+      const res: any = await getTableTree(
+        props.sourceConnection.id,
+        props.sourceInstance,
+      );
+      const schemas = res?.data || res || [];
+      const schemaNames: string[] = [];
+      const all: string[] = [];
+      for (const s of schemas) {
+        const sn = s?.schemaName || s?.displayName;
+        if (sn) schemaNames.push(String(sn));
+        for (const t of s?.tables || []) {
+          const q =
+            t.qualifiedName ||
+            t.tableName ||
+            (sn && (t.rawTableName || t.tableName)
+              ? `${sn}.${t.rawTableName || t.tableName}`
+              : '');
+          if (q) all.push(String(q));
+        }
+      }
+      sourceSchemaOptions.value = [...new Set(schemaNames)].sort();
+      const filterSchema = (form.sourceSchema || '').trim();
+      list = filterSchema
+        ? all.filter(
+            (n) =>
+              n === filterSchema ||
+              n.startsWith(`${filterSchema}.`) ||
+              n.toLowerCase().startsWith(`${filterSchema.toLowerCase()}.`),
+          )
+        : all;
+    } else {
+      const res: any = await getTables(
+        props.sourceConnection.id,
+        props.sourceInstance,
+      );
+      list = (res?.data || res || [])
+        .map((t: any) => t.tableName || t.qualifiedName)
+        .filter(Boolean);
+      sourceSchemaOptions.value = [];
+    }
     tableNames.value = list;
     const pre = (props.preselectedTables || []).filter((t) => list.includes(t));
-    checkedTables.value = pre.length ? pre : [...list];
+    // 预选名可能是裸表名：尝试在当前列表里模糊匹配
+    let resolvedPre = pre;
+    if (!resolvedPre.length && props.preselectedTables?.length) {
+      resolvedPre = list.filter((n) =>
+        props.preselectedTables!.some(
+          (p) => n === p || n.endsWith(`.${p}`) || n.split('.').pop() === p,
+        ),
+      );
+    }
+    checkedTables.value = resolvedPre.length ? resolvedPre : [...list];
   } catch {
     tableNames.value = [];
     checkedTables.value = [];
+    sourceSchemaOptions.value = [];
   } finally {
     loadingTables.value = false;
   }
@@ -127,13 +223,14 @@ async function loadTargetConfigs() {
       label: `${c.dbHost || c.dbName || c.id} (${c.dbName || c.id})`,
       dbType: c.dbType,
     }));
-    // 合并：已打开优先，去重
-    const map = new Map<string, { dbType?: string; id: number | string; label: string; }>();
+    const map = new Map<
+      string,
+      { dbType?: string; id: number | string; label: string }
+    >();
     [...fromOpen, ...fromAll].forEach((item) => {
       map.set(String(item.id), item);
     });
     targetConfigs.value = [...map.values()];
-    // 默认选中：若有其它打开连接则选第一个不同的，否则仍可选同源
     const srcId = props.sourceConnection?.id;
     const other = targetConfigs.value.find((c) => String(c.id) !== String(srcId));
     form.targetDbConfigId = other?.id ?? targetConfigs.value[0]?.id ?? null;
@@ -149,6 +246,8 @@ async function loadTargetInstances() {
   if (!form.targetDbConfigId) {
     targetInstances.value = [];
     form.targetInstance = '';
+    targetSchemas.value = [];
+    form.targetSchema = '';
     return;
   }
   const targetDbConfigId = form.targetDbConfigId;
@@ -166,8 +265,6 @@ async function loadTargetInstances() {
     targetInstances.value = (instances || [])
       .map((i: any) => i.instanceName || i.name)
       .filter(Boolean);
-    // 安全：不自动选中第一个库（常为业务库且配合 dropIfExists 极易误伤）
-    // 仅当当前值仍在列表中时保留，否则清空，强制用户显式选择
     if (
       form.targetInstance &&
       !targetInstances.value.includes(form.targetInstance)
@@ -183,6 +280,44 @@ async function loadTargetInstances() {
       loadingInstances.value = false;
     }
   }
+  await loadTargetSchemas();
+}
+
+async function loadTargetSchemas() {
+  const requestId = ++targetSchemaRequestId;
+  form.targetSchema = '';
+  targetSchemas.value = [];
+  if (!targetNeedsNamespace.value || !form.targetDbConfigId || !form.targetInstance) {
+    return;
+  }
+  loadingSchemas.value = true;
+  try {
+    const res: any = await getTableTree(form.targetDbConfigId, form.targetInstance);
+    if (requestId !== targetSchemaRequestId) return;
+    const schemas = res?.data || res || [];
+    const names = (schemas || [])
+      .map((s: any) => s.schemaName || s.displayName)
+      .filter(Boolean)
+      .map(String);
+    // 即使库是空的也提供常用默认
+    const family = resolveDialectFamily(targetDbType.value);
+    if (family === 'POSTGRES_LIKE' && !names.includes('public')) {
+      names.unshift('public');
+    }
+    targetSchemas.value = [...new Set(names)];
+    if (targetSchemas.value.includes('public')) {
+      form.targetSchema = 'public';
+    }
+  } catch {
+    if (requestId !== targetSchemaRequestId) return;
+    const family = resolveDialectFamily(targetDbType.value);
+    targetSchemas.value = family === 'POSTGRES_LIKE' ? ['public'] : [];
+    form.targetSchema = targetSchemas.value[0] || '';
+  } finally {
+    if (requestId === targetSchemaRequestId) {
+      loadingSchemas.value = false;
+    }
+  }
 }
 
 watch(
@@ -196,7 +331,10 @@ watch(
     form.limitRows = false;
     form.maxRows = visualClientConfig.exportMaxRows;
     form.targetInstance = '';
-    await Promise.all([loadTables(), loadTargetConfigs()]);
+    form.targetSchema = '';
+    form.sourceSchema = props.sourceSchema || '';
+    await Promise.all([loadTargetConfigs()]);
+    await loadTables();
     await loadTargetInstances();
   },
 );
@@ -204,10 +342,25 @@ watch(
 watch(
   () => form.targetDbConfigId,
   () => {
-    // 切换目标连接时立即清空库名，避免残留上一连接的同名库（如 jeepaydb）
     form.targetInstance = '';
+    form.targetSchema = '';
     targetInstances.value = [];
+    targetSchemas.value = [];
     loadTargetInstances();
+  },
+);
+
+watch(
+  () => form.targetInstance,
+  () => {
+    loadTargetSchemas();
+  },
+);
+
+watch(
+  () => form.sourceSchema,
+  () => {
+    if (props.modelValue) loadTables();
   },
 );
 
@@ -225,15 +378,28 @@ async function onCopy() {
     return;
   }
   if (!form.targetInstance) {
-    ElMessage.warning('请选择目标数据库');
+    ElMessage.warning(`请选择目标${targetInstanceLabel.value}`);
+    return;
+  }
+  if (targetNeedsNamespace.value && !form.targetSchema) {
+    ElMessage.warning(`请选择目标${targetSchemaLabel.value}`);
     return;
   }
   if (
     String(props.sourceConnection?.id) === String(form.targetDbConfigId) &&
-    props.sourceInstance === form.targetInstance
+    props.sourceInstance === form.targetInstance &&
+    (!targetNeedsNamespace.value ||
+      !form.sourceSchema ||
+      form.sourceSchema === form.targetSchema)
   ) {
-    ElMessage.warning('目标库不能与源库相同');
-    return;
+    // 同源同库且同 schema（或无需 schema）禁止
+    if (
+      !targetNeedsNamespace.value ||
+      (form.sourceSchema || '') === (form.targetSchema || '')
+    ) {
+      ElMessage.warning('目标不能与源完全相同');
+      return;
+    }
   }
   if (!checkedTables.value.length) {
     ElMessage.warning('请至少选择一张表');
@@ -244,8 +410,12 @@ async function onCopy() {
     const res: any = await startDbCopy({
       sourceDbConfigId: props.sourceConnection.id,
       sourceInstance: props.sourceInstance,
+      sourceSchema: form.sourceSchema || undefined,
       targetDbConfigId: form.targetDbConfigId,
       targetInstance: form.targetInstance,
+      targetSchema: targetNeedsNamespace.value
+        ? form.targetSchema || undefined
+        : undefined,
       tableNames: checkedTables.value,
       mode: form.mode,
       dropIfExists: form.dropIfExists,
@@ -275,7 +445,7 @@ async function onCopy() {
   <ElDialog
     v-model="visible"
     :title="$tr('复制数据库')"
-    width="920px"
+    width="960px"
     destroy-on-close
     append-to-body
     class="copy-db-dialog"
@@ -290,6 +460,23 @@ async function onCopy() {
           <span class="label">{{ $tr('名') }}</span>
           <ElInput :model-value="sourceLabel" disabled />
         </div>
+        <div v-if="sourceNeedsNamespace" class="field-row">
+          <span class="label">{{ $tr('Schema') }}</span>
+          <ElSelect
+            v-model="form.sourceSchema"
+            clearable
+            filterable
+            style="flex: 1"
+            :placeholder="$tr('全部名称空间')"
+          >
+            <ElOption
+              v-for="name in sourceSchemaOptions"
+              :key="name"
+              :label="name"
+              :value="name"
+            />
+          </ElSelect>
+        </div>
         <div class="pane-title">
           <span>{{ $tr('对象') }}</span>
           <span class="pane-actions">
@@ -299,7 +486,7 @@ async function onCopy() {
             <ElButton link size="small" @click="toggleAllTables(false)">{{ $tr('清空') }}</ElButton>
           </span>
         </div>
-        <ElScrollbar v-loading="loadingTables" height="360px">
+        <ElScrollbar v-loading="loadingTables" class="obj-scroll">
           <div class="obj-tree">
             <div class="folder-row" @click="tablesExpanded = !tablesExpanded">
               <span class="exp">{{ tablesExpanded ? '−' : '+' }}</span>
@@ -320,7 +507,7 @@ async function onCopy() {
             </div>
             <ElCheckboxGroup v-if="tablesExpanded" v-model="checkedTables" class="table-checks">
               <ElCheckbox v-for="name in tableNames" :key="name" :label="name">
-                {{ name }}
+                {{ tableDisplayName(name) }}
               </ElCheckbox>
             </ElCheckboxGroup>
 
@@ -348,68 +535,92 @@ async function onCopy() {
         </ElScrollbar>
       </div>
 
-      <!-- 右侧：目标 + 选项 -->
+      <!-- 右侧：目标 + 选项（固定高度内滚动） -->
       <div class="pane target-pane">
-        <div class="pane-head">{{ $tr('目标') }}</div>
-        <p class="note">
-          {{ $tr('注意：若要复制到不同主机，请先在「打开连接」中配置并打开目标连接；目标连接下拉会列出已保存的连接。') }}
-        </p>
-        <div class="field-row" v-loading="loadingTargets">
-          <span class="label">{{ $tr('连接') }}</span>
-          <ElSelect
-            v-model="form.targetDbConfigId"
-            filterable
-            style="flex: 1"
-            :placeholder="$tr('选择目标连接')"
-          >
-            <ElOption
-              v-for="c in targetConfigs"
-              :key="c.id"
-              :label="c.label"
-              :value="c.id"
-            />
-          </ElSelect>
-        </div>
-        <div class="field-row" v-loading="loadingInstances">
-          <span class="label">{{ $tr('数据库') }}</span>
-          <ElSelect
-            v-model="form.targetInstance"
-            filterable
-            style="flex: 1"
-            :placeholder="$tr('选择目标库')"
-          >
-            <ElOption
-              v-for="name in targetInstances"
-              :key="name"
-              :label="name"
-              :value="name"
-            />
-          </ElSelect>
-        </div>
-
-        <ElDivider />
-
-        <ElRadioGroup v-model="form.mode" class="mode-radios">
-          <ElRadio label="both">{{ $tr('结构和数据') }}</ElRadio>
-          <ElRadio label="structure">{{ $tr('结构唯一') }}</ElRadio>
-        </ElRadioGroup>
-
-        <div class="opts">
-          <ElCheckbox v-model="form.dropIfExists">{{ $tr('如果目标中存在则删除') }}</ElCheckbox>
-          <ElCheckbox v-model="form.bulkInsert">{{ $tr('使用大容量插入（多值 INSERT）') }}</ElCheckbox>
-          <ElCheckbox v-if="showIgnoreDefiner" v-model="form.ignoreDefiner">
-            {{ $tr('忽略 DEFINER') }}
-          </ElCheckbox>
-          <ElCheckbox v-model="form.limitRows">{{ $tr('限制每表导出行数') }}</ElCheckbox>
-          <div v-if="form.limitRows" class="max-rows">
-            <span class="label">{{ $tr('上限') }}</span>
-            <ElInputNumber v-model="form.maxRows" :min="1" :max="10000000" :step="10000" />
+        <ElScrollbar class="target-scroll">
+          <div class="pane-head">{{ $tr('目标') }}</div>
+          <p class="note">
+            {{ $tr('注意：若要复制到不同主机，请先在「打开连接」中配置并打开目标连接；目标连接下拉会列出已保存的连接。PG/Oracle 还需选择名称空间（Schema/Owner）。') }}
+          </p>
+          <div class="field-row" v-loading="loadingTargets">
+            <span class="label">{{ $tr('连接') }}</span>
+            <ElSelect
+              v-model="form.targetDbConfigId"
+              filterable
+              style="flex: 1"
+              :placeholder="$tr('选择目标连接')"
+            >
+              <ElOption
+                v-for="c in targetConfigs"
+                :key="c.id"
+                :label="c.label"
+                :value="c.id"
+              />
+            </ElSelect>
           </div>
-        </div>
+          <div class="field-row" v-loading="loadingInstances">
+            <span class="label">{{ targetInstanceLabel }}</span>
+            <ElSelect
+              v-model="form.targetInstance"
+              filterable
+              style="flex: 1"
+              :placeholder="$tr('选择目标') + targetInstanceLabel"
+            >
+              <ElOption
+                v-for="name in targetInstances"
+                :key="name"
+                :label="name"
+                :value="name"
+              />
+            </ElSelect>
+          </div>
+          <div
+            v-if="targetNeedsNamespace"
+            class="field-row"
+            v-loading="loadingSchemas"
+          >
+            <span class="label">{{ targetSchemaLabel }}</span>
+            <ElSelect
+              v-model="form.targetSchema"
+              filterable
+              allow-create
+              default-first-option
+              style="flex: 1"
+              :placeholder="$tr('选择或输入目标名称空间')"
+            >
+              <ElOption
+                v-for="name in targetSchemas"
+                :key="name"
+                :label="name"
+                :value="name"
+              />
+            </ElSelect>
+          </div>
 
-        <div class="hint">
-          {{ $tr('默认复制全表数据。勾选「限制每表导出行数」时，超出部分会截断并把任务标为部分成功。 异库类型按统一标准映射建表（含主键、唯一/普通索引、自增、安全默认值）。') }}
-        </div>
+          <ElDivider />
+
+          <ElRadioGroup v-model="form.mode" class="mode-radios">
+            <ElRadio label="both">{{ $tr('结构和数据') }}</ElRadio>
+            <ElRadio label="structure">{{ $tr('结构唯一') }}</ElRadio>
+          </ElRadioGroup>
+
+          <div class="opts">
+            <ElCheckbox v-model="form.dropIfExists">{{ $tr('如果目标中存在则删除') }}</ElCheckbox>
+            <ElCheckbox v-model="form.bulkInsert">{{ $tr('使用大容量插入（多值 INSERT）') }}</ElCheckbox>
+            <ElCheckbox v-if="showIgnoreDefiner" v-model="form.ignoreDefiner">
+              {{ $tr('忽略 DEFINER') }}
+            </ElCheckbox>
+            <ElCheckbox v-model="form.limitRows">{{ $tr('限制每表导出行数') }}</ElCheckbox>
+            <div v-if="form.limitRows" class="max-rows">
+              <span class="label">{{ $tr('上限') }}</span>
+              <ElInputNumber v-model="form.maxRows" :min="1" :max="10000000" :step="10000" />
+            </div>
+          </div>
+
+          <div class="hint">
+            {{ $tr('默认复制全表数据。勾选「限制每表导出行数」时，超出部分会截断并把任务标为部分成功。 异库类型按统一标准映射建表（含主键、唯一/普通索引、自增、安全默认值）。选定目标 Schema/Owner 后，表会落到该名称空间（可自动 CREATE SCHEMA）。') }}
+          </div>
+        </ElScrollbar>
       </div>
     </div>
 
@@ -430,13 +641,28 @@ async function onCopy() {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 14px;
-  min-height: 420px;
+  /* 弹窗主体固定高度，左右栏对齐，不再随内容伸缩 */
+  height: 480px;
 }
 .pane {
   border: 1px solid var(--el-border-color);
   border-radius: 6px;
   padding: 10px 12px;
   background: var(--el-bg-color);
+  min-height: 0;
+  overflow: hidden;
+}
+.source-pane,
+.target-pane {
+  display: flex;
+  flex-direction: column;
+}
+.obj-scroll,
+.target-scroll {
+  flex: 1;
+  /* flex 子项用 height:0 吃满固定父高度并内部滚动 */
+  height: 0;
+  min-height: 0;
 }
 .pane-head {
   font-weight: 600;
@@ -450,7 +676,7 @@ async function onCopy() {
   margin-bottom: 10px;
 }
 .label {
-  width: 56px;
+  width: 64px;
   flex-shrink: 0;
   font-size: var(--vc-ui-font-size, 13px);
   color: var(--el-text-color-regular);

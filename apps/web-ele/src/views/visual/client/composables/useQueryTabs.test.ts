@@ -24,6 +24,12 @@ describe('isQueryTabDirty', () => {
     expect(isQueryTabDirty(tab({ sql: '   ' }))).toBe(false);
   });
 
+  it('一次性页签即使有 SQL 也不视为未保存', () => {
+    expect(
+      isQueryTabDirty(tab({ sql: 'select * from t', ephemeral: true })),
+    ).toBe(false);
+  });
+
   it('按保存基线判断已保存查询是否修改', () => {
     expect(
       isQueryTabDirty(

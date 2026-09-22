@@ -140,6 +140,7 @@ function sanitizeTab(t: QueryTab | PersistedQueryTab): PersistedQueryTab | null 
           ? (t as any).savedSqlBaseline.slice(0, MAX_SQL_CHARS)
           : (t as any).savedSqlBaseline
         : undefined,
+    ephemeral: (t as any).ephemeral ? true : undefined,
   };
 }
 

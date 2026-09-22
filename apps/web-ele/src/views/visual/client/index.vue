@@ -267,6 +267,7 @@ const sqlDump = reactive({
 const copyDb = reactive({
   visible: false,
   instanceName: '',
+  sourceSchema: '',
   preselectedTables: [] as string[],
 });
 
@@ -990,12 +991,18 @@ async function openTableInNewEditor(payload: {
   const d = activeDialect.value;
   const ident = resolveTableIdent(activeConnection.value.dbType, payload);
   const sql = d.selectAllLimited(ident.schema, ident.table, 200);
-  const tab = openSqlInNewTab(sql, payload.tableName, payload.instanceName);
+  const tab = openSqlInNewTab(
+    sql,
+    payload.tableName,
+    payload.instanceName,
+    undefined,
+    payload.schemaName,
+    true, // 双击/打开表：一次性页签，关闭不提示未保存
+  );
   if (!tab) {
     ElMessage.warning(`同一连接最多 ${MAX_TABS} 个查询编辑器`);
     return;
   }
-  tab.schemaName = payload.schemaName;
   await nextTick();
   // 仅「打开表」给默认 1:5，之后用户拖拽高度不再被普通查询覆盖
   applyEditorResultRatio(1, 5);
@@ -1141,9 +1148,12 @@ async function onTreeContextAction(payload: {
       return;
     case 'copyDbToHost': {
       copyDb.instanceName = instanceName;
-      // 单表右键：预勾选该表；库/tables 文件夹：默认全选（对话框内加载后处理）
+      copyDb.sourceSchema = node?.schemaName || '';
+      // 单表右键：预勾选 qualifiedName，便于 PG/Oracle 对上 schema.table
       copyDb.preselectedTables =
-        node?.nodeType === 'table' ? [tableName].filter(Boolean) : [];
+        node?.nodeType === 'table'
+          ? [node.qualifiedName || node.name || tableName].filter(Boolean)
+          : [];
       if (!copyDb.instanceName) {
         ElMessage.warning('请先选择数据库实例');
         return;
@@ -1517,8 +1527,13 @@ async function openProgramObjectScript(
       sql,
       data.title || `${action} ${objectName || objectKind}`,
       instanceName,
+      undefined,
+      node.schemaName,
+      true, // 视图/过程等脚本：一次性页签，关闭不提示未保存
     );
-    if (tab) tab.schemaName = node.schemaName;
+    if (!tab) {
+      ElMessage.warning(`同一连接最多 ${MAX_TABS} 个查询编辑器`);
+    }
   } catch (e: any) {
     ElMessage.error(e?.msg || e?.message || '生成脚本失败');
   }
@@ -2777,7 +2792,8 @@ function onSchemaDocOpenSql(payload: { tableName?: string; instanceName?: string
     return;
   }
   if (payload.sql) {
-    openSqlInNewTab(payload.sql, '表', payload.instanceName);
+    // 同上：浏览对象打开的 SQL，一次性页签
+    openSqlInNewTab(payload.sql, '表', payload.instanceName, undefined, undefined, true);
   }
 }
 
@@ -3166,6 +3182,7 @@ onBeforeUnmount(() => {
       v-model="copyDb.visible"
       :source-connection="activeConnection"
       :source-instance="copyDb.instanceName"
+      :source-schema="copyDb.sourceSchema"
       :preselected-tables="copyDb.preselectedTables"
       :open-connections="openConnections"
       @started="trackCopy"

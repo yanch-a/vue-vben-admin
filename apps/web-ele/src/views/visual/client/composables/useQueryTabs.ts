@@ -45,6 +45,11 @@ export interface QueryTab {
    * 有 savedQueryId 且 sql !== savedSqlBaseline 时视为未保存修改。
    */
   savedSqlBaseline?: string;
+  /**
+   * 一次性页签（双击表 / 视图 / 存储过程等打开）。
+   * 关闭时不提示未保存；用户另存为查询后会清除该标记。
+   */
+  ephemeral?: boolean;
 }
 
 /** 可序列化的编辑器 Tab（不含 rows / executing） */
@@ -58,11 +63,14 @@ export interface PersistedQueryTab {
   schemaName?: string;
   savedQueryId?: number | string;
   savedSqlBaseline?: string;
+  ephemeral?: boolean;
 }
 
-/** 未保存的新查询有内容，或已保存查询相对保存基线有改动。 */
+/** 未保存的新查询有内容，或已保存查询相对保存基线有改动。一次性页签永不视为脏。 */
 export function isQueryTabDirty(tab: QueryTab | null | undefined): boolean {
   if (!tab) return false;
+  // 双击对象打开的临时页签：关闭直接丢弃，不弹未保存
+  if (tab.ephemeral) return false;
   if (tab.savedQueryId == null) return !!tab.sql?.trim();
   const baseline =
     tab.savedSqlBaseline != null ? tab.savedSqlBaseline : tab.sql;
@@ -88,6 +96,7 @@ function createTab(
   instanceName?: string,
   savedQueryId?: number | string,
   schemaName?: string,
+  ephemeral?: boolean,
 ): QueryTab {
   const id = `q-${Date.now()}-${seq++}`;
   return {
@@ -103,6 +112,7 @@ function createTab(
     savedQueryId,
     // 从已保存查询打开时，基线=当前内容（干净）
     savedSqlBaseline: savedQueryId != null ? sql : undefined,
+    ephemeral: ephemeral || undefined,
   };
 }
 
@@ -181,6 +191,7 @@ export function replaceConnectionTabs(
         schemaName: t.schemaName,
         savedQueryId,
         savedSqlBaseline,
+        ephemeral: t.ephemeral || undefined,
       };
     })
     .filter((t) => !!t.id);
@@ -233,6 +244,8 @@ export function useQueryTabs(connectionId: () => number | string | null) {
     instanceName?: string;
     schemaName?: string;
     savedQueryId?: number | string;
+    /** 一次性页签：关闭不提示未保存 */
+    ephemeral?: boolean;
     activate?: boolean;
   }) {
     const id = connectionId();
@@ -257,6 +270,8 @@ export function useQueryTabs(connectionId: () => number | string | null) {
         exist.title = opts.title || exist.title;
         exist.instanceName = opts.instanceName || exist.instanceName;
         exist.schemaName = opts.schemaName || exist.schemaName;
+        // 已保存查询不是一次性页签
+        exist.ephemeral = undefined;
         notifyClientSessionChange();
         return exist;
       }
@@ -267,6 +282,7 @@ export function useQueryTabs(connectionId: () => number | string | null) {
       opts?.instanceName,
       opts?.savedQueryId,
       opts?.schemaName,
+      opts?.ephemeral,
     );
     list.push(tab);
     if (opts?.activate !== false) {
@@ -347,8 +363,17 @@ export function useQueryTabs(connectionId: () => number | string | null) {
     instanceName?: string,
     savedQueryId?: number | string,
     schemaName?: string,
+    ephemeral?: boolean,
   ) {
-    return addTab({ title, sql, instanceName, savedQueryId, schemaName, activate: true });
+    return addTab({
+      title,
+      sql,
+      instanceName,
+      savedQueryId,
+      schemaName,
+      ephemeral,
+      activate: true,
+    });
   }
 
   return {
@@ -362,9 +387,10 @@ export function useQueryTabs(connectionId: () => number | string | null) {
     closeOtherTabs,
     reorderTabs,
     openSqlInNewTab,
-    /** 保存成功后调用：把当前 SQL 记为已同步基线 */
+    /** 保存成功后调用：把当前 SQL 记为已同步基线，并退出一次性态 */
     markTabSaved(tab: QueryTab) {
       tab.savedSqlBaseline = tab.sql;
+      tab.ephemeral = undefined;
       notifyClientSessionChange();
     },
   };
