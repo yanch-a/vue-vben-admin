@@ -477,7 +477,7 @@ export function searchDbConfigUserCandidates(
   })
 }
 
-/** 全量替换授权 */
+/** 全量替换授权；allowedInstances 空数组=全部实例 */
 export function replaceDbConfigUsers(data: {
   dbConfigId: number | string
   grants: Array<{
@@ -486,6 +486,8 @@ export function replaceDbConfigUsers(data: {
     canEditCanvas?: number
     canWriteData?: number
     canWriteSchema?: number
+    /** 可访问实例；空/省略=全部 */
+    allowedInstances?: string[]
   }>
 }) {
   return request({

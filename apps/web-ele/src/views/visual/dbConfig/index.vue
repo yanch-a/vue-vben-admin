@@ -7,7 +7,7 @@
   import { useRouter } from 'vue-router'
 
   import { getMemberUser } from '@/api/member/memberUser'
-  import { getTableTree, testConnection } from '@/api/visual/database'
+  import { getInstances, getTableTree, testConnection } from '@/api/visual/database'
   import {
     deleteDbConfig,
     editDbConfig,
@@ -21,7 +21,7 @@
     replaceDbTableGrants,
     searchDbConfigUserCandidates,
   } from '@/api/visual/vq'
-  import { Plus, Search } from '@element-plus/icons-vue'
+  import { InfoFilled, Plus, Search } from '@element-plus/icons-vue'
   import { ElMessage, ElMessageBox } from 'element-plus'
 
   import { useConnectionStore } from '../client/composables/useConnectionStore'
@@ -113,13 +113,15 @@
       const selectedGroupId = ref(null)
       const candidateUsers = ref([])
       const candidateLoading = ref(false)
-      /** { memberUserId, userName, realName, canUse, canWriteData, canWriteSchema, canEditCanvas } */
+      /** { memberUserId, userName, realName, canUse, canWriteData, canWriteSchema, canEditCanvas, allowedInstances[] } */
       const grants = ref([])
       const searchKeyword = ref('')
       const tableGrants = ref([])
       const authBaselineUserIds = ref([])
       const authBaselineTableKeys = ref([])
       const tableAuthMode = computed(() => (tableGrants.value && tableGrants.value.length ? 'WHITELIST' : 'OPEN'))
+      /** 当前连接下全部实例（管理员配置权限时可见全集） */
+      const authInstanceOptions = ref([])
       const tableCandidates = ref([])
       const tableCandidatesLoading = ref(false)
       const tableInstanceName = ref('')
@@ -127,11 +129,53 @@
       const tableSubjectId = ref(null)
       watch(tableSubjectType, () => {
         tableSubjectId.value = null
+        tableInstanceName.value = ''
+        tableCandidates.value = []
+      })
+      watch(tableSubjectId, () => {
+        // 切换主体后清空实例选择，避免沿用无权实例
+        tableInstanceName.value = ''
+        tableCandidates.value = []
       })
       const tableUserOptions = computed(() => {
         const values = [...grants.value, ...candidateUsers.value]
         return Array.from(new Map(values.map((user) => [String(user.memberUserId || user.id), user])).values())
       })
+      /** 表级权限可选实例：用户主体时仅其白名单；未限制或部门则用连接全集 */
+      const tableInstanceOptions = computed(() => {
+        const all = authInstanceOptions.value || []
+        if (tableSubjectType.value !== 'USER' || !tableSubjectId.value) {
+          return all
+        }
+        const user = grants.value.find(
+          (g) => String(g.memberUserId) === String(tableSubjectId.value),
+        )
+        const allowed = user?.allowedInstances
+        if (!allowed || !allowed.length) {
+          return all
+        }
+        const allowSet = new Set(allowed.map((n) => String(n).toLowerCase()))
+        return all.filter((n) => allowSet.has(String(n).toLowerCase()))
+      })
+
+      /** 解析后端 ALLOWED_INSTANCES：空/*=全部；JSON 数组或逗号分隔 */
+      const parseAllowedInstances = (raw) => {
+        if (raw == null || raw === '') return []
+        if (Array.isArray(raw)) return raw.map((x) => String(x).trim()).filter(Boolean)
+        const s = String(raw).trim()
+        if (!s || s === '*' || s === '[]') return []
+        try {
+          if (s.startsWith('[')) {
+            const arr = JSON.parse(s)
+            return Array.isArray(arr)
+              ? arr.map((x) => String(x).trim()).filter(Boolean)
+              : []
+          }
+        } catch {
+          /* 兼容逗号分隔 */
+        }
+        return s.split(/[,;|]/).map((x) => x.trim()).filter(Boolean)
+      }
 
       const getList = async () => {
         loading.value = true
@@ -337,17 +381,20 @@
         authDbName.value = row.dbName || ''
         tableSubjectType.value = 'USER'
         tableSubjectId.value = null
+        tableInstanceName.value = ''
+        tableCandidates.value = []
+        authInstanceOptions.value = []
         authVisible.value = true
         selectedGroupId.value = null
         candidateUsers.value = []
         searchKeyword.value = ''
         try {
-          tableInstanceName.value = row.schemaName || ''
-          const [{ data: groups }, { data: existing }, { data: existingTables }] = await Promise.all([
-            listMemberUserGroups(),
-            listDbConfigUsers(row.id),
-            listDbTableGrants(row.id),
-          ])
+          const [{ data: groups }, { data: existing }, { data: existingTables }] =
+            await Promise.all([
+              listMemberUserGroups(),
+              listDbConfigUsers(row.id),
+              listDbTableGrants(row.id),
+            ])
           memberGroups.value = groups || []
           grants.value = (existing || []).map((g) => ({
             memberUserId: g.memberUserId,
@@ -357,6 +404,7 @@
             canEditCanvas: g.canEditCanvas == null ? 0 : g.canEditCanvas,
             canWriteData: g.canWriteData == null ? 0 : g.canWriteData,
             canWriteSchema: g.canWriteSchema == null ? 0 : g.canWriteSchema,
+            allowedInstances: parseAllowedInstances(g.allowedInstances),
           }))
           tableGrants.value = existingTables || []
           authBaselineUserIds.value = grants.value.map((g) => String(g.memberUserId))
@@ -364,7 +412,18 @@
             (g) => [g.subjectType, g.subjectId, g.instanceName, g.tableName].join(':'),
           )
           await enrichGrantNames(grants.value)
-          if (tableInstanceName.value) await loadTableCandidates()
+          // 实例列表失败不阻断授权编辑（可稍后重开弹窗）
+          try {
+            const instRes = await getInstances(row.id)
+            const instTree = instRes?.data || instRes || []
+            authInstanceOptions.value = (instTree?.[0]?.instances || [])
+              .map((i) => i.instanceName || i.name)
+              .filter(Boolean)
+          } catch (instErr) {
+            console.warn('加载实例列表失败', instErr)
+            authInstanceOptions.value = []
+            ElMessage.warning('实例列表加载失败，可访问实例下拉可能为空')
+          }
         } catch (e) {
           console.error(e)
           ElMessage.error('加载授权信息失败')
@@ -421,15 +480,15 @@
 
       const onSelectGroup = () => searchUsers()
 
-      /** 从目标数据库实时加载表，确保 PG/达梦等类型使用实际元数据。 */
+      /** 从目标数据库实时加载表；须先选实例，切换实例时触发。 */
       const loadTableCandidates = async () => {
-        if (!authDbConfigId.value || !tableInstanceName.value.trim()) {
+        if (!authDbConfigId.value || !tableInstanceName.value) {
           tableCandidates.value = []
-          return ElMessage.warning('请先填写数据库 / Schema 名称')
+          return
         }
         tableCandidatesLoading.value = true
         try {
-          const { data } = await getTableTree(authDbConfigId.value, tableInstanceName.value.trim())
+          const { data } = await getTableTree(authDbConfigId.value, tableInstanceName.value)
           tableCandidates.value = (data || []).flatMap((schema) =>
             (schema.tables || []).map((table) => ({
               ...table,
@@ -446,6 +505,14 @@
         }
       }
 
+      /** 实例下拉变更：清空旧表并加载新实例表目录 */
+      const onTableInstanceChange = () => {
+        tableCandidates.value = []
+        if (tableInstanceName.value) {
+          loadTableCandidates()
+        }
+      }
+
       const tableSubjectLabel = (row) => {
         if (row.subjectType === 'DEPT') {
           return memberGroups.value.find((g) => String(g.id) === String(row.subjectId))?.groupName || `部门 ${row.subjectId}`
@@ -456,7 +523,8 @@
 
       const addTableGrant = (table) => {
         if (!tableSubjectId.value) return ElMessage.warning('请先选择用户或部门')
-        const instanceName = tableInstanceName.value.trim()
+        const instanceName = (tableInstanceName.value || '').trim()
+        if (!instanceName) return ElMessage.warning('请先选择数据库实例')
         const duplicate = tableGrants.value.some((row) => row.subjectType === tableSubjectType.value
           && String(row.subjectId) === String(tableSubjectId.value)
           && String(row.instanceName).toLowerCase() === instanceName.toLowerCase()
@@ -487,6 +555,10 @@
           canEditCanvas: defaults.canEditCanvas != null ? defaults.canEditCanvas : 0,
           canWriteData: defaults.canWriteData != null ? defaults.canWriteData : 0,
           canWriteSchema: defaults.canWriteSchema != null ? defaults.canWriteSchema : 0,
+          // 默认空=可访问全部实例
+          allowedInstances: Array.isArray(defaults.allowedInstances)
+            ? [...defaults.allowedInstances]
+            : [],
         }
         grants.value.push(row)
         return true
@@ -549,6 +621,7 @@
               canEditCanvas: g.canEditCanvas ? 1 : 0,
               canWriteData: g.canWriteData ? 1 : 0,
               canWriteSchema: g.canWriteSchema ? 1 : 0,
+              allowedInstances: Array.isArray(g.allowedInstances) ? g.allowedInstances : [],
             })),
           })
           await replaceDbTableGrants({
@@ -647,13 +720,17 @@
         onWriteFlagChange,
         saveAuth,
         tableGrants,
+        tableAuthMode,
         tableCandidates,
         tableCandidatesLoading,
         tableInstanceName,
+        tableInstanceOptions,
+        authInstanceOptions,
         tableSubjectType,
         tableSubjectId,
         tableUserOptions,
         loadTableCandidates,
+        onTableInstanceChange,
         tableSubjectLabel,
         addTableGrant,
         removeTableGrant,
@@ -662,6 +739,7 @@
         typeLabel,
         Plus,
         Search,
+        InfoFilled,
       }
     },
   })
@@ -995,27 +1073,20 @@
     <el-dialog
       v-model="authVisible"
       :title="`权限分配 — ${authDbName}`"
-      width="1080px"
+      width="1180px"
       destroy-on-close
     >
       <div class="auth-layout">
-      <el-alert
-        :title="(tableGrants && tableGrants.length) ? '白名单模式：仅可见/可操作已授权表' : '开放模式：未配置表级授权时，连接内表不受表白名单限制（仍受连接 canUse/写标志约束）'"
-        :type="(tableGrants && tableGrants.length) ? 'warning' : 'info'"
-        show-icon
-        :closable="false"
-        style="margin-bottom: 8px"
-      />
-      <el-alert
-        type="info"
-        :closable="false"
-        show-icon
-        style="margin-bottom: 8px"
-        title="写权限需同时满足：连接级 canWriteData/canWriteSchema 与表级对应标志（白名单模式）；开放模式（无表级授权）仅看连接级标志。用户授权与部门授权取并集，任一允许即可。"
-      />
-
         <div class="auth-left">
-          <div class="auth-section-title">{{ $tr('查找用户') }}</div>
+          <div class="auth-section-title">
+            {{ $tr('查找用户') }}
+            <el-tooltip placement="top" :show-after="200">
+              <template #content>
+                <div>{{ $tr('可按用户名/姓名/手机号搜索，或按部门筛选后加入授权。') }}</div>
+              </template>
+              <el-icon class="auth-info-icon"><InfoFilled /></el-icon>
+            </el-tooltip>
+          </div>
           <div class="auth-user-tools">
             <el-input
               v-model="searchKeyword"
@@ -1069,17 +1140,51 @@
         <div class="auth-right">
           <div class="auth-section-title">
             {{ $tr('已授权用户') }}
-            <span class="auth-hint">{{ $tr('可用=只读；写数据=增改删行；改结构=建删改表；建库仅所有者') }}</span>
+            <el-tooltip placement="top" :show-after="200">
+              <template #content>
+                <div>{{ $tr('可用=只读；写数据=增改删行；改结构=建删改表；建库仅所有者。') }}</div>
+                <div style="margin-top: 6px">
+                  {{ $tr('写权限需同时满足：连接级 canWriteData/canWriteSchema 与表级对应标志（白名单模式）；开放模式（无表级授权）仅看连接级标志。用户授权与部门授权取并集，任一允许即可。') }}
+                </div>
+                <div style="margin-top: 6px">
+                  {{ $tr('可访问实例：不选=该连接下全部实例；勾选后仅能访问所选实例。') }}
+                </div>
+              </template>
+              <el-icon class="auth-info-icon"><InfoFilled /></el-icon>
+            </el-tooltip>
           </div>
           <el-table :data="grants" border size="small" max-height="420">
-            <el-table-column prop="userName" :label="$tr('用户名')" min-width="100" />
-            <el-table-column prop="realName" :label="$tr('姓名')" min-width="90" />
-            <el-table-column :label="$tr('可用')" width="70" align="center">
+            <el-table-column prop="userName" :label="$tr('用户名')" min-width="90" />
+            <el-table-column prop="realName" :label="$tr('姓名')" min-width="80" />
+            <el-table-column :label="$tr('可访问实例')" min-width="160">
+              <template #default="{ row }">
+                <el-select
+                  v-model="row.allowedInstances"
+                  multiple
+                  filterable
+                  clearable
+                  collapse-tags
+                  collapse-tags-tooltip
+                  :max-collapse-tags="1"
+                  size="small"
+                  :placeholder="$tr('全部实例')"
+                  style="width: 100%"
+                >
+                  <el-option
+                    v-for="name in authInstanceOptions"
+                    :key="name"
+                    :label="name"
+                    :value="name"
+                  />
+                </el-select>
+              </template>
+            </el-table-column>
+            <el-table-column :label="$tr('可用')" width="64" align="center">
               <template #default="{ row }">
                 <el-switch v-model="row.canUse" :active-value="1" :inactive-value="0" />
               </template>
             </el-table-column>
-            <el-table-column :label="$tr('写数据')" width="80" align="center">
+            <el-table-column :label="$tr('写数据')" width="72" align="center">
               <template #default="{ row }">
                 <el-switch
                   v-model="row.canWriteData"
@@ -1089,7 +1194,7 @@
                 />
               </template>
             </el-table-column>
-            <el-table-column :label="$tr('改结构')" width="80" align="center">
+            <el-table-column :label="$tr('改结构')" width="72" align="center">
               <template #default="{ row }">
                 <el-switch
                   v-model="row.canWriteSchema"
@@ -1099,7 +1204,7 @@
                 />
               </template>
             </el-table-column>
-            <el-table-column :label="$tr('可改画布')" width="90" align="center">
+            <el-table-column :label="$tr('可改画布')" width="80" align="center">
               <template #default="{ row }">
                 <el-switch
                   v-model="row.canEditCanvas"
@@ -1109,7 +1214,7 @@
                 />
               </template>
             </el-table-column>
-            <el-table-column :label="$tr('操作')" width="70" align="center">
+            <el-table-column :label="$tr('操作')" width="64" align="center">
               <template #default="{ row }">
                 <el-button link type="danger" @click="removeGrant(row.memberUserId)">
                   {{ $tr('移除') }}
@@ -1119,7 +1224,26 @@
           </el-table>
         </div>
       </div>
-      <el-divider content-position="left">{{ $tr('表级权限（用户与所属部门权限合并）') }}</el-divider>
+      <el-divider content-position="left">
+        <span class="auth-section-title auth-section-title--inline">
+          {{ $tr('表级权限（用户与所属部门权限合并）') }}
+          <el-tooltip placement="top" :show-after="200">
+            <template #content>
+              <div>
+                {{
+                  tableAuthMode === 'WHITELIST'
+                    ? $tr('白名单模式：仅可见/可操作已授权表')
+                    : $tr('开放模式：未配置表级授权时，连接内表不受表白名单限制（仍受连接 canUse/写标志约束）')
+                }}
+              </div>
+              <div style="margin-top: 6px">
+                {{ $tr('请先选择主体与有权限的数据库实例，切换实例后自动加载表。') }}
+              </div>
+            </template>
+            <el-icon class="auth-info-icon"><InfoFilled /></el-icon>
+          </el-tooltip>
+        </span>
+      </el-divider>
       <div class="table-auth-tools">
         <el-radio-group v-model="tableSubjectType">
           <el-radio-button value="USER">{{ $tr('用户') }}</el-radio-button>
@@ -1131,11 +1255,31 @@
         <el-select v-else v-model="tableSubjectId" filterable :placeholder="$tr('选择部门')">
           <el-option v-for="g in memberGroups" :key="g.id" :label="g.groupName" :value="g.id" />
         </el-select>
-        <el-input v-model="tableInstanceName" :placeholder="$tr('数据库 / Schema 名称')" @keyup.enter="loadTableCandidates" />
-        <el-button :loading="tableCandidatesLoading" @click="loadTableCandidates">{{ $tr('加载表') }}</el-button>
+        <el-select
+          v-model="tableInstanceName"
+          filterable
+          clearable
+          :placeholder="$tr('选择数据库实例')"
+          :disabled="tableSubjectType === 'USER' && !tableSubjectId"
+          @change="onTableInstanceChange"
+        >
+          <el-option
+            v-for="name in tableInstanceOptions"
+            :key="name"
+            :label="name"
+            :value="name"
+          />
+        </el-select>
       </div>
       <div class="table-auth-layout">
-        <el-table v-loading="tableCandidatesLoading" :data="tableCandidates" border size="small" height="250">
+        <el-table
+          v-loading="tableCandidatesLoading"
+          :data="tableCandidates"
+          border
+          size="small"
+          height="250"
+          :empty-text="$tr(tableInstanceName ? '该实例暂无表' : '请先选择数据库实例')"
+        >
           <el-table-column prop="schemaName" :label="$tr('Schema / Owner')" min-width="110" />
           <el-table-column prop="rawTableName" :label="$tr('可选表')" min-width="150">
             <template #default="{ row }">{{ row.rawTableName || row.tableName }}</template>
@@ -1479,8 +1623,22 @@
   }
 
   .auth-section-title {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
     margin-bottom: 8px;
     font-weight: 600;
+  }
+
+  .auth-section-title--inline {
+    margin-bottom: 0;
+  }
+
+  .auth-info-icon {
+    cursor: help;
+    color: var(--el-color-info);
+    font-size: 14px;
+    vertical-align: middle;
   }
 
   .auth-hint {
@@ -1492,7 +1650,7 @@
 
   .table-auth-tools {
     display: grid;
-    grid-template-columns: auto minmax(140px, 1fr) minmax(170px, 1fr) auto;
+    grid-template-columns: auto minmax(140px, 1fr) minmax(180px, 1fr);
     gap: 8px;
     margin-bottom: 10px;
   }

@@ -87,7 +87,7 @@ import {
 } from './composables/useQueryTabs';
 import { visualClientConfig } from './config';
 import { resolveSqlDialect, resolveTableIdent } from './dialect/sqlDialect';
-import { resolveDialectFamily } from './dialect/dbTypes';
+import { resolveDbType, resolveDialectFamily } from './dialect/dbTypes';
 import type { TableDesignSqlResult } from './dialect/tableDesignerDialect';
 import { isDestructiveDdl, looksLikeControlledDdl } from './utils/controlledDdl';
 import {
@@ -233,9 +233,15 @@ const objectTreeRef = ref<any>();
  * ObjectTree 始终保持 MySQL/通用扁平树，PG 与 Oracle 的 Schema 层不会反向影响它。
  */
 const objectTreeComponent = computed(() => {
-  const family = resolveDialectFamily(activeConnection.value?.dbType);
+  const dbType = activeConnection.value?.dbType;
+  const family = resolveDialectFamily(dbType);
   if (family === 'POSTGRES_LIKE') return PostgreSqlObjectTree;
-  if (family === 'ORACLE_LIKE') return OracleObjectTree;
+  if (family === 'ORACLE_LIKE') {
+    // 达梦等 instanceKind=SCHEMA：一级节点已是用户/模式，再套 schemaMode 会变成「模式→同名 schema」。
+    // 真 Oracle / OceanBase Oracle 一级是 service，仍走 OracleObjectTree。
+    if (resolveDbType(dbType).instanceKind === 'SCHEMA') return ObjectTree;
+    return OracleObjectTree;
+  }
   return ObjectTree;
 });
 const connectionTabsRef = ref<InstanceType<typeof ConnectionTabs>>();
