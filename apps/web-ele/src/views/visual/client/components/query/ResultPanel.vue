@@ -2,7 +2,8 @@
 /**
  * 查询结果面板
  * - 工具栏：表格编辑、导出 Excel/SQL、复制全部/选定行（TSV 可粘贴 Excel）
- * - 选中行右键：修改（弹窗）/ 删除 / 拷贝 INSERT / 拷贝 UPDATE / 复制行
+ * - 选中行/单元格右键：修改 / 复制单元格 / 格式化显示 / 拷贝 INSERT·UPDATE / 复制行 / 删除
+ * - 单击单元格：选中行 + 单元格边框高亮；Ctrl+C 复制当前单元格
  * - 表格编辑：同一张结果表点单元格改，脏行底色，保存时按原值 WHERE 逐行 UPDATE（主键可改）
  * - 联表：改哪张表就必须带上该表主键，只按主键 UPDATE，不按全列定位
  * - 结果表用虚拟滚动（非 ElTable）：避免 1000 行 × N 列挂上万个单元格组件把页面打到 GB 级
@@ -59,6 +60,7 @@ import {
   shouldSkipNoPkWarn,
 } from '../../utils/resultPrimaryKeys';
 import VirtualResultTable from './VirtualResultTable.vue';
+import CellContentDrawer from './CellContentDrawer.vue';
 
 defineOptions({ name: 'ResultPanel' });
 
@@ -113,6 +115,8 @@ const canCopyRows = computed(
 
 const selectedRow = ref<Record<string, any> | null>(null);
 const selectedIndex = ref(-1);
+/** 当前高亮单元格列名（与 selectedIndex 组成单元格焦点） */
+const selectedCol = ref<string | null>(null);
 /** 多选行（用于「复制选定行」） */
 const selectedRows = ref<Record<string, any>[]>([]);
 const tableElRef = ref<{
@@ -123,6 +127,8 @@ const tableElRef = ref<{
 /** 结果面板根节点：用于判断 Ctrl+F 是否落在结果区 */
 const panelRef = ref<HTMLElement | null>(null);
 const findInputRef = ref<HTMLInputElement | null>(null);
+/** 右键菜单 DOM，点击菜单内部不关闭 */
+const ctxMenuRef = ref<HTMLElement | null>(null);
 /** 最近一次点击落在结果面板内（避免抢走 SQL 编辑器的 Ctrl+F） */
 const resultFocused = ref(false);
 
@@ -136,6 +142,13 @@ const ctxMenu = reactive({
   visible: false,
   x: 0,
   y: 0,
+});
+
+/** 单元格格式化 / JSON 编辑抽屉 */
+const formatDrawer = reactive({
+  visible: false,
+  col: '',
+  rawText: '',
 });
 
 const editVisible = ref(false);
@@ -350,6 +363,19 @@ const findActiveKey = computed(() => {
   return hit ? `${hit.row}\0${hit.col}` : null;
 });
 
+/** 传给虚拟表的当前单元格高亮 key */
+const activeCellKey = computed(() => {
+  if (selectedIndex.value < 0 || !selectedCol.value) return null;
+  return `${selectedIndex.value}\0${selectedCol.value}`;
+});
+
+const canCopyCell = computed(
+  () =>
+    selectedIndex.value >= 0 &&
+    !!selectedCol.value &&
+    !!selectedRow.value,
+);
+
 const findStatusText = computed(() => {
   const n = findHits.value.length;
   if (!findQuery.value.trim()) return '';
@@ -361,12 +387,23 @@ function closeCtxMenu() {
   ctxMenu.visible = false;
 }
 
-function onRowContextMenu(row: Record<string, any>, event: MouseEvent) {
+function onCellActivate(rowIndex: number, col: string | null) {
+  selectedCol.value = col;
+  resultFocused.value = true;
+}
+
+function onRowContextMenu(
+  row: Record<string, any>,
+  event: MouseEvent,
+  col: string | null = null,
+) {
   event.preventDefault();
   selectedRow.value = row;
+  selectedCol.value = col;
+  resultFocused.value = true;
   const pad = 8;
   const menuW = 220;
-  const menuH = 260;
+  const menuH = 320;
   let x = event.clientX;
   let y = event.clientY;
   if (x + menuW > window.innerWidth - pad) x = window.innerWidth - menuW - pad;
@@ -393,10 +430,10 @@ function onSelectionChange(rows: Record<string, any>[]) {
   selectedRows.value = rows || [];
 }
 
-async function copyText(text: string, tip: string) {
+async function copyText(text: string, tip?: string) {
   try {
     await navigator.clipboard.writeText(text);
-    ElMessage.success(tip);
+    if (tip) ElMessage.success(tip);
   } catch {
     // 降级
     const ta = document.createElement('textarea');
@@ -405,7 +442,7 @@ async function copyText(text: string, tip: string) {
     ta.select();
     document.execCommand('copy');
     document.body.removeChild(ta);
-    ElMessage.success(tip);
+    if (tip) ElMessage.success(tip);
   }
 }
 
@@ -510,6 +547,43 @@ function onCopySelectedRows() {
     return;
   }
   copyRowsToClipboard(rows, `已复制选定 ${rows.length} 行（含表头）`);
+}
+
+/** 取当前高亮单元格的原始展示文本 */
+function getSelectedCellRawText(): string | null {
+  if (!canCopyCell.value || !selectedRow.value || !selectedCol.value) {
+    return null;
+  }
+  const value = selectedRow.value[selectedCol.value];
+  if (value === null || value === undefined) return '';
+  if (typeof value === 'object') {
+    try {
+      return JSON.stringify(value);
+    } catch {
+      return String(value);
+    }
+  }
+  return String(value);
+}
+
+async function onCopyCell() {
+  closeCtxMenu();
+  const text = getSelectedCellRawText();
+  if (text == null) return;
+  // 复制单元格：静默写入剪贴板，不弹成功提示
+  await copyText(text);
+}
+
+function onFormatDisplay() {
+  closeCtxMenu();
+  const text = getSelectedCellRawText();
+  if (text == null) {
+    ElMessage.warning('请先单击选中要查看的单元格');
+    return;
+  }
+  formatDrawer.col = selectedCol.value || '';
+  formatDrawer.rawText = text;
+  formatDrawer.visible = true;
 }
 
 /**
@@ -1019,6 +1093,17 @@ function onGlobalClick() {
   if (ctxMenu.visible) closeCtxMenu();
 }
 
+/**
+ * 用捕获阶段 mousedown 关闭菜单：点到其它输入框/Monaco 时 click 可能被吞，
+ * mousedown 更可靠；点在菜单自身上不关。
+ */
+function onGlobalMouseDownCloseMenu(e: MouseEvent) {
+  if (!ctxMenu.visible) return;
+  const t = e.target as Node | null;
+  if (ctxMenuRef.value && t && ctxMenuRef.value.contains(t)) return;
+  closeCtxMenu();
+}
+
 function onPanelMouseDown() {
   resultFocused.value = true;
 }
@@ -1028,6 +1113,7 @@ function onDocumentMouseDown(e: MouseEvent) {
   if (!panelRef.value || !t || !panelRef.value.contains(t)) {
     resultFocused.value = false;
   }
+  onGlobalMouseDownCloseMenu(e);
 }
 
 /** 在单元格文本中重建 Ctrl+F 命中列表 */
@@ -1066,6 +1152,8 @@ function revealFindHit(index: number) {
   findMatchIndex.value = index;
   tableElRef.value?.scrollToRow?.(hit.row);
   onCurrentChange(displayRows.value[hit.row], hit.row);
+  selectedCol.value = hit.col;
+  resultFocused.value = true;
 }
 
 function goFind(delta: number) {
@@ -1134,6 +1222,30 @@ function onDocumentKeydown(e: KeyboardEvent) {
     return;
   }
 
+  // Ctrl+C：复制当前高亮单元格（编辑中 / 选区文本时不抢）
+  const isCopyShortcut =
+    (e.ctrlKey || e.metaKey) &&
+    !e.altKey &&
+    (e.key === 'c' || e.key === 'C');
+  if (isCopyShortcut && resultFocused.value && props.activeTab === 'result') {
+    const ae = document.activeElement as HTMLElement | null;
+    if (
+      ae &&
+      (ae.tagName === 'INPUT' ||
+        ae.tagName === 'TEXTAREA' ||
+        ae.isContentEditable ||
+        ae.closest?.('.monaco-editor'))
+    ) {
+      // 交给原生/编辑器
+    } else if (window.getSelection()?.toString()) {
+      // 用户有划选文本，交给浏览器默认复制
+    } else if (canCopyCell.value && !editingCell.value) {
+      e.preventDefault();
+      void onCopyCell();
+      return;
+    }
+  }
+
   if (!findVisible.value) return;
 
   if (e.key === 'Escape') {
@@ -1149,6 +1261,7 @@ function onDocumentKeydown(e: KeyboardEvent) {
 }
 
 onMounted(() => {
+  // 保留 click/scroll 作为兜底；主关闭路径走 mousedown 捕获
   document.addEventListener('click', onGlobalClick);
   document.addEventListener('scroll', onGlobalClick, true);
   document.addEventListener('mousedown', onDocumentMouseDown, true);
@@ -1173,10 +1286,12 @@ watch(
   () => {
     selectedRow.value = null;
     selectedIndex.value = -1;
+    selectedCol.value = null;
     selectedRows.value = [];
     tableElRef.value?.clearSelection?.();
     closeCtxMenu();
     closeFind();
+    formatDrawer.visible = false;
     if (expectResultRefresh.value) {
       expectResultRefresh.value = false;
       if (editMode.value) resetEditCopies();
@@ -1339,8 +1454,10 @@ watch(
             :is-null-cell="isNullCell"
             :find-match-keys="findMatchKeys"
             :find-active-key="findActiveKey"
+            :active-cell-key="activeCellKey"
             @current-change="onCurrentChange"
             @selection-change="onSelectionChange"
+            @cell-activate="onCellActivate"
             @row-contextmenu="onRowContextMenu"
             @cell-click="startEditCell"
             @update:edit-draft="editDraft = $event"
@@ -1378,6 +1495,9 @@ watch(
       <span v-if="selectedIndex >= 0">
         · {{ $tr('当前第') }} {{ selectedIndex + 1 }} {{ $tr('行') }}
       </span>
+      <span v-if="selectedCol">
+        · {{ $tr('列') }} {{ selectedCol }}
+      </span>
       <span v-if="selectedRows.length">
         · {{ $tr('已选') }} {{ selectedRows.length }} {{ $tr('行') }}
       </span>
@@ -1400,16 +1520,29 @@ watch(
     <Teleport to="body">
       <div
         v-show="ctxMenu.visible"
+        ref="ctxMenuRef"
         class="result-ctx-menu"
         :style="{ left: `${ctxMenu.x}px`, top: `${ctxMenu.y}px` }"
         @click.stop
+        @mousedown.stop
         @contextmenu.prevent
       >
+        <div
+          class="item"
+          :class="{ disabled: !canCopyCell }"
+          @click="canCopyCell && onCopyCell()"
+        >
+          {{ $tr('复制单元格') }}
+        </div>
         <div class="item" :class="{ disabled: !canMutate }" @click="canMutate && onEdit()">
           {{ $tr('修改…') }}
         </div>
-        <div class="item danger" :class="{ disabled: !canDeleteRow }" @click="canDeleteRow && onDelete()">
-          {{ $tr('删除') }}
+        <div
+          class="item"
+          :class="{ disabled: !canCopyCell }"
+          @click="canCopyCell && onFormatDisplay()"
+        >
+          {{ $tr('格式化显示') }}
         </div>
         <div class="divider" />
         <div class="item" :class="{ disabled: !canCopyRows }" @click="canCopyRows && onCopyAllRows()">
@@ -1429,8 +1562,18 @@ watch(
         <div class="item" :class="{ disabled: !canMutate }" @click="canMutate && onCopyUpdate()">
           {{ $tr('拷贝 UPDATE 语句') }}
         </div>
+        <div class="divider" />
+        <div class="item danger" :class="{ disabled: !canDeleteRow }" @click="canDeleteRow && onDelete()">
+          {{ $tr('删除') }}
+        </div>
       </div>
     </Teleport>
+
+    <CellContentDrawer
+      v-model="formatDrawer.visible"
+      :column-name="formatDrawer.col"
+      :raw-text="formatDrawer.rawText"
+    />
 
     <ElDialog
       v-model="editVisible"

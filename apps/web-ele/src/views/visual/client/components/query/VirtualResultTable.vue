@@ -48,12 +48,21 @@ const props = defineProps<{
   findMatchKeys?: Set<string>;
   /** 当前定位到的命中单元格 */
   findActiveKey?: null | string;
+  /** 当前单击选中的单元格（行高亮之外再描边） */
+  activeCellKey?: null | string;
 }>();
 
 const emit = defineEmits<{
   'current-change': [row: Record<string, any> | undefined, index: number];
   'selection-change': [rows: Record<string, any>[]];
-  'row-contextmenu': [row: Record<string, any>, event: MouseEvent];
+  /** 右键：带上列名（点在单元格上时）；点在行号/勾选列时 col 为空 */
+  'row-contextmenu': [
+    row: Record<string, any>,
+    event: MouseEvent,
+    col: string | null,
+  ];
+  /** 激活单元格（单击）；col 为空表示只选中行 */
+  'cell-activate': [rowIndex: number, col: string | null];
   'cell-click': [rowIndex: number, col: string];
   'update:editDraft': [value: string];
   'cell-blur': [rowIndex: number, col: string];
@@ -229,19 +238,25 @@ function toggleRow(index: number, checked: boolean) {
 function onRowClick(index: number) {
   currentIndex.value = index;
   emit('current-change', props.rows[index], index);
+  // 点在行号/空白行区域：只选行，清除单元格焦点
+  emit('cell-activate', index, null);
 }
 
-function onRowContextMenu(index: number, event: MouseEvent) {
+function onRowContextMenu(index: number, event: MouseEvent, col: string | null = null) {
   event.preventDefault();
+  event.stopPropagation();
   currentIndex.value = index;
   const row = props.rows[index];
   if (!row) return;
   emit('current-change', row, index);
-  emit('row-contextmenu', row, event);
+  emit('cell-activate', index, col);
+  emit('row-contextmenu', row, event, col);
 }
 
 function onCellClick(index: number, col: string) {
-  onRowClick(index);
+  currentIndex.value = index;
+  emit('current-change', props.rows[index], index);
+  emit('cell-activate', index, col);
   if (props.editMode) {
     emit('cell-click', index, col);
   }
@@ -261,6 +276,10 @@ function isEditing(index: number, col: string) {
     props.editingCell?.row === index &&
     props.editingCell?.col === col
   );
+}
+
+function isActiveCell(index: number, col: string) {
+  return props.activeCellKey === `${index}\0${col}`;
 }
 
 function onScroll() {
@@ -477,12 +496,13 @@ defineExpose({
             :class="rowClass(item.index)"
             :style="{ height: ROW_HEIGHT + 'px' }"
             @click="onRowClick(item.index)"
-            @contextmenu="onRowContextMenu(item.index, $event)"
+            @contextmenu="onRowContextMenu(item.index, $event, null)"
           >
             <div
               class="vrt-td vrt-check"
               :style="{ width: CHECK_WIDTH + 'px' }"
               @click.stop
+              @contextmenu.stop="onRowContextMenu(item.index, $event, null)"
             >
               <input
                 type="checkbox"
@@ -511,10 +531,12 @@ defineExpose({
                 'is-editing': isEditing(item.index, col),
                 'is-find-match': isFindMatch(item.index, col),
                 'is-find-active': isFindActive(item.index, col),
+                'is-active-cell': isActiveCell(item.index, col),
               }"
               :style="{ width: widthAt(i) + 'px' }"
               :title="formatCell(item.row[col])"
               @click.stop="onCellClick(item.index, col)"
+              @contextmenu.stop="onRowContextMenu(item.index, $event, col)"
             >
               <input
                 v-if="isEditing(item.index, col)"
@@ -648,6 +670,11 @@ defineExpose({
   background: color-mix(in srgb, #ff9632 75%, transparent);
   outline: 1px solid var(--el-color-warning);
   outline-offset: -1px;
+}
+.vrt-td.is-active-cell {
+  outline: 2px solid var(--el-color-primary);
+  outline-offset: -2px;
+  z-index: 1;
 }
 .vrt-space {
   position: relative;

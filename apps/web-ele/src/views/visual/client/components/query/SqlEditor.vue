@@ -58,6 +58,8 @@ const props = defineProps<{
   dbType?: string;
   /** 当前编辑器所属库 */
   instanceName?: string;
+  /** PG/Oracle 等当前 Schema；有值时 sql 里的 db.table 前缀按 schema 解释 */
+  schemaName?: string;
   /** 执行中锁定编辑 */
   readOnly?: boolean;
   /**
@@ -84,6 +86,12 @@ const emit = defineEmits<{
   askAi: [{ selectedSql: string; editorSql: string }];
   /** 右键「查看表信息」：把解析出的表交给父级弹窗 */
   viewTableInfo: [{ instanceName: string; tableName: string }];
+  /** 右键「改变表」：打开可视化表设计器（与对象树一致） */
+  alterTable: [{
+    instanceName: string;
+    tableName: string;
+    schemaName?: string;
+  }];
 }>();
 
 const { isDark } = usePreferences();
@@ -489,6 +497,14 @@ onMounted(() => {
     contextMenuOrder: 1.5,
     run: () => emitViewTableInfo(),
   });
+  // 右键：对选中/光标处表名打开「改变表」（与对象树 alterTable 同源）
+  editor.addAction({
+    id: 'lemon.alterTable',
+    label: '改变表',
+    contextMenuGroupId: 'navigation',
+    contextMenuOrder: 1.6,
+    run: () => emitAlterTable(),
+  });
   // SQL 标识符含下划线，避免 Monaco 默认分词把 gp_t_project 拆成多段导致过滤异常
   if (!(window as any).__lemonSqlWordPattern) {
     (window as any).__lemonSqlWordPattern = true;
@@ -608,8 +624,54 @@ function readTableTokenAtCursor(): string {
   return line.slice(left, right);
 }
 
+/**
+ * 从选区/光标解析表目标；失败时给出提示并返回 null。
+ * instanceName 规则与「查看表信息」一致：优先 schema.table 前缀，否则用当前库。
+ */
+function resolveEditorTableTarget(): {
+  instanceName: string;
+  tableName: string;
+  schemaToken?: string;
+} | null {
+  if (!editor) return null;
+  const model = editor.getModel();
+  if (!model) return null;
+  const token = readTableTokenAtCursor();
+  const target = resolveTableTargetFromEditor(model.getValue(), token);
+  if (!target?.table) {
+    ElMessage.warning('请先选中或将光标放在表名上');
+    return null;
+  }
+  const schemaToken = (target.schema || '').trim() || undefined;
+  const instanceName = (schemaToken || props.instanceName || '').trim();
+  if (!instanceName) {
+    ElMessage.warning('请先选择数据库 / Schema');
+    return null;
+  }
+  return {
+    instanceName,
+    tableName: target.table,
+    schemaToken,
+  };
+}
+
 /** 解析选中/光标表名并通知父级打开表信息弹窗 */
 function emitViewTableInfo() {
+  const target = resolveEditorTableTarget();
+  if (!target) return;
+  emit('viewTableInfo', {
+    instanceName: target.instanceName,
+    tableName: target.tableName,
+  });
+}
+
+/**
+ * 解析选中/光标表名并通知父级打开「改变表」设计器。
+ * 与对象树 alterTable 对齐：
+ * - 有 schemaName（PG/Oracle）：当前库 + 前缀/页签 schema
+ * - 无 schemaName（MySQL）：前缀当库名（与查看表信息一致）
+ */
+function emitAlterTable() {
   if (!editor) return;
   const model = editor.getModel();
   if (!model) return;
@@ -619,14 +681,26 @@ function emitViewTableInfo() {
     ElMessage.warning('请先选中或将光标放在表名上');
     return;
   }
-  const instanceName = (target.schema || props.instanceName || '').trim();
+  const currentInstance = (props.instanceName || '').trim();
+  const tabSchema = (props.schemaName || '').trim();
+  const prefix = (target.schema || '').trim();
+
+  let instanceName = '';
+  let schemaName: string | undefined;
+  if (tabSchema) {
+    instanceName = currentInstance || prefix;
+    schemaName = prefix || tabSchema;
+  } else {
+    instanceName = prefix || currentInstance;
+  }
   if (!instanceName) {
     ElMessage.warning('请先选择数据库 / Schema');
     return;
   }
-  emit('viewTableInfo', {
+  emit('alterTable', {
     instanceName,
     tableName: target.table,
+    schemaName,
   });
 }
 

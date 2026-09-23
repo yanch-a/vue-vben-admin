@@ -1064,6 +1064,61 @@ function onViewTableInfoFromEditor(payload: {
   void showTableInfo({ ...payload, defaultTab: 'columns' });
 }
 
+/** SQL 编辑器右键「改变表」：与对象树 alterTable 同一套设计器。 */
+async function onAlterTableFromEditor(payload: {
+  instanceName: string;
+  tableName: string;
+  schemaName?: string;
+}) {
+  await openAlterTableDesigner({
+    instanceName: payload.instanceName,
+    tableName: payload.tableName,
+    schemaName: payload.schemaName || '',
+  });
+}
+
+/**
+ * 打开「改变表」可视化设计器（对象树 / SQL 编辑器共用）。
+ */
+async function openAlterTableDesigner(payload: {
+  instanceName: string;
+  tableName: string;
+  schemaName?: string;
+}) {
+  if (!activeConnection.value) {
+    ElMessage.warning('请先打开数据库连接');
+    return;
+  }
+  const instanceName = (payload.instanceName || '').trim();
+  const tableName = (payload.tableName || '').trim();
+  if (!instanceName || !tableName) {
+    ElMessage.warning('请先选中表名');
+    return;
+  }
+  tableDesigner.mode = 'alter';
+  tableDesigner.instanceName = instanceName;
+  tableDesigner.schemaName = payload.schemaName || '';
+  tableDesigner.tableName = tableName;
+  tableDesigner.info = null;
+  tableDesigner.loading = true;
+  tableDesigner.visible = true;
+  try {
+    const res: any = await getTableInfo(
+      activeConnection.value.id,
+      instanceName,
+      tableName,
+    );
+    tableDesigner.info = res?.data || res;
+    tableDesigner.schemaName =
+      tableDesigner.info?.schemaName || payload.schemaName || '';
+  } catch (e: any) {
+    tableDesigner.visible = false;
+    ElMessage.error(e?.msg || e?.message || '读取表结构失败');
+  } finally {
+    tableDesigner.loading = false;
+  }
+}
+
 /** 双击左侧已保存查询：打开/激活编辑器 */
 function onOpenSavedQuery(payload: {
   id: number | string;
@@ -1338,31 +1393,11 @@ async function onTreeContextAction(payload: {
       }
       return;
     case 'alterTable':
-      if (!activeConnection.value) {
-        ElMessage.warning('请先打开数据库连接');
-        return;
-      }
-      tableDesigner.mode = 'alter';
-      tableDesigner.instanceName = instanceName;
-      tableDesigner.schemaName = node.schemaName || '';
-      tableDesigner.tableName = tableName;
-      tableDesigner.info = null;
-      tableDesigner.loading = true;
-      tableDesigner.visible = true;
-      try {
-        const res: any = await getTableInfo(
-          activeConnection.value.id,
-          instanceName,
-          tableName,
-        );
-        tableDesigner.info = res?.data || res;
-        tableDesigner.schemaName = tableDesigner.info?.schemaName || node.schemaName || '';
-      } catch (e: any) {
-        tableDesigner.visible = false;
-        ElMessage.error(e?.msg || e?.message || '读取表结构失败');
-      } finally {
-        tableDesigner.loading = false;
-      }
+      await openAlterTableDesigner({
+        instanceName,
+        tableName,
+        schemaName: node.schemaName || '',
+      });
       return;
     case 'copyDdl': {
       try {
@@ -3050,6 +3085,7 @@ onBeforeUnmount(() => {
               :db-config-id="activeConnection?.id"
               :db-type="activeConnection?.dbType"
               :instance-name="activeTab.instanceName"
+              :schema-name="activeTab.schemaName"
               :read-only="!!activeTab.executing"
               :load-columns="loadEditorColumns"
               :load-tables="loadEditorTables"
@@ -3058,6 +3094,7 @@ onBeforeUnmount(() => {
               @import-file="onImportSqlFile"
               @ask-ai="onAskAiFromEditor"
               @view-table-info="onViewTableInfoFromEditor"
+              @alter-table="onAlterTableFromEditor"
             />
           </div>
 

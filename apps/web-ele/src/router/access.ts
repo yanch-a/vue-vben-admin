@@ -204,15 +204,74 @@ const HIDDEN_PAGE_ROUTES: RouteRecordStringComponent[] = [
       activePath: '/visual/client',
     },
   },
-  // {
-  //   name: 'VisualClient',
-  //   path: '/visual/client',
-  //   component: '/visual/client/index',
-  //   meta: {
-  //     hideInMenu: true,
-  //     title: '数据库客户端',
-  //   },
-  // },
+
+  {
+    name: 'VisualClient',
+    path: '/visual/client',
+    component: '/visual/client/index',
+    meta: {
+      hideInMenu: true,
+      title: '数据库客户端',
+    },
+  },
+  {
+    name: 'SavedQueryManage',
+    path: '/visual/client/savedQueries',
+    component: '/visual/client/savedQueryManage',
+    meta: {
+      hideInMenu: true,
+      title: '查询文件管理',
+      activePath: '/visual/client',
+    },
+  },
+  {
+    name: 'SqlWorkOrder',
+    path: '/lSql/sqlWorkOrder',
+    component: '/visual/sqlWorkOrder/index',
+    meta: {
+      hideInMenu: true,
+      title: 'SQL 工单',
+      activePath: '/lSql',
+    },
+  },
+  {
+    name: 'RedisConsole',
+    path: '/lSql/redisConsole',
+    component: '/visual/redisConsole/index',
+    meta: {
+      hideInMenu: true,
+      title: 'Redis 控制台',
+      activePath: '/lSql',
+    },
+  },
+  {
+    name: 'QueryConfig',
+    path: '/visual/visualQuery/index',
+    component: '/visual/visualQuery/index',
+    meta: {
+      hideInMenu: true,
+      title: '查询视图',
+    },
+  },
+  {
+    name: 'VisualDashboardWorkbench',
+    path: '/visual/dashboard',
+    component: '/visual/dashboard/index',
+    meta: {
+      hideInMenu: true,
+      title: '数据大屏工作台',
+    },
+  },
+  {
+    name: 'DbConfigIndex',
+    path: '/visual/dbConfig',
+    component: '/visual/dbConfig/index',
+    meta: {
+      hideInMenu: true,
+      title: '数据库配置',
+      activePath: '/visual/client',
+    },
+  },
   {
     name: 'QueryResultShare',
     path: '/visual/queryResult/share/:shareCode',
