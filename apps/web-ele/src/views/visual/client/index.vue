@@ -3043,9 +3043,10 @@ onBeforeUnmount(() => {
           <div class="editor-area" :style="editorFlexStyle">
             <SqlEditor
               v-if="activeTab"
-              :key="activeTab.id"
               ref="sqlEditorRef"
               v-model="activeTab.sql"
+              :tab-id="activeTab.id"
+              :alive-tab-ids="tabs.map((t) => t.id)"
               :db-config-id="activeConnection?.id"
               :db-type="activeConnection?.dbType"
               :instance-name="activeTab.instanceName"

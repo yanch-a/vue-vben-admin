@@ -7,6 +7,7 @@
  * - F12 格式化当前选区或光标所在语句
  * - 智能补全：写表名用本地表清单；写字段名按需拉列并缓存；Tab 接受建议
  * - 拖入 .sql / .txt：解析文本写入编辑器，并通知父级保存到当前库
+ * - 按 tabId 复用 ITextModel + 恢复 viewState，切换页签不丢滚动位置与撤销栈
  * @author yanch
  */
 import * as monaco from 'monaco-editor';
@@ -48,6 +49,10 @@ const ALLOWED_EXT = new Set(['.sql', '.txt']);
 
 const props = defineProps<{
   modelValue: string;
+  /** 当前查询页签 ID：用于绑定独立 Monaco Model（保留撤销/滚动） */
+  tabId?: string;
+  /** 仍存活的页签 ID；不在列表内的 Model 会被释放 */
+  aliveTabIds?: string[];
   dbConfigId?: number | string;
   /** 数据库类型码：用于方言触发字符等（不拆多套编辑器组件） */
   dbType?: string;
@@ -91,9 +96,84 @@ let completionDisposable: monaco.IDisposable | null = null;
 /** 跨实例拉表进行中的 Promise，避免连敲触发重复 getTables */
 const tablesLoadInflight = new Map<string, Promise<string[]>>();
 
+/** 每个页签独立 Model + 滚动/光标视图状态 */
+type TabEditorState = {
+  model: monaco.editor.ITextModel;
+  viewState: monaco.editor.ICodeEditorViewState | null;
+};
+const tabStates = new Map<string, TabEditorState>();
+let currentTabId: string | null = null;
+/** 切换 Model 时忽略 modelValue 回写，避免误 setValue 清掉撤销栈 */
+let applyingModelSwitch = false;
 
 function themeName() {
   return isDark.value ? 'vs-dark' : 'vs';
+}
+
+function resolveTabKey(tabId?: string) {
+  return tabId || '__default__';
+}
+
+function getOrCreateTabState(tabId: string, initialValue: string): TabEditorState {
+  let state = tabStates.get(tabId);
+  if (!state) {
+    state = {
+      model: monaco.editor.createModel(initialValue || '', 'sql'),
+      viewState: null,
+    };
+    tabStates.set(tabId, state);
+  }
+  return state;
+}
+
+/**
+ * 切到指定页签：保存上一页签视图状态，挂上对应 Model 并恢复滚动/光标。
+ * Model 复用可保留该页签的撤销栈。
+ */
+function switchToTab(tabId: string, sql: string) {
+  if (!editor) return;
+  const key = resolveTabKey(tabId);
+  if (currentTabId && currentTabId !== key) {
+    const prev = tabStates.get(currentTabId);
+    if (prev) {
+      prev.viewState = editor.saveViewState();
+    }
+  }
+  const state = getOrCreateTabState(key, sql || '');
+  applyingModelSwitch = true;
+  try {
+    // 外部改过该页签 SQL（如重新打开已保存查询）时同步内容；会重置该 Model 撤销栈
+    if ((sql || '') !== state.model.getValue()) {
+      state.model.setValue(sql || '');
+    }
+    editor.setModel(state.model);
+    if (state.viewState) {
+      editor.restoreViewState(state.viewState);
+    }
+    currentTabId = key;
+  } finally {
+    applyingModelSwitch = false;
+  }
+}
+
+/** 释放已关闭页签的 Model，避免泄漏 */
+function pruneTabStates(aliveIds?: string[]) {
+  if (!aliveIds) return;
+  const alive = new Set(aliveIds.map((id) => resolveTabKey(id)));
+  for (const [id, state] of [...tabStates.entries()]) {
+    if (alive.has(id)) continue;
+    if (id === currentTabId) continue;
+    state.model.dispose();
+    tabStates.delete(id);
+  }
+}
+
+function disposeAllTabStates() {
+  for (const state of tabStates.values()) {
+    state.model.dispose();
+  }
+  tabStates.clear();
+  currentTabId = null;
 }
 
 /**
@@ -347,8 +427,10 @@ function registerCompletion() {
 
 onMounted(() => {
   if (!container.value) return;
+  const tabKey = resolveTabKey(props.tabId);
+  const state = getOrCreateTabState(tabKey, props.modelValue || '');
   editor = monaco.editor.create(container.value, {
-    value: props.modelValue || '',
+    model: state.model,
     language: 'sql',
     theme: themeName(),
     automaticLayout: true,
@@ -373,8 +455,9 @@ onMounted(() => {
     acceptSuggestionOnCommitCharacter: true,
     acceptSuggestionOnEnter: 'on',
   });
+  currentTabId = tabKey;
   editor.onDidChangeModelContent(() => {
-    if (props.readOnly) return;
+    if (props.readOnly || applyingModelSwitch) return;
     emit('update:modelValue', editor?.getValue() || '');
   });
   editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter, () => {
@@ -428,14 +511,32 @@ watch(sqlEditorFontSize, (size) => {
   editor?.updateOptions({ fontSize: size });
 });
 
+/**
+ * 页签切换：换 Model（保留撤销）并恢复滚动；
+ * 同页签外部改 SQL：才 setValue（会清撤销，仅用于程序化写入）。
+ */
 watch(
-  () => props.modelValue,
-  (val) => {
+  () => [props.tabId, props.modelValue] as const,
+  ([tabId, sql]) => {
     if (!editor) return;
-    if (val !== editor.getValue()) {
-      editor.setValue(val || '');
+    const key = resolveTabKey(tabId);
+    if (key !== currentTabId) {
+      switchToTab(key, sql || '');
+      return;
+    }
+    if (applyingModelSwitch) return;
+    if ((sql || '') !== editor.getValue()) {
+      editor.setValue(sql || '');
     }
   },
+);
+
+watch(
+  () => props.aliveTabIds,
+  (ids) => {
+    pruneTabStates(ids);
+  },
+  { deep: true },
 );
 
 watch(isDark, () => {
@@ -445,8 +546,19 @@ watch(isDark, () => {
 onBeforeUnmount(() => {
   completionDisposable?.dispose();
   completionDisposable = null;
-  editor?.dispose();
-  editor = null;
+  // 先卸下 Model，再 dispose 编辑器与各页签 Model，避免重复 dispose
+  if (editor) {
+    if (currentTabId) {
+      const cur = tabStates.get(currentTabId);
+      if (cur) {
+        cur.viewState = editor.saveViewState();
+      }
+    }
+    editor.setModel(null);
+    editor.dispose();
+    editor = null;
+  }
+  disposeAllTabStates();
 });
 
 function insertText(text: string) {
