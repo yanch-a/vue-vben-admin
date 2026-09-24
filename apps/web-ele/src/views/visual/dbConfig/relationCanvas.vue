@@ -3,7 +3,7 @@
    * 关系画布（AntV X6）
    * - 左侧：远端表目录（按 schema），点击同步并加入画布
    * - 画布：表节点 + 关系边（字段映射）；保存协议兼容 loadCanvas/saveCanvas
-   * - 交互：空白平移 / 拖节点 / 仅边缘端口连线 / 多选寻路
+   * - 交互：空白平移 / 拖节点 / 仅边缘端口连线 / 多选寻路 / 表目录可收起 / 可展开全部字段
    */
   import {
     computed,
@@ -23,7 +23,7 @@
   import { Snapline } from '@antv/x6-plugin-snapline'
   import { Page } from '@vben/common-ui'
   import { usePreferences } from '@vben/preferences'
-  import { ArrowLeft, Search } from '@element-plus/icons-vue'
+  import { ArrowLeft, Expand, Fold, Search } from '@element-plus/icons-vue'
   import { ElMessage } from 'element-plus'
 
   import '@antv/x6-plugin-selection/es/index.css'
@@ -45,10 +45,17 @@
   import { backToListPage } from '#/utils/route-back'
 
   const NODE_SHAPE = 'table-node'
-  const NODE_WIDTH = 170
-  const NODE_HEIGHT = 78
+  /** 紧凑卡片：只显示表名和字段数 */
+  const COMPACT_WIDTH = 188
+  const COMPACT_HEIGHT = 80
+  /** 字段展开卡片宽度；高度随字段行数变化 */
+  const FIELD_NODE_WIDTH = 280
+  const FIELD_ROW_H = 22
+  const FIELD_BOTTOM_PAD = 6
   const LIST_ITEM_HEIGHT = 72
   const VIRTUAL_BUFFER = 8
+  const SHOW_FIELDS_KEY = 'vq-relation-canvas-show-fields'
+  const CATALOG_COLLAPSE_KEY = 'vq-relation-canvas-catalog-collapsed'
 
   interface EdgeFieldMapping {
     sourceFieldId: string | number | null
@@ -110,11 +117,14 @@
       headerFill: dark ? '#3d5a80' : '#5a78a0',
       headerFillActive: '#409eff',
       titleFill: '#ffffff',
-      nameFill: dark ? '#cfd3dc' : '#606266',
+      nameFill: dark ? '#cfd3dc' : '#303133',
       metaFill: dark ? '#a3a6ad' : '#909399',
       edgeStroke: dark ? '#7a9cc0' : '#5a78a0',
       grid: dark ? '#333843' : '#dfe3e8',
       bg: dark ? '#141414' : '#f0f2f5',
+      rowAlt: dark ? '#26282e' : '#f6f8fb',
+      pkFill: dark ? '#e6a23c' : '#b88230',
+      headerSubFill: 'rgba(255,255,255,0.78)',
     }
   }
 
@@ -147,22 +157,21 @@
   }
 
   /**
-   * 使用 SVG rect+text 节点（不用 HTML），避免 foreignObject 导致框与文字错位。
-   * 文字一律用 refX/refY 相对节点包围盒定位，避免绝对 x 偏到右边框。
-   * 注意：不要用 selector 名 title（易与 SVG/X6 内部 title 冲突导致表头无字）。
+   * 默认节点与紧凑卡片一致。新建节点时 attrs 会与注册表深合并，
+   * 若这里仍留着 refX:50% 居中，会和 buildNodeMeta 的绝对 x 叠在一起，文字跑出框外。
    */
   function registerShapes() {
     const t = canvasTheme()
-    // 强制覆盖注册，保证热更新后节点定义生效
+    const headerH = 28
     Graph.registerNode(
       NODE_SHAPE,
       {
-        // 不继承 rect，避免默认 label/body 属性干扰自定义 markup
-        width: NODE_WIDTH,
-        height: NODE_HEIGHT,
+        width: COMPACT_WIDTH,
+        height: COMPACT_HEIGHT,
         markup: [
           { tagName: 'rect', selector: 'body' },
           { tagName: 'rect', selector: 'header' },
+          { tagName: 'rect', selector: 'headerBottom' },
           { tagName: 'text', selector: 'headerLabel' },
           { tagName: 'text', selector: 'nameLabel' },
           { tagName: 'text', selector: 'metaLabel' },
@@ -172,46 +181,53 @@
             refWidth: '100%',
             refHeight: '100%',
             stroke: t.bodyStroke,
-            strokeWidth: 1.5,
+            strokeWidth: 1.25,
             fill: t.bodyFill,
             rx: 8,
             ry: 8,
             magnet: false,
           },
           header: {
-            refWidth: '100%',
-            height: 26,
-            x: 0,
-            y: 0,
+            x: 1.25,
+            y: 1.25,
+            width: COMPACT_WIDTH - 2.5,
+            height: headerH,
+            fill: t.headerFill,
+            strokeWidth: 0,
+            rx: 7,
+            ry: 7,
+          },
+          headerBottom: {
+            x: 1.25,
+            y: headerH - 7,
+            width: COMPACT_WIDTH - 2.5,
+            height: 7,
             fill: t.headerFill,
             strokeWidth: 0,
           },
-          // 表头：中文注释 / 表名，水平垂直居中于头部区域
           headerLabel: {
-            refX: '50%',
-            refY: 13,
-            textAnchor: 'middle',
+            x: 12,
+            y: headerH / 2 + 1,
+            textAnchor: 'start',
             textVerticalAnchor: 'middle',
             fontSize: 13,
             fontWeight: 600,
             fill: t.titleFill,
             text: '',
           },
-          // 表名（英文/原始名）
           nameLabel: {
-            refX: '50%',
-            refY: 44,
-            textAnchor: 'middle',
+            x: 12,
+            y: 48,
+            textAnchor: 'start',
             textVerticalAnchor: 'middle',
             fontSize: 12,
             fill: t.nameFill,
             text: '',
           },
-          // 字段数量
           metaLabel: {
-            refX: '50%',
-            refY: 62,
-            textAnchor: 'middle',
+            x: 12,
+            y: 66,
+            textAnchor: 'start',
             textVerticalAnchor: 'middle',
             fontSize: 11,
             fill: t.metaFill,
@@ -233,24 +249,8 @@
       args: { color: t.grid, thickness: 1 },
     })
     graph.showGrid()
-    const selected = new Set(
-      selectionPlugin
-        ? selectionPlugin.getSelectedCells().filter((c) => c.isNode()).map((c) => c.id)
-        : [],
-    )
-    graph.getNodes().forEach((node) => {
-      const data = (node.getData() || {}) as TableNodeData
-      const headerFill = selected.has(node.id)
-        ? t.headerFillActive
-        : headerColorForSchema(data.schemaName)
-      node.attr({
-        body: { fill: t.bodyFill, stroke: t.bodyStroke },
-        header: { fill: headerFill },
-        headerLabel: { fill: t.titleFill },
-        nameLabel: { fill: t.nameFill },
-        metaLabel: { fill: t.metaFill },
-      })
-    })
+    // 字段行颜色跟主题走，整卡重绘；选中态在 buildNodeMeta 里读取
+    refreshAllNodeVisuals()
     graph.getEdges().forEach((edge) => {
       edge.attr('line/stroke', t.edgeStroke)
       const props = (edge.getData() || {}) as EdgeRelationData
@@ -282,17 +282,69 @@
 
   function edgeLabelText(props: EdgeRelationData) {
     const n = props.fields ? props.fields.length : 0
-    return `${props.joinType || 'INNER'}${
+    return `${props.joinType || 'LEFT'}${
       props.relationshipName ? ` · ${props.relationshipName}` : ''
     }（${n} 映射）`
   }
 
-  function centerToTopLeft(cx: number, cy: number) {
-    return { x: cx - NODE_WIDTH / 2, y: cy - NODE_HEIGHT / 2 }
+  function relTypeLabel(type?: string | null) {
+    const map: Record<string, string> = {
+      ONE_TO_ONE: '一对一',
+      ONE_TO_MANY: '一对多',
+      MANY_TO_ONE: '多对一',
+      MANY_TO_MANY: '多对多',
+    }
+    const key = String(type || '')
+    return map[key] || '未标注'
   }
 
-  function topLeftToCenter(x: number, y: number) {
-    return { posX: x + NODE_WIDTH / 2, posY: y + NODE_HEIGHT / 2 }
+  /** 主键标记：兼容目录接口里几种历史字段名 */
+  function isPrimaryColumn(col: any) {
+    return (
+      col?.isPrimary === 1 ||
+      col?.isPrimary === true ||
+      col?.primaryKey === true ||
+      col?.isPrimaryKey === true ||
+      col?.pk === true ||
+      col?.pk === 1
+    )
+  }
+
+  function columnViews(table: any) {
+    const cols = Array.isArray(table?.columns) ? table.columns : []
+    return cols.map((col: any) => {
+      const name = String(col.fieldName || col.columnName || '').trim()
+      const commentRaw = String(
+        col.displayName && col.displayName !== name
+          ? col.displayName
+          : col.description || col.columnComment || col.comment || '',
+      ).trim()
+      const comment = commentRaw && commentRaw !== name ? commentRaw : ''
+      const typeText = String(col.dataType || col.columnType || '').trim()
+      return {
+        pk: isPrimaryColumn(col),
+        typeText,
+        label: comment ? `${name}  ${comment}` : name || '-',
+      }
+    })
+  }
+
+  function centerToTopLeft(
+    cx: number,
+    cy: number,
+    width = COMPACT_WIDTH,
+    height = COMPACT_HEIGHT,
+  ) {
+    return { x: cx - width / 2, y: cy - height / 2 }
+  }
+
+  function topLeftToCenter(
+    x: number,
+    y: number,
+    width = COMPACT_WIDTH,
+    height = COMPACT_HEIGHT,
+  ) {
+    return { posX: x + width / 2, posY: y + height / 2 }
   }
 
   const route = useRoute()
@@ -326,6 +378,10 @@
   const canvasTableIds = ref<Set<string>>(new Set())
 
   const multiSelectMode = ref(false)
+  /** 画布表卡片是否展开全部字段，偏好记在本地 */
+  const showAllFields = ref(localStorage.getItem(SHOW_FIELDS_KEY) === '1')
+  /** 左侧表目录是否收起 */
+  const catalogCollapsed = ref(localStorage.getItem(CATALOG_COLLAPSE_KEY) === '1')
   const selectedNodeIds = ref<string[]>([])
   const pathDialogVisible = ref(false)
   const pathResult = ref<any>(null)
@@ -392,7 +448,7 @@
     sourceTableId: null,
     targetTableId: null,
     relationshipName: '',
-    joinType: 'INNER',
+    joinType: 'LEFT',
     relationshipType: 'ONE_TO_MANY',
     description: '',
     fields: [],
@@ -491,12 +547,18 @@
     const selected = new Set(selectedNodeIds.value)
     graph.getNodes().forEach((node) => {
       const data = (node.getData() || {}) as TableNodeData
-      node.attr(
-        'header/fill',
-        selected.has(String(node.id))
-          ? t.headerFillActive
-          : headerColorForSchema(data.schemaName),
-      )
+      const on = selected.has(String(node.id))
+      const headerFill = on
+        ? t.headerFillActive
+        : headerColorForSchema(data.schemaName)
+      node.attr({
+        header: { fill: headerFill },
+        headerBottom: { fill: headerFill },
+        body: {
+          stroke: on ? t.headerFillActive : t.bodyStroke,
+          strokeWidth: on ? 2 : 1.25,
+        },
+      })
     })
   }
 
@@ -580,45 +642,266 @@
     ])
   }
 
-  /** 构建表节点；坐标入参为中心点（与旧 LogicFlow 存盘兼容） */
+  /**
+   * 表头用圆角矩形，再用一块同色矩形盖住底部圆角，
+   * 这样只有卡片顶部是圆的，字段区和表头交界保持平直。
+   */
+  function headerMarkup() {
+    return [
+      { tagName: 'rect', selector: 'header' },
+      { tagName: 'rect', selector: 'headerBottom' },
+      { tagName: 'text', selector: 'headerLabel' },
+    ]
+  }
+
+  function textAnchorStart(extra: Record<string, any> = {}) {
+    return {
+      // 显式清掉注册表里可能残留的相对定位，避免与绝对 x/y 叠加
+      refX: null,
+      refY: null,
+      textAnchor: 'start',
+      textVerticalAnchor: 'middle',
+      ...extra,
+    }
+  }
+
+  /**
+   * 构建表节点。坐标入参为中心点（与旧 LogicFlow 存盘兼容）。
+   * showAllFields 为真时按字段行撑开高度，否则保持紧凑卡片。
+   */
   const buildNodeMeta = (table: any, x: number, y: number) => {
-    const pos = centerToTopLeft(x, y)
     const t = canvasTheme()
     const tableName = table.tableName || ''
     const schemaName = table.schemaName || ''
-    // 表头：中文注释优先，没有则表名
     const headerText = resolveHeaderLabel(table)
     const displayName = table.displayName || tableName
-    const fieldCount = table.columns ? table.columns.length : 0
+    const columns = columnViews(table)
+    const fieldCount = columns.length
     const foreign =
       !!schemaName &&
       !!canvasInstanceName.value &&
       schemaName !== canvasInstanceName.value
+    const selected = selectedNodeIds.value.includes(String(table.id))
+    const headerFill = selected
+      ? t.headerFillActive
+      : headerColorForSchema(schemaName)
+    const subText = foreign
+      ? `${schemaName}.${tableName}`
+      : tableName !== headerText
+        ? tableName
+        : ''
+
+    if (!showAllFields.value) {
+      const pos = centerToTopLeft(x, y, COMPACT_WIDTH, COMPACT_HEIGHT)
+      const headerH = 28
+      return {
+        id: String(table.id),
+        shape: NODE_SHAPE,
+        x: pos.x,
+        y: pos.y,
+        width: COMPACT_WIDTH,
+        height: COMPACT_HEIGHT,
+        markup: [
+          { tagName: 'rect', selector: 'body' },
+          ...headerMarkup(),
+          { tagName: 'text', selector: 'nameLabel' },
+          { tagName: 'text', selector: 'metaLabel' },
+        ],
+        attrs: {
+          body: {
+            refWidth: '100%',
+            refHeight: '100%',
+            stroke: selected ? t.headerFillActive : t.bodyStroke,
+            strokeWidth: selected ? 2 : 1.25,
+            fill: t.bodyFill,
+            rx: 8,
+            ry: 8,
+            magnet: false,
+          },
+          header: {
+            x: 1.25,
+            y: 1.25,
+            width: COMPACT_WIDTH - 2.5,
+            height: headerH,
+            fill: headerFill,
+            strokeWidth: 0,
+            rx: 7,
+            ry: 7,
+          },
+          headerBottom: {
+            x: 1.25,
+            y: headerH - 7,
+            width: COMPACT_WIDTH - 2.5,
+            height: 7,
+            fill: headerFill,
+            strokeWidth: 0,
+          },
+          headerLabel: textAnchorStart({
+            x: 12,
+            y: headerH / 2 + 1,
+            fontSize: 13,
+            fontWeight: 600,
+            fill: t.titleFill,
+            text: truncateLabel(headerText, 11),
+          }),
+          nameLabel: textAnchorStart({
+            x: 12,
+            y: 48,
+            fontSize: 12,
+            fill: t.nameFill,
+            text: truncateLabel(tableName, 20),
+          }),
+          metaLabel: textAnchorStart({
+            x: 12,
+            y: 66,
+            fontSize: 11,
+            fill: t.metaFill,
+            text: foreign
+              ? `${truncateLabel(schemaName, 12)} · ${fieldCount} 字段`
+              : `${fieldCount} 个字段`,
+          }),
+        },
+        data: {
+          tableId: table.id,
+          tableName,
+          displayName,
+          schemaName,
+          fieldCount,
+        } as TableNodeData,
+        ports: defaultPorts,
+        zIndex: 2,
+      }
+    }
+
+    const showSub = !!subText
+    const headerH = showSub ? 40 : 30
+    const rowCount = Math.max(fieldCount, 1)
+    const height = headerH + rowCount * FIELD_ROW_H + FIELD_BOTTOM_PAD
+    const width = FIELD_NODE_WIDTH
+    const pos = centerToTopLeft(x, y, width, height)
+    const markup: any[] = [
+      { tagName: 'rect', selector: 'body' },
+      ...headerMarkup(),
+    ]
+    if (showSub) markup.push({ tagName: 'text', selector: 'subLabel' })
+    const attrs: Record<string, any> = {
+      body: {
+        refWidth: '100%',
+        refHeight: '100%',
+        stroke: selected ? t.headerFillActive : t.bodyStroke,
+        strokeWidth: selected ? 2 : 1.25,
+        fill: t.bodyFill,
+        rx: 8,
+        ry: 8,
+        magnet: false,
+      },
+      header: {
+        x: 1.25,
+        y: 1.25,
+        width: width - 2.5,
+        height: headerH,
+        fill: headerFill,
+        strokeWidth: 0,
+        rx: 7,
+        ry: 7,
+      },
+      headerBottom: {
+        x: 1.25,
+        y: headerH - 7,
+        width: width - 2.5,
+        height: 7,
+        fill: headerFill,
+        strokeWidth: 0,
+      },
+      headerLabel: textAnchorStart({
+        x: 12,
+        y: showSub ? 14 : headerH / 2 + 1,
+        fontSize: 13,
+        fontWeight: 600,
+        fill: t.titleFill,
+        text: truncateLabel(headerText, 16),
+      }),
+    }
+    if (showSub) {
+      attrs.subLabel = textAnchorStart({
+        x: 12,
+        y: 30,
+        fontSize: 10,
+        fill: t.headerSubFill,
+        text: truncateLabel(subText, 32),
+      })
+    }
+
+    const rows =
+      fieldCount > 0
+        ? columns
+        : [{ pk: false, typeText: '', label: '暂无字段' }]
+    rows.forEach((col, i) => {
+      const rowY = headerH + i * FIELD_ROW_H
+      const midY = rowY + FIELD_ROW_H / 2
+      markup.push(
+        { tagName: 'rect', selector: `fRow${i}` },
+        { tagName: 'rect', selector: `fMark${i}` },
+        { tagName: 'text', selector: `fPk${i}` },
+        { tagName: 'text', selector: `fName${i}` },
+        { tagName: 'text', selector: `fType${i}` },
+      )
+      attrs[`fRow${i}`] = {
+        x: 1.25,
+        y: rowY,
+        width: width - 2.5,
+        height: FIELD_ROW_H,
+        fill: i % 2 === 1 ? t.rowAlt : t.bodyFill,
+        strokeWidth: 0,
+        magnet: false,
+      }
+      attrs[`fMark${i}`] = {
+        x: 1.25,
+        y: rowY + 4,
+        width: 3,
+        height: FIELD_ROW_H - 8,
+        rx: 1,
+        fill: col.pk ? t.pkFill : 'none',
+        strokeWidth: 0,
+      }
+      attrs[`fPk${i}`] = textAnchorStart({
+        x: 10,
+        y: midY,
+        fontSize: 9,
+        fontWeight: 700,
+        fill: t.pkFill,
+        text: col.pk ? 'PK' : '',
+      })
+      attrs[`fName${i}`] = textAnchorStart({
+        x: col.pk ? 28 : 12,
+        y: midY,
+        fontSize: 11,
+        fontWeight: col.pk ? 600 : 400,
+        fill: t.nameFill,
+        text: truncateLabel(col.label, col.pk ? 14 : 16),
+      })
+      attrs[`fType${i}`] = {
+        refX: null,
+        refY: null,
+        x: width - 10,
+        y: midY,
+        textAnchor: 'end',
+        textVerticalAnchor: 'middle',
+        fontSize: 10,
+        fill: t.metaFill,
+        text: truncateLabel(col.typeText, 10),
+      }
+    })
+
     return {
       id: String(table.id),
       shape: NODE_SHAPE,
       x: pos.x,
       y: pos.y,
-      width: NODE_WIDTH,
-      height: NODE_HEIGHT,
-      attrs: {
-        body: { fill: t.bodyFill, stroke: t.bodyStroke },
-        header: { fill: headerColorForSchema(schemaName) },
-        headerLabel: {
-          text: truncateLabel(headerText, 16),
-          fill: t.titleFill,
-        },
-        nameLabel: {
-          text: truncateLabel(tableName, 18),
-          fill: t.nameFill,
-        },
-        metaLabel: {
-          text: foreign
-            ? `${truncateLabel(schemaName, 10)} · ${fieldCount}字段`
-            : `${fieldCount} 个字段`,
-          fill: t.metaFill,
-        },
-      },
+      width,
+      height,
+      markup,
+      attrs,
       data: {
         tableId: table.id,
         tableName,
@@ -631,11 +914,68 @@
     }
   }
 
+  /**
+   * 按当前「显示全部字段」开关重绘单张表，中心点保持不变，避免切换后坐标漂移。
+   */
+  const refreshNodeVisual = (node: any) => {
+    if (!node?.isNode?.()) return
+    const pos = node.position()
+    const size = node.size()
+    const cx = pos.x + size.width / 2
+    const cy = pos.y + size.height / 2
+    const id = String(node.id)
+    const data = (node.getData() || {}) as TableNodeData
+    const cached = tableMap[id]
+    const table = cached || {
+      id,
+      tableName: data.tableName,
+      displayName: data.displayName,
+      schemaName: data.schemaName,
+      columns: [],
+    }
+    const meta = buildNodeMeta(table, cx, cy)
+    node.setMarkup(meta.markup)
+    node.resize(meta.width, meta.height)
+    node.position(meta.x, meta.y)
+    node.replaceAttrs(meta.attrs)
+    node.setData(meta.data)
+  }
+
+  const refreshAllNodeVisuals = () => {
+    if (!graph) return
+    const history = graph.getPlugin('history') as History | undefined
+    history?.disable()
+    try {
+      graph.getNodes().forEach((node) => refreshNodeVisual(node))
+    } finally {
+      history?.enable()
+    }
+  }
+
+  /** 展开字段前补齐尚未拉过列信息的表 */
+  const ensureCanvasColumns = async () => {
+    if (!graph) return
+    const missing = graph
+      .getNodes()
+      .map((n) => String(n.id))
+      .filter((id) => {
+        const t = tableMap[id]
+        return !t?.columns?.length
+      })
+    if (!missing.length) return
+    try {
+      const { data } = await getTablesWithColumnsByIds(missing)
+      for (const t of data || []) rememberCatalogTable(t)
+    } catch (e) {
+      console.warn('加载画布字段失败', e)
+    }
+  }
+
   const buildEdgeMeta = (r: any) => {
     const t = canvasTheme()
     const props: EdgeRelationData = {
       relationshipName: r.relationshipName || '',
-      joinType: r.joinType || 'INNER',
+      joinType: r.joinType || 'LEFT',
       relationshipType: r.relationshipType || 'ONE_TO_MANY',
       description: r.description || '',
       fields: (r.fields || []).map((f: any) => ({
@@ -733,7 +1073,7 @@
     edgeForm.sourceTableId = sourceId
     edgeForm.targetTableId = targetId
     edgeForm.relationshipName = props.relationshipName || ''
-    edgeForm.joinType = props.joinType || 'INNER'
+    edgeForm.joinType = props.joinType || 'LEFT'
     edgeForm.relationshipType = props.relationshipType || 'ONE_TO_MANY'
     edgeForm.description = props.description || ''
     edgeForm.fields =
@@ -904,7 +1244,7 @@
             connector: { name: 'rounded' },
             data: {
               relationshipName: '',
-              joinType: 'INNER',
+              joinType: 'LEFT',
               relationshipType: 'ONE_TO_MANY',
               description: '',
               fields: [],
@@ -1050,26 +1390,7 @@
     if (!graph) return
     const node = graph.getCellById(id)
     if (!node || !node.isNode()) return
-    const data = {
-      ...(node.getData() || {}),
-      displayName,
-      schemaName: schemaName || (node.getData() as TableNodeData)?.schemaName,
-    } as TableNodeData
-    node.setData(data)
-    const headerText = resolveHeaderLabel({
-      tableName: data.tableName,
-      displayName,
-    })
-    const t = canvasTheme()
-    const selected = selectedNodeIds.value.includes(id)
-    node.attr({
-      header: {
-        fill: selected
-          ? t.headerFillActive
-          : headerColorForSchema(data.schemaName),
-      },
-      headerLabel: { text: truncateLabel(headerText, 16) },
-    })
+    refreshNodeVisual(node)
   }
 
   const saveTableDisplayNameFromInfo = async () => {
@@ -1205,9 +1526,13 @@
         return
       }
       const count = graph.getNodes().length
-      const cx = 220 + (count % 4) * 220
-      const cy = 120 + Math.floor(count / 4) * 140
-      graph.addNode(buildNodeMeta(local, cx, cy))
+      const stepX = showAllFields.value ? 320 : 230
+      const stepY = showAllFields.value ? 200 : 150
+      const cx = 240 + (count % 4) * stepX
+      const cy = 160 + Math.floor(count / 4) * stepY
+      // 先按注册表创建，再整卡重绘，避免 attrs 深合并把文字挤出框外
+      const node = graph.addNode(buildNodeMeta(local, cx, cy))
+      refreshNodeVisual(node)
       syncCanvasTableIds()
     } catch (e: any) {
       console.error(e)
@@ -1464,13 +1789,13 @@
           ? light.posX
           : t.posX != null
             ? t.posX
-            : 220 + (idx % 4) * 220
+            : 240 + (idx % 4) * (showAllFields.value ? 320 : 230)
       const cy =
         light.posY != null
           ? light.posY
           : t.posY != null
             ? t.posY
-            : 120 + Math.floor(idx / 4) * 140
+            : 160 + Math.floor(idx / 4) * (showAllFields.value ? 200 : 150)
       nodes.push(buildNodeMeta(t, cx, cy))
       idx++
     }
@@ -1511,7 +1836,8 @@
         canvasGroupId: currentCanvasGroupId.value,
         nodes: graph.getNodes().map((n) => {
           const pos = n.position()
-          const center = topLeftToCenter(pos.x, pos.y)
+          const size = n.size()
+          const center = topLeftToCenter(pos.x, pos.y, size.width, size.height)
           const data = (n.getData() || {}) as TableNodeData
           return {
             tableId: data.tableId,
@@ -1570,8 +1896,30 @@
     nextTick(() => canvasRef.value?.focus())
   })
 
+  const resizeGraphToContainer = () => {
+    const el = canvasRef.value
+    if (!graph || !el) return
+    graph.resize(el.clientWidth, el.clientHeight)
+  }
+
+  const onCatalogTransitionEnd = (event: TransitionEvent) => {
+    if (event.propertyName !== 'width') return
+    resizeGraphToContainer()
+  }
+
   watch(isDark, () => {
     applyThemeToGraph()
+  })
+
+  watch(showAllFields, async (on) => {
+    localStorage.setItem(SHOW_FIELDS_KEY, on ? '1' : '0')
+    if (on) await ensureCanvasColumns()
+    refreshAllNodeVisuals()
+  })
+
+  watch(catalogCollapsed, (collapsed) => {
+    localStorage.setItem(CATALOG_COLLAPSE_KEY, collapsed ? '1' : '0')
+    nextTick(() => resizeGraphToContainer())
   })
 
   onBeforeUnmount(() => {
@@ -1607,15 +1955,26 @@
             :value="item"
           />
         </el-select>
-        <span class="db-title">
-          {{ dbConfigName
-          }}{{ canvasInstanceName ? ` / ${canvasInstanceName}` : '' }} {{ $tr('- 关系画布') }}
-        </span>
-        <span class="canvas-hint">
-          {{ $tr('空白拖动画布 · 拖节点移动 · 边缘圆点拉线 · 双击表查看/改名 · Ctrl+滚轮缩放 · Shift 框选 · 表头颜色区分实例') }}
-        </span>
+        <div class="title-block">
+          <span class="db-title">
+            {{ dbConfigName
+            }}{{ canvasInstanceName ? ` / ${canvasInstanceName}` : '' }} {{ $tr('- 关系画布') }}
+          </span>
+          <span class="canvas-hint">
+            {{ $tr('空白拖动画布 · 拖节点移动 · 圆点拉线 · 双击连线或表 · Ctrl+滚轮缩放 · 表头颜色区分实例') }}
+          </span>
+        </div>
       </div>
       <div class="toolbar-right">
+        <el-tooltip
+          :content="$tr('打开后，画布上每张表会列出全部字段；字段很多时卡片会变高')"
+          placement="bottom"
+        >
+          <div class="field-switch">
+            <span>{{ $tr('显示全部字段') }}</span>
+            <el-switch v-model="showAllFields" />
+          </div>
+        </el-tooltip>
         <el-tooltip
           :content="$tr('开启后点击表可叠加选中；也可按住 Shift / Ctrl 点选')"
           placement="bottom"
@@ -1642,7 +2001,37 @@
     </div>
 
     <div class="canvas-body" v-loading="switchingCanvas">
-      <div class="table-catalog">
+      <div
+        class="table-catalog"
+        :class="{ 'is-collapsed': catalogCollapsed }"
+        @transitionend="onCatalogTransitionEnd"
+      >
+        <div class="catalog-bar">
+          <span v-show="!catalogCollapsed" class="catalog-title">{{ $tr('表目录') }}</span>
+          <el-tooltip
+            :content="$tr(catalogCollapsed ? '展开表目录' : '收起表目录')"
+            placement="right"
+          >
+            <el-button
+              link
+              class="catalog-fold"
+              @click="catalogCollapsed = !catalogCollapsed"
+            >
+              <el-icon :size="16">
+                <Fold v-if="!catalogCollapsed" />
+                <Expand v-else />
+              </el-icon>
+            </el-button>
+          </el-tooltip>
+        </div>
+        <div
+          v-if="catalogCollapsed"
+          class="catalog-rail"
+          @click="catalogCollapsed = false"
+        >
+          {{ $tr('表目录') }}
+        </div>
+        <template v-if="!catalogCollapsed">
         <div class="catalog-header">
           <el-select
             v-model="currentSchema"
@@ -1737,8 +2126,9 @@
           />
         </div>
         <div class="catalog-tip">
-          {{ $tr('上方切换「拉表实例」可跨库加表到当前画布；工具栏切换的是整张实例画布。左键或右键「添加」加入；边缘拖出连线；Delete 移除（需保存才持久化）。') }}
+          {{ $tr('上方切换「拉表实例」可跨库加表；工具栏切换的是整张实例画布。单击加入，右键可改名或移除。') }}
         </div>
+        </template>
       </div>
 
       <div ref="canvasRef" class="x6-canvas" tabindex="0"></div>
@@ -1795,8 +2185,8 @@
           <el-col :span="6">
             <el-form-item label="JOIN">
               <el-select v-model="edgeForm.joinType">
-                <el-option label="INNER" value="INNER" />
                 <el-option label="LEFT" value="LEFT" />
+                <el-option label="INNER" value="INNER" />
                 <el-option label="RIGHT" value="RIGHT" />
               </el-select>
             </el-form-item>
@@ -1916,6 +2306,9 @@
               {{ tableLabel(tid) }}
             </el-tag>
           </div>
+          <p class="path-card-note">
+            {{ $tr('寻路只按连通最短路计算，一对一、一对多、多对一目前不参与选路，这里只展示关系上已保存的类型。') }}
+          </p>
           <el-timeline>
             <el-timeline-item
               v-for="(rel, i) in pathResult.relationships"
@@ -1924,7 +2317,10 @@
             >
               {{ tableLabel(rel.sourceTableId) }}
               <el-tag size="small" style="margin: 0 4px">
-                {{ rel.joinType || 'INNER' }} JOIN
+                {{ rel.joinType || 'LEFT' }} JOIN
+              </el-tag>
+              <el-tag size="small" type="info" style="margin-right: 4px">
+                {{ $tr(relTypeLabel(rel.relationshipType)) }}
               </el-tag>
               {{ tableLabel(rel.targetTableId) }}
             </el-timeline-item>
@@ -2100,33 +2496,66 @@
 
     .canvas-toolbar {
       display: flex;
+      gap: 12px;
       align-items: center;
       justify-content: space-between;
       padding: 8px 12px;
       margin-bottom: 8px;
       background: var(--el-bg-color);
-      border-radius: 6px;
-      box-shadow: 0 1px 4px rgb(0 0 0 / 8%);
+      border: 1px solid var(--el-border-color-lighter);
+      border-radius: 8px;
+
+      .title-block {
+        display: flex;
+        flex-direction: column;
+        min-width: 0;
+        margin-left: 4px;
+      }
 
       .db-title {
-        margin-left: 12px;
-        font-size: 15px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        font-size: 14px;
         font-weight: 600;
+        line-height: 1.3;
         color: var(--el-text-color-primary);
+        white-space: nowrap;
       }
 
       .canvas-hint {
-        margin-left: 12px;
+        overflow: hidden;
+        text-overflow: ellipsis;
         font-size: 12px;
+        line-height: 1.3;
         color: var(--el-text-color-secondary);
         white-space: nowrap;
       }
 
-      .toolbar-left {
+      .toolbar-left,
+      .toolbar-right {
         display: flex;
+        gap: 8px;
         align-items: center;
         min-width: 0;
-        overflow: hidden;
+      }
+
+      .toolbar-left {
+        flex: 1;
+      }
+
+      .toolbar-right {
+        flex-shrink: 0;
+      }
+
+      .field-switch {
+        display: flex;
+        gap: 8px;
+        align-items: center;
+        padding: 0 10px;
+        font-size: 13px;
+        color: var(--el-text-color-regular);
+        white-space: nowrap;
+        border-right: 1px solid var(--el-border-color-lighter);
       }
     }
 
@@ -2139,11 +2568,61 @@
       .table-catalog {
         display: flex;
         flex-direction: column;
+        flex-shrink: 0;
         width: 280px;
         overflow: hidden;
         background: var(--el-bg-color);
-        border-radius: 6px;
-        box-shadow: 0 1px 4px rgb(0 0 0 / 8%);
+        border: 1px solid var(--el-border-color-lighter);
+        border-radius: 8px;
+        transition: width 0.2s ease;
+
+        &.is-collapsed {
+          width: 44px;
+
+          .catalog-bar {
+            justify-content: center;
+            padding-right: 0;
+            padding-left: 0;
+            border-bottom: none;
+          }
+        }
+
+        .catalog-bar {
+          display: flex;
+          flex-shrink: 0;
+          align-items: center;
+          justify-content: space-between;
+          height: 40px;
+          padding: 0 8px 0 12px;
+          border-bottom: 1px solid var(--el-border-color-lighter);
+        }
+
+        .catalog-title {
+          font-size: 13px;
+          font-weight: 600;
+          color: var(--el-text-color-primary);
+        }
+
+        .catalog-fold {
+          padding: 4px;
+        }
+
+        .catalog-rail {
+          display: flex;
+          flex: 1;
+          align-items: center;
+          justify-content: center;
+          font-size: 12px;
+          color: var(--el-text-color-secondary);
+          letter-spacing: 2px;
+          cursor: pointer;
+          writing-mode: vertical-rl;
+
+          &:hover {
+            color: var(--el-color-primary);
+            background: var(--el-fill-color-light);
+          }
+        }
 
         .catalog-header {
           padding: 8px;
@@ -2184,15 +2663,16 @@
           padding: 8px 10px;
           margin: 0;
           cursor: pointer;
-          border-bottom: 1px solid #f0f2f5;
-          transition: all 0.15s;
+          border-bottom: 1px solid var(--el-border-color-lighter);
+          transition: background 0.15s;
 
           &:hover {
-            background: #ecf5ff;
+            background: var(--el-color-primary-light-9);
           }
 
           &.on-canvas {
-            background: #f0f9eb;
+            background: var(--el-color-success-light-9);
+            box-shadow: inset 3px 0 0 var(--el-color-success);
           }
 
           &.is-syncing {
@@ -2205,7 +2685,7 @@
             text-overflow: ellipsis;
             font-size: 13px;
             font-weight: 600;
-            color: #303133;
+            color: var(--el-text-color-primary);
             white-space: nowrap;
           }
 
@@ -2214,7 +2694,7 @@
             overflow: hidden;
             text-overflow: ellipsis;
             font-size: 12px;
-            color: #909399;
+            color: var(--el-text-color-secondary);
             white-space: nowrap;
           }
 
@@ -2241,8 +2721,8 @@
         min-width: 0;
         outline: none;
         background: transparent;
-        border-radius: 6px;
-        box-shadow: 0 1px 4px rgb(0 0 0 / 8%);
+        border: 1px solid var(--el-border-color-lighter);
+        border-radius: 8px;
 
         &:focus {
           outline: none;
@@ -2328,6 +2808,13 @@
       line-height: 1.4;
       color: var(--el-text-color-secondary);
     }
+  }
+
+  .path-card-note {
+    margin: 0 0 10px;
+    font-size: 12px;
+    line-height: 1.5;
+    color: var(--el-text-color-secondary);
   }
 
   .schema-dot {
