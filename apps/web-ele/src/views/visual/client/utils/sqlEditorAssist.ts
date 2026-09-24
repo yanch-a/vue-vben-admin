@@ -5,7 +5,7 @@
  * 1. 根据光标前语义判断「写表名」还是「写字段名」，避免每次按键都打接口
  * 2. 表名补全优先用左侧已加载的表清单；支持 db.table 按库匹配
  * 3. 字段补全仅在识别到表之后按需请求，并写入客户端 LRU 缓存
- * 4. 执行时按分号切分，只发「光标所在语句」；若有选区则只发选中内容
+ * 4. 执行时按分号切分：无选区只发「光标所在语句」；选区含多条时整段交给分步执行
  *
  * @author yanch
  */
@@ -227,6 +227,17 @@ export function splitSqlStatements(fullText: string): SqlRange[] {
   }
   pushRange(fullText.length);
   return ranges;
+}
+
+/**
+ * 取出按分号切开的语句文本（已去掉首尾空白）。
+ * 编辑器用来判断选区里是不是多条 SQL。
+ */
+export function listSqlStatements(fullText: string): string[] {
+  const text = fullText || '';
+  return splitSqlStatements(text)
+    .map((range) => text.slice(range.start, range.end).trim())
+    .filter((sql) => sql.length > 0);
 }
 
 /**

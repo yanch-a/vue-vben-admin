@@ -27,12 +27,15 @@ afterEach(() => {
 });
 
 /** 使用真实 Vue 生命周期，避免仅通过源文件字符串判断高度配置。 */
-async function mountRenderer(onError?: (message: string) => void) {
+async function mountRenderer(
+  onError?: (message: string) => void,
+  result?: Record<string, unknown>,
+) {
   container = document.createElement('div');
   document.body.append(container);
   app = createApp(ChartRenderer, {
     spec: { chartType: 'bar', xField: 'category', yFields: ['amount'] },
-    result: {
+    result: result ?? {
       columns: ['category', 'amount'],
       rows: [{ category: 'A', amount: 10 }],
     },
@@ -62,5 +65,31 @@ describe('大屏图表渲染器', () => {
     await nextTick();
     expect(container.textContent).toContain('invalid series type');
     expect(onError).toHaveBeenCalledWith('invalid series type');
+  });
+
+  it('成功查询 message（Query OK）不显示遮罩，图表仍渲染', async () => {
+    mocks.render.mockResolvedValue(null);
+    await mountRenderer(undefined, {
+      columns: ['category', 'amount'],
+      rows: [{ category: 'A', amount: 10 }],
+      rowCount: 1,
+      message: 'Query OK, 36 row(s) returned (SQL LIMIT)',
+    });
+    expect(container.querySelector('.render-error')).toBeNull();
+    expect(container.textContent || '').not.toContain('Query OK');
+    expect(mocks.render).toHaveBeenCalled();
+  });
+
+  it('真实 soft-fail message 才显示遮罩', async () => {
+    mocks.render.mockResolvedValue(null);
+    await mountRenderer(undefined, {
+      columns: [],
+      rows: [],
+      rowCount: 0,
+      message: '请先绑定数据源：选择数据库连接',
+    });
+    const overlay = container.querySelector('.render-error');
+    expect(overlay).not.toBeNull();
+    expect(overlay?.textContent || '').toContain('请先绑定数据源');
   });
 });

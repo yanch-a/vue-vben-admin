@@ -215,27 +215,73 @@ const FULLSCREEN_ROUTE_KEYS = new Set([
   '/visual/dashboard/view',
 ]);
 
+function isFullscreenRoute(route: RouteRecordStringComponent): boolean {
+  return (
+    (!!route.name && FULLSCREEN_ROUTE_KEYS.has(String(route.name))) ||
+    (!!route.path && FULLSCREEN_ROUTE_KEYS.has(route.path))
+  );
+}
+
+function withFullscreenMeta(
+  route: RouteRecordStringComponent,
+): RouteRecordStringComponent {
+  return {
+    ...route,
+    meta: {
+      ...route.meta,
+      // RouteRecordStringComponent 要求 title 必填；异常后台菜单落到路径名/路由名
+      title: route.meta?.title || String(route.name || route.path || ''),
+      hideInMenu: true,
+      hideInTab: true,
+      hideInBreadcrumb: true,
+      noBasicLayout: true,
+    },
+  };
+}
+
+/**
+ * 强制全屏页 meta，并把它们提升为根级路由。
+ * 后台若把「查看大屏」挂在工作台子菜单下，子路由仍会命中父级 BasicLayout，
+ * 仅写 noBasicLayout 不够，必须脱离父节点，投屏才不会带侧栏顶栏。
+ * @author yanch
+ */
 function patchFullscreenRouteMeta(
   menus: RouteRecordStringComponent[],
 ): RouteRecordStringComponent[] {
-  return mapTree(menus, (route) => {
-    const matched =
-      (route.name && FULLSCREEN_ROUTE_KEYS.has(String(route.name))) ||
-      (route.path && FULLSCREEN_ROUTE_KEYS.has(route.path));
-    if (!matched) return route;
-    return {
-      ...route,
-      meta: {
-        ...route.meta,
-        // RouteRecordStringComponent 要求 title 必填；异常后端菜单回落到路由名/路径。
-        title: route.meta?.title || String(route.name || route.path || ''),
-        hideInMenu: true,
-        hideInTab: true,
-        hideInBreadcrumb: true,
-        noBasicLayout: true,
-      },
-    };
-  });
+  const lifted: RouteRecordStringComponent[] = [];
+
+  const walk = (
+    nodes: RouteRecordStringComponent[],
+  ): RouteRecordStringComponent[] => {
+    const remain: RouteRecordStringComponent[] = [];
+    for (const route of nodes) {
+      const children = route.children?.length
+        ? walk(route.children as RouteRecordStringComponent[])
+        : undefined;
+      const next: RouteRecordStringComponent = children
+        ? { ...route, children: children.length ? children : undefined }
+        : { ...route };
+
+      if (isFullscreenRoute(next)) {
+        const absPath =
+          next.path?.startsWith('/') || !next.path
+            ? next.path
+            : `/${next.path}`;
+        lifted.push(
+          withFullscreenMeta({
+            ...next,
+            path: absPath || next.path,
+            children: undefined,
+          }),
+        );
+        continue;
+      }
+      remain.push(next);
+    }
+    return remain;
+  };
+
+  return [...walk(menus), ...lifted];
 }
 
 /**

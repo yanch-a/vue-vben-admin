@@ -85,6 +85,27 @@ const HINTS: Record<ChartType, FieldMappingHint> = {
       { name: '字号', required: false, desc: 'appearance.fontSize，默认 24' },
     ],
   },
+  clock: {
+    summary: '时钟组件：前端本地时间，不执行 SQL；可调字号与颜色。',
+    sqlExample: '无需 SQL',
+    fields: [
+      { name: '字号', required: false, desc: 'appearance.fontSize，默认 36' },
+    ],
+  },
+  image: {
+    summary: '图片组件：展示 mediaUrl 指向的图片，不执行 SQL。',
+    sqlExample: '无需 SQL',
+    fields: [
+      { name: '图片地址', required: true, desc: 'mediaUrl，支持上传后的相对路径或完整 URL' },
+    ],
+  },
+  iframe: {
+    summary: '内嵌网页：用 iframe 加载 mediaUrl，注意目标站是否允许嵌入。',
+    sqlExample: '无需 SQL',
+    fields: [
+      { name: '页面地址', required: true, desc: 'mediaUrl，需 https 且允许被嵌入' },
+    ],
+  },
 };
 
 /** 返回指定图表类型的字段映射提示；未知类型时给出通用说明。 */
@@ -110,4 +131,7 @@ export const CHART_TYPE_OPTIONS: Array<{ label: string; value: ChartType }> = [
   { value: 'kpi', label: '指标卡 kpi' },
   { value: 'table', label: '表格 table' },
   { value: 'text', label: '文本 text' },
+  { value: 'clock', label: '时钟 clock' },
+  { value: 'image', label: '图片 image' },
+  { value: 'iframe', label: '网页 iframe' },
 ];

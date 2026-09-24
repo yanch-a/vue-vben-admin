@@ -17,6 +17,7 @@
     getById,
   } from '@/api/member/memberUserApi'
   import { getOptionselect } from '@/api/roleManagement'
+  import { ipWhitelistError } from '@/views/member/memberUser/ipWhitelist'
   import { getDictData } from '@/utils/convert'
   import { backToListPage } from '@/utils/route-back'
   import { Refresh } from '@element-plus/icons-vue'
@@ -88,6 +89,7 @@
           roleId: 2,
           password: '',
           repassword: '',
+          ipWhitelist: '',
         },
         rules: {
           userName: [
@@ -108,6 +110,17 @@
           userStatus: [
             { required: true, trigger: 'change', message: '请选择状态' },
           ],
+          ipWhitelist: [{
+            trigger: 'blur',
+            validator: (_rule, value, callback) => {
+              const message = ipWhitelistError(value)
+              if (message) {
+                callback(new Error(message))
+                return
+              }
+              callback()
+            },
+          }],
         },
         title: '加载中',
         pageTitle: '会员用户',
@@ -142,6 +155,7 @@
           state.form = {
             ...data,
             repassword: data.password,
+            ipWhitelist: data.ipWhitelist || '',
           }
           state.originalUserName = (data.userName || '').trim()
         } else {
@@ -292,6 +306,19 @@
           </el-form-item>
         </el-col>
         <el-col :span="24">
+          <el-form-item :label="$tr('IP白名单')" prop="ipWhitelist">
+            <el-input
+              v-model="form.ipWhitelist"
+              :placeholder="$tr('留空不限制。每行一条，最多20条')"
+              :rows="4"
+              type="textarea"
+            />
+            <div class="ip-whitelist-tip">
+              {{ $tr('配置后，该会员每次访问都会校验请求 IP。支持单 IP、网段 192.168.1.0/24、起止段 192.168.1.1-192.168.1.100（可简写 192.168.1.1-100）、通配 10.0.0.*') }}
+            </div>
+          </el-form-item>
+        </el-col>
+        <el-col :span="24">
           <el-form-item :label="$tr('个性签名')" prop="personalSignature">
             <el-input
               v-model="form.personalSignature"
@@ -323,5 +350,11 @@
 .member-edit-form :deep(.el-select),
 .member-edit-form :deep(.el-input-number) {
   width: 100%;
+}
+.ip-whitelist-tip {
+  margin-top: 6px;
+  color: var(--el-text-color-secondary);
+  font-size: 12px;
+  line-height: 1.5;
 }
 </style>

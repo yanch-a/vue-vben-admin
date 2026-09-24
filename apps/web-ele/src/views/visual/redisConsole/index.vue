@@ -294,7 +294,17 @@ async function persistConnection() {
   finally { connectionSaving.value = false; }
 }
 async function testConnection(item: any) { const result = unbox(await testRedisConnection(item.id)); ElMessage.success(`连接正常: ${result?.message || 'PONG'}`); }
-async function removeConnection(item: any) { await ElMessageBox.confirm(`确认删除连接「${item.connectionName}」？`, '删除连接', { type: 'warning' }); await deleteRedisConnection(item.id); await loadConnections(); }
+async function removeConnection(item: any) {
+  try {
+    await ElMessageBox.confirm(`确认删除连接「${item.connectionName}」？`, '删除连接', { type: 'warning' });
+  } catch {
+    return; // 用户取消确认框
+  }
+  await deleteRedisConnection(item.id);
+  if (activeId.value === item.id) activeId.value = undefined;
+  ElMessage.success('连接已删除');
+  await loadConnections();
+}
 
 function activateConnection(item: any) {
   activeId.value = item.id;
@@ -318,12 +328,22 @@ async function refreshConnection(item: any) {
   ElMessage.success('已刷新');
 }
 
+/** 命令行输入框重新聚焦（ElInput 被 disabled 后会失焦，需在恢复后手动 focus） */
+async function focusCommandInput() {
+  await nextTick();
+  const input = commandInput.value;
+  if (typeof input?.focus === 'function') {
+    input.focus();
+    return;
+  }
+  input?.input?.focus?.();
+}
+
 async function openCli(item: any) {
   activeId.value = item.id;
   mode.value = 'cli';
   closeContextMenu();
-  await nextTick();
-  commandInput.value?.focus?.();
+  await focusCommandInput();
 }
 
 function formatRedisInfo(data: any) {
@@ -444,10 +464,13 @@ async function runCommand(allowDangerous = false) {
   } finally {
     commandLoading.value = false;
     await scrollTerminalToEnd();
+    // disabled 会抢走焦点；命令结束后立刻拉回输入框，方便连续输入
+    await focusCommandInput();
   }
   // DB 数量统计是附加刷新，失败不能把已经成功的命令再记成一次失败。
   if (refreshStats) {
     try { await loadDatabaseStats(); } catch { /* 保留现有统计，命令结果已经成功。 */ }
+    await focusCommandInput();
   }
 }
 
@@ -472,8 +495,13 @@ watch(activeId, async () => {
   if (!activeId.value) { keys.value = []; return; }
   await loadDatabaseStats().catch(() => undefined);
   if (!databaseChanged) await loadKeys();
+  if (mode.value === 'cli') await focusCommandInput();
 });
 watch(database, () => { newKey(); loadKeys(); });
+// 顶栏切到命令行时也自动聚焦输入框
+watch(mode, async (value) => {
+  if (value === 'cli' && activeId.value) await focusCommandInput();
+});
 
 onMounted(async () => {
   const savedConnectionWidth = localStorage.getItem('lemon-redis-connection-width');

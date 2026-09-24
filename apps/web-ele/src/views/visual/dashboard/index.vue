@@ -36,6 +36,16 @@ import LemonUpload from '#/components/lemon-upload/index.vue';
 
 import ChartRenderer from './components/ChartRenderer.vue';
 import ChartAppearanceEditor from './components/ChartAppearanceEditor.vue';
+import {
+  alignWidgets,
+  CANVAS_PRESETS,
+  defaultWidgetSize,
+  finiteNumber,
+  normalizeScreenWidgets,
+  normalizeWidgetLayout,
+  snapValue,
+  type AlignMode,
+} from './assemblyTools';
 import { CHART_TYPE_OPTIONS, getFieldMappingHint } from './fieldMappingHints';
 
 defineOptions({ name: 'VisualDashboardWorkbench' });
@@ -57,6 +67,10 @@ const dirty = ref(false);
 const focusCanvas = ref(false);
 const propertyTab = ref('appearance');
 const contextMenu = reactive({ visible: false, x: 0, y: 0, widgetId: '' });
+const lastSavedAt = ref('');
+const clipboardWidget = ref<ScreenWidget | null>(null);
+const draftPreviewVisible = ref(false);
+const draftPreviewResults = reactive<Record<string, QueryResult>>({});
 
 const screenForm = reactive({
   id: undefined as number | string | undefined,
@@ -100,7 +114,9 @@ const widgetFieldHint = computed(() =>
     : getFieldMappingHint('bar'),
 );
 const isTextChartForm = computed(() => chartSpecForm.chartType === 'text');
+const isStaticChartForm = computed(() => ['text', 'clock', 'image', 'iframe'].includes(chartSpecForm.chartType));
 const isTextWidget = computed(() => selectedWidget.value?.chartSpec.chartType === 'text');
+const isStaticWidget = computed(() => ['text', 'clock', 'image', 'iframe'].includes(selectedWidget.value?.chartSpec.chartType || ''));
 /** 统计每个图表资产在当前画布中的使用次数，允许复用但必须给用户明确反馈。 */
 const usedChartCounts = computed(() => {
   const counts = new Map<string, number>();
@@ -131,8 +147,25 @@ function emptyConfig(): ScreenConfig {
     height: 675,
     background: '#0b1220',
     backgroundImage: '',
+    showGrid: true,
+    gridSize: 10,
     widgets: [],
   };
+}
+
+function formatSavedAt(date = new Date()) {
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+}
+
+function applyCanvasPreset(width: number, height: number) {
+  screenConfig.width = width;
+  screenConfig.height = height;
+  dirty.value = true;
+}
+
+function snap(value: number) {
+  return snapValue(value, screenConfig.gridSize || 10, Boolean(screenConfig.showGrid));
 }
 
 /** 画布背景：颜色 + 可选背景图（cover 铺满）。 */
@@ -242,16 +275,18 @@ function updateDefaultParams(widget: ScreenWidget, value: string) {
 function fillChartSpec() {
   const prev = parseSpec(chartForm.chartSpec);
   const isText = chartSpecForm.chartType === 'text';
+  const isStatic = ['text', 'clock', 'image', 'iframe'].includes(chartSpecForm.chartType);
   chartForm.chartSpec = JSON.stringify({
     // 修改字段映射时保留 appearance、optionOverrides，避免保存把外观配置静默丢掉。
     ...prev,
     chartType: chartSpecForm.chartType,
-    xField: isText ? undefined : (chartSpecForm.xField.trim() || undefined),
-    yFields: isText
+    xField: isStatic ? undefined : (chartSpecForm.xField.trim() || undefined),
+    yFields: isStatic
       ? []
       : chartSpecForm.yFields.split(',').map((item) => item.trim()).filter(Boolean),
-    seriesField: isText ? undefined : (chartSpecForm.seriesField.trim() || undefined),
-    textContent: isText ? chartSpecForm.textContent : undefined,
+    seriesField: isStatic ? undefined : (chartSpecForm.seriesField.trim() || undefined),
+    textContent: isText ? chartSpecForm.textContent : prev.textContent,
+    mediaUrl: prev.mediaUrl,
     valueFormat: chartSpecForm.valueFormat,
     stack: chartSpecForm.stack,
     sortBy: isText ? undefined : (chartSpecForm.sortBy.trim() || undefined),
@@ -288,7 +323,7 @@ async function openChartDialog(asset?: ChartAsset) {
 
 async function doPreviewChart() {
   fillChartSpec();
-  if (chartSpecForm.chartType === 'text') {
+  if (['text', 'clock', 'image', 'iframe'].includes(chartSpecForm.chartType)) {
     chartPreview.value = { columns: [], rows: [], rowCount: 0 };
     return;
   }
@@ -338,35 +373,44 @@ async function editScreen(value: any) {
     draftRevision: detail.draftRevision, refreshMode: detail.refreshMode || 'LIVE',
     refreshIntervalSeconds: detail.refreshIntervalSeconds || 300,
   });
-  Object.assign(screenConfig, emptyConfig(), detail.config || {});
+  const loaded = detail.config || {};
+  Object.assign(screenConfig, emptyConfig(), loaded, {
+    showGrid: loaded.showGrid ?? true,
+    gridSize: loaded.gridSize || 10,
+    width: loaded.width || 1200,
+    height: loaded.height || 675,
+    widgets: normalizeScreenWidgets(loaded.widgets || []),
+  });
   selectedWidgetId.value = '';
   Object.keys(results).forEach((key) => delete results[key]);
   dirty.value = false;
   mode.value = 'editor';
 }
 
-function assetToWidget(asset: ChartAsset, x = 30, y = 30): ScreenWidget {
+function assetToWidget(asset: ChartAsset, x?: number, y?: number): ScreenWidget {
   const spec = parseSpec(asset.chartSpec);
-  const isText = spec.chartType === 'text';
-  return {
+  const isStatic = ['text', 'clock', 'image', 'iframe'].includes(spec.chartType);
+  const size = defaultWidgetSize(spec.chartType);
+  const widget: ScreenWidget = {
     id: `w_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
     chartId: asset.id,
     title: asset.title,
     chartSpec: spec,
     data: {
       dbConfigId: asset.dbConfigId, instanceName: asset.instanceName,
-      sqlText: isText ? '' : asset.sqlText,
+      sqlText: isStatic ? (asset.sqlText?.trim() ? asset.sqlText : 'SELECT 1 AS _static') : asset.sqlText,
       maxRows: asset.maxRows || 2000, timeoutSeconds: asset.timeoutSeconds || 30,
     },
-    x, y,
-    w: isText ? 220 : 420,
-    h: isText ? 48 : 260,
+    x: 30, y: 30, w: size.w, h: size.h,
   };
+  // 显式传入的坐标可能来自拖放；点击按钮时不要把 MouseEvent 当成 x。
+  return normalizeWidgetLayout(widget, { x, y, w: size.w, h: size.h });
 }
 
 /** 在画布上直接放置一个文本组件，无需 SQL。 */
-function addTextWidget(x = 40, y = 24) {
-  const widget: ScreenWidget = {
+function addTextWidget(x?: number, y?: number) {
+  const size = defaultWidgetSize('text');
+  const widget = normalizeWidgetLayout({
     id: `w_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
     title: '文本',
     chartSpec: {
@@ -375,17 +419,81 @@ function addTextWidget(x = 40, y = 24) {
       textContent: '文本标题',
       appearance: { fontSize: 28, showTitle: false, colors: ['#e2e8f0'] },
     },
-    data: { sqlText: '', maxRows: 1, timeoutSeconds: 1 },
-    x, y, w: 220, h: 48,
-  };
+    data: { sqlText: 'SELECT 1 AS _static', maxRows: 1, timeoutSeconds: 5 },
+    x: 40, y: 24, w: size.w, h: size.h,
+  } as ScreenWidget, { x, y, w: size.w, h: size.h });
   screenConfig.widgets.push(widget);
   selectedWidgetId.value = widget.id;
   propertyTab.value = 'data';
   dirty.value = true;
 }
 
+/** 将组件放到图层栈顶（数组末尾 = 最高 zIndex）。 */
+function bringWidgetToFront(widgetId: string) {
+  const index = screenConfig.widgets.findIndex((item) => item.id === widgetId);
+  if (index < 0 || index === screenConfig.widgets.length - 1) return;
+  const [item] = screenConfig.widgets.splice(index, 1);
+  if (item) screenConfig.widgets.push(item);
+}
+
+function pushStaticWidget(widget: ScreenWidget) {
+  normalizeWidgetLayout(widget);
+  screenConfig.widgets.push(widget);
+  selectedWidgetId.value = widget.id;
+  propertyTab.value = 'data';
+  dirty.value = true;
+}
+
+function addClockWidget(x?: number, y?: number) {
+  const size = defaultWidgetSize('clock');
+  pushStaticWidget(normalizeWidgetLayout({
+    id: `w_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+    title: '时钟',
+    chartSpec: {
+      chartType: 'clock',
+      yFields: [],
+      appearance: { fontSize: 36, showTitle: false, colors: ['#e2e8f0'] },
+    },
+    data: { sqlText: 'SELECT 1 AS _static', maxRows: 1, timeoutSeconds: 5 },
+    x: 40, y: 24, w: size.w, h: size.h,
+  } as ScreenWidget, { x, y, w: size.w, h: size.h }));
+}
+
+function addImageWidget(x?: number, y?: number) {
+  const size = defaultWidgetSize('image');
+  pushStaticWidget(normalizeWidgetLayout({
+    id: `w_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+    title: '图片',
+    chartSpec: {
+      chartType: 'image',
+      yFields: [],
+      mediaUrl: '',
+      appearance: { showTitle: false },
+    },
+    data: { sqlText: 'SELECT 1 AS _static', maxRows: 1, timeoutSeconds: 5 },
+    x: 40, y: 80, w: size.w, h: size.h,
+  } as ScreenWidget, { x, y, w: size.w, h: size.h }));
+}
+
+function addIframeWidget(x?: number, y?: number) {
+  const size = defaultWidgetSize('iframe');
+  pushStaticWidget(normalizeWidgetLayout({
+    id: `w_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+    title: '网页',
+    chartSpec: {
+      chartType: 'iframe',
+      yFields: [],
+      mediaUrl: '',
+      appearance: { showTitle: true },
+    },
+    data: { sqlText: 'SELECT 1 AS _static', maxRows: 1, timeoutSeconds: 5 },
+    x: 40, y: 80, w: size.w, h: size.h,
+  } as ScreenWidget, { x, y, w: size.w, h: size.h }));
+}
+
 async function addChart(asset: ChartAsset, x?: number, y?: number) {
   const widget = assetToWidget(asset, x, y);
+  normalizeWidgetLayout(widget);
   screenConfig.widgets.push(widget);
   selectedWidgetId.value = widget.id;
   dirty.value = true;
@@ -404,16 +512,25 @@ function dropAsset(event: DragEvent) {
   const asset = charts.value.find((item) => String(item.id) === id);
   if (!asset || !canvasRef.value) return;
   const rect = canvasRef.value.getBoundingClientRect();
-  const scale = rect.width / screenConfig.width;
+  const scaleX = rect.width / screenConfig.width;
+  const scaleY = rect.height / screenConfig.height;
   void addChart(asset,
-    Math.max(0, Math.round((event.clientX - rect.left) / scale - 210)),
-    Math.max(0, Math.round((event.clientY - rect.top) / scale - 30)));
+    Math.max(0, Math.round((event.clientX - rect.left) / scaleX - 210)),
+    Math.max(0, Math.round((event.clientY - rect.top) / scaleY - 30)));
 }
 
 function widgetStyle(widget: ScreenWidget) {
+  normalizeWidgetLayout(widget);
+  const index = screenConfig.widgets.findIndex((item) => item.id === widget.id);
+  const baseZ = index >= 0 ? index + 1 : 1;
+  // 选中时额外抬升 zIndex；selectWidget 会把组件挪到数组末尾持久化顶层。
+  const selectedBoost = selectedWidgetId.value === widget.id ? 1000 : 0;
   return {
-    left: `${widget.x / screenConfig.width * 100}%`, top: `${widget.y / screenConfig.height * 100}%`,
-    width: `${widget.w / screenConfig.width * 100}%`, height: `${widget.h / screenConfig.height * 100}%`,
+    left: `${(widget.x / screenConfig.width) * 100}%`,
+    top: `${(widget.y / screenConfig.height) * 100}%`,
+    width: `${(widget.w / screenConfig.width) * 100}%`,
+    height: `${(widget.h / screenConfig.height) * 100}%`,
+    zIndex: baseZ + selectedBoost,
   };
 }
 
@@ -421,7 +538,9 @@ type PointerMode = 'east' | 'move' | 'south' | 'southeast';
 
 /** 文本组件允许更小区域；普通图表仍保留可操作的最小宽高。 */
 function widgetMinSize(widget: ScreenWidget) {
-  if (widget.chartSpec.chartType === 'text') return { w: 40, h: 24 };
+  const type = widget.chartSpec.chartType;
+  if (type === 'text' || type === 'clock') return { w: 40, h: 24 };
+  if (type === 'image' || type === 'iframe') return { w: 120, h: 80 };
   return { w: 160, h: 110 };
 }
 
@@ -433,33 +552,65 @@ function beginPointer(event: PointerEvent, widget: ScreenWidget, pointerMode: Po
   event.preventDefault();
   event.stopPropagation();
   selectWidget(widget);
+  if (widget.locked) return;
+  // 忽略来自输入框等可编辑控件的拖拽，避免抢焦点。
+  const target = event.target as HTMLElement | null;
+  if (target?.closest?.('input, textarea, .el-input, .el-textarea, .el-select')) return;
+
+  // 拖拽/缩放前强制有限坐标，避免旧稿缺字段或属性面板清空导致单轴冻结。
+  normalizeWidgetLayout(widget);
   const startX = event.clientX;
   const startY = event.clientY;
-  const initial = { x: widget.x, y: widget.y, w: widget.w, h: widget.h };
+  const initial = {
+    x: finiteNumber(widget.x, 0),
+    y: finiteNumber(widget.y, 0),
+    w: finiteNumber(widget.w, defaultWidgetSize(widget.chartSpec.chartType).w),
+    h: finiteNumber(widget.h, defaultWidgetSize(widget.chartSpec.chartType).h),
+  };
   const minSize = widgetMinSize(widget);
-  const scale = (canvasRef.value?.getBoundingClientRect().width || screenConfig.width) / screenConfig.width;
+  const rect = canvasRef.value?.getBoundingClientRect();
+  // 宽高分别换算：画布 CSS 比例与逻辑尺寸不一致时，纵轴不能再用 width scale。
+  const scaleX = (rect?.width || screenConfig.width) / screenConfig.width;
+  const scaleY = (rect?.height || screenConfig.height) / screenConfig.height;
+  const maxX = Math.max(0, screenConfig.width - initial.w);
+  const maxY = Math.max(0, screenConfig.height - initial.h);
+
+  try {
+    target?.setPointerCapture?.(event.pointerId);
+  } catch {
+    /* 部分浏览器在 button 上 setPointerCapture 可能失败，忽略即可 */
+  }
+
   const move = (moveEvent: PointerEvent) => {
-    const dx = Math.round((moveEvent.clientX - startX) / scale);
-    const dy = Math.round((moveEvent.clientY - startY) / scale);
+    const dx = Math.round((moveEvent.clientX - startX) / scaleX);
+    const dy = Math.round((moveEvent.clientY - startY) / scaleY);
     if (pointerMode === 'move') {
-      widget.x = Math.max(0, Math.min(screenConfig.width - widget.w, initial.x + dx));
-      widget.y = Math.max(0, Math.min(screenConfig.height - widget.h, initial.y + dy));
+      widget.x = snap(Math.max(0, Math.min(maxX, initial.x + dx)));
+      // 允许贴顶：y 下限为 0；不再被错误纵轴比例「吸」在半空。
+      widget.y = snap(Math.max(0, Math.min(maxY, initial.y + dy)));
     } else {
       if (pointerMode === 'east' || pointerMode === 'southeast') {
-        widget.w = Math.max(minSize.w, Math.min(screenConfig.width - widget.x, initial.w + dx));
+        widget.w = snap(Math.max(minSize.w, Math.min(screenConfig.width - widget.x, initial.w + dx)));
       }
       if (pointerMode === 'south' || pointerMode === 'southeast') {
-        widget.h = Math.max(minSize.h, Math.min(screenConfig.height - widget.y, initial.h + dy));
+        widget.h = snap(Math.max(minSize.h, Math.min(screenConfig.height - widget.y, initial.h + dy)));
       }
     }
     dirty.value = true;
   };
-  const up = () => {
+  const up = (upEvent: PointerEvent) => {
+    try {
+      target?.releasePointerCapture?.(upEvent.pointerId);
+    } catch {
+      /* ignore */
+    }
     window.removeEventListener('pointermove', move);
     window.removeEventListener('pointerup', up);
+    window.removeEventListener('pointercancel', up);
   };
   window.addEventListener('pointermove', move);
   window.addEventListener('pointerup', up);
+  window.addEventListener('pointercancel', up);
 }
 
 /** 打开画布组件右键菜单，并把右键目标同步为当前选中组件。 */
@@ -470,7 +621,7 @@ function openWidgetContextMenu(event: MouseEvent, widget: ScreenWidget) {
   Object.assign(contextMenu, {
     visible: true,
     x: Math.min(event.clientX, window.innerWidth - 150),
-    y: Math.min(event.clientY, window.innerHeight - 56),
+    y: Math.min(event.clientY, window.innerHeight - 220),
     widgetId: widget.id,
   });
 }
@@ -488,6 +639,11 @@ function removeWidget(widgetId: string) {
 
 function selectWidget(widget: ScreenWidget) {
   selectedWidgetId.value = widget.id;
+  // 选中即置于顶层；右键/工具栏仍可精细调层。仅在顺序变化时标脏。
+  const before = screenConfig.widgets.map((item) => item.id).join(',');
+  bringWidgetToFront(widget.id);
+  const after = screenConfig.widgets.map((item) => item.id).join(',');
+  if (before !== after) dirty.value = true;
   if (!widget.data.dbConfigId) return;
   getInstances(widget.data.dbConfigId).then((response: any) => {
     const trees: any[] = unwrap(response, []);
@@ -500,17 +656,26 @@ function onWidgetChartTypeChange(type: string) {
   dirty.value = true;
   const widget = selectedWidget.value;
   if (!widget) return;
-  if (type === 'text') {
-    widget.chartSpec.textContent =
-      widget.chartSpec.textContent || widget.title || '文本内容';
+  if (type === 'text' || type === 'clock') {
+    if (type === 'text') {
+      widget.chartSpec.textContent =
+        widget.chartSpec.textContent || widget.title || '文本内容';
+    }
     widget.chartSpec.yFields = [];
     widget.chartSpec.appearance = {
       ...widget.chartSpec.appearance,
       showTitle: false,
-      fontSize: widget.chartSpec.appearance?.fontSize || 24,
+      fontSize: widget.chartSpec.appearance?.fontSize || (type === 'clock' ? 36 : 24),
       colors: widget.chartSpec.appearance?.colors?.length
         ? widget.chartSpec.appearance.colors
         : ['#e2e8f0'],
+    };
+  }
+  if (type === 'image' || type === 'iframe') {
+    widget.chartSpec.yFields = [];
+    widget.chartSpec.appearance = {
+      ...widget.chartSpec.appearance,
+      showTitle: type === 'iframe',
     };
   }
 }
@@ -519,17 +684,116 @@ function removeSelectedWidget() {
   removeWidget(selectedWidgetId.value);
 }
 
+function duplicateWidget(widgetId = selectedWidgetId.value) {
+  const source = screenConfig.widgets.find((item) => item.id === widgetId);
+  if (!source) return;
+  normalizeWidgetLayout(source);
+  const clone: ScreenWidget = normalizeWidgetLayout({
+    ...JSON.parse(JSON.stringify(source)),
+    id: `w_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+    x: Math.min(screenConfig.width - source.w, source.x + 24),
+    y: Math.min(screenConfig.height - source.h, source.y + 24),
+    locked: false,
+  });
+  screenConfig.widgets.push(clone);
+  if (results[source.id]) results[clone.id] = results[source.id];
+  selectedWidgetId.value = clone.id;
+  contextMenu.visible = false;
+  dirty.value = true;
+}
+
+function toggleLockWidget(widgetId = selectedWidgetId.value) {
+  const widget = screenConfig.widgets.find((item) => item.id === widgetId);
+  if (!widget) return;
+  widget.locked = !widget.locked;
+  contextMenu.visible = false;
+  dirty.value = true;
+}
+
+function moveWidgetLayer(widgetId: string, direction: 'down' | 'top' | 'up' | 'bottom') {
+  const index = screenConfig.widgets.findIndex((item) => item.id === widgetId);
+  if (index < 0) return;
+  const [item] = screenConfig.widgets.splice(index, 1);
+  if (!item) return;
+  if (direction === 'top') screenConfig.widgets.push(item);
+  else if (direction === 'bottom') screenConfig.widgets.unshift(item);
+  else if (direction === 'up') screenConfig.widgets.splice(Math.min(screenConfig.widgets.length, index + 1), 0, item);
+  else screenConfig.widgets.splice(Math.max(0, index - 1), 0, item);
+  contextMenu.visible = false;
+  dirty.value = true;
+}
+
+function alignSelected(mode: AlignMode) {
+  if (!selectedWidget.value) return;
+  alignWidgets([selectedWidget.value], mode, screenConfig);
+  dirty.value = true;
+}
+
+function copySelectedWidget() {
+  if (!selectedWidget.value) return;
+  clipboardWidget.value = JSON.parse(JSON.stringify(selectedWidget.value));
+  ElMessage.success('已复制组件');
+}
+
+function pasteClipboardWidget() {
+  if (!clipboardWidget.value) return;
+  const source = normalizeWidgetLayout(clipboardWidget.value);
+  const clone: ScreenWidget = normalizeWidgetLayout({
+    ...JSON.parse(JSON.stringify(source)),
+    id: `w_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+    x: Math.min(screenConfig.width - source.w, source.x + 24),
+    y: Math.min(screenConfig.height - source.h, source.y + 24),
+    locked: false,
+  });
+  screenConfig.widgets.push(clone);
+  selectedWidgetId.value = clone.id;
+  dirty.value = true;
+}
+
+function selectWidgetFromLayer(widget: ScreenWidget) {
+  selectWidget(widget);
+  propertyTab.value = 'appearance';
+}
+
 /**
  * 选中画布组件后可按 Delete 删除。
  * 输入框、文本域、可编辑区域和图表编辑弹窗中不响应，避免正常编辑内容时误删组件。
  */
+function isTypingTarget(target: EventTarget | null) {
+  if (!(target instanceof HTMLElement)) return false;
+  const tag = target.tagName.toLowerCase();
+  return Boolean(
+    target.closest('[role="dialog"], .el-dialog') ||
+      target.isContentEditable ||
+      tag === 'input' ||
+      tag === 'textarea' ||
+      tag === 'select',
+  );
+}
+
 function onWorkbenchKeydown(event: KeyboardEvent) {
-  if (event.key !== 'Delete' || mode.value !== 'editor' || chartDialog.value || !selectedWidgetId.value) return;
-  const target = event.target;
-  if (target instanceof HTMLElement) {
-    const tag = target.tagName.toLowerCase();
-    // option 弹窗挂载到 body，不在画布 DOM 内；弹窗中任何控件都不应触发画布删除。
-    if (target.closest('[role="dialog"], .el-dialog') || target.isContentEditable || tag === 'input' || tag === 'textarea' || tag === 'select') return;
+  if (mode.value !== 'editor' || chartDialog.value || draftPreviewVisible.value) return;
+  if (isTypingTarget(event.target)) return;
+  const key = event.key.toLowerCase();
+  if ((event.ctrlKey || event.metaKey) && key === 'c' && selectedWidgetId.value) {
+    event.preventDefault();
+    copySelectedWidget();
+    return;
+  }
+  if ((event.ctrlKey || event.metaKey) && key === 'v') {
+    event.preventDefault();
+    pasteClipboardWidget();
+    return;
+  }
+  if ((event.ctrlKey || event.metaKey) && key === 'd' && selectedWidgetId.value) {
+    event.preventDefault();
+    duplicateWidget();
+    return;
+  }
+  if (event.key !== 'Delete' || !selectedWidgetId.value) return;
+  if (selectedWidget.value?.locked) {
+    ElMessage.warning('组件已锁定，请先解锁再删除');
+    return;
   }
   event.preventDefault();
   removeSelectedWidget();
@@ -543,12 +807,61 @@ async function saveDraft(showMessage = true) {
   screenForm.draftRevision = detail.draftRevision;
   screenForm.status = detail.status || screenForm.status;
   dirty.value = false;
+  lastSavedAt.value = formatSavedAt();
   if (showMessage) ElMessage.success('草稿已保存');
   return detail;
 }
 
+/** 草稿预览：不发布，按当前画布配置跑一遍数据后弹层查看。 */
+async function previewDraft() {
+  Object.keys(draftPreviewResults).forEach((key) => delete draftPreviewResults[key]);
+  const dataWidgets = screenConfig.widgets.filter(
+    (widget) => !['text', 'clock', 'image', 'iframe'].includes(widget.chartSpec.chartType),
+  );
+  if (dataWidgets.length) {
+    try {
+      const bundle: any = unwrap(
+        await previewScreen(
+          withPreviewSafeConfig({ ...screenConfig, widgets: dataWidgets }),
+        ),
+        {},
+      );
+      for (const widget of dataWidgets) {
+        const key = bundle.widgetData?.[widget.id] || widget.id;
+        if (bundle.datasets?.[key]) draftPreviewResults[widget.id] = bundle.datasets[key];
+      }
+    } catch (error: any) {
+      ElMessage.warning(
+        `图表数据预览失败，仍展示布局：${error?.msg || error?.message || '请检查数据源'}`,
+      );
+    }
+  }
+  draftPreviewVisible.value = true;
+}
+
+
+/** 静态组件无 SQL；预览接口仍可能校验 sqlText，提交前补占位避免误报。 */
+function withPreviewSafeConfig(config: ScreenConfig): ScreenConfig {
+  return {
+    ...config,
+    widgets: config.widgets.map((widget) => {
+      const type = widget.chartSpec?.chartType;
+      if (!['text', 'clock', 'image', 'iframe'].includes(type)) return widget;
+      return {
+        ...widget,
+        data: {
+          ...widget.data,
+          sqlText: widget.data?.sqlText?.trim() ? widget.data.sqlText : 'SELECT 1 AS _static',
+          maxRows: widget.data?.maxRows || 1,
+          timeoutSeconds: widget.data?.timeoutSeconds || 5,
+        },
+      };
+    }),
+  };
+}
+
 async function previewAll() {
-  const bundle: any = unwrap(await previewScreen(screenConfig), {});
+  const bundle: any = unwrap(await previewScreen(withPreviewSafeConfig(screenConfig)), {});
   // 后台对相同 SQL 去重，datasets 的键未必是组件 ID，按 widgetData 映射回画布。
   for (const widget of screenConfig.widgets) {
     const key = bundle.widgetData?.[widget.id] || widget.id;
@@ -639,12 +952,15 @@ watch(chartSpecForm, fillChartSpec, { deep: true });
         <ElButton type="primary" @click="newScreen">新建大屏</ElButton>
       </div>
       <div v-else class="top-actions">
-        <span class="save-state">{{ dirty ? '有未保存修改' : '已保存' }}</span>
+        <span class="save-state" :class="{ dirty }">
+          {{ dirty ? '有未保存修改' : (lastSavedAt ? `已保存 ${lastSavedAt}` : '已保存') }}
+        </span>
         <ElButton @click="focusCanvas = !focusCanvas">{{ focusCanvas ? '显示侧栏' : '专注画布' }}</ElButton>
-        <ElButton @click="leaveEditor">返回列表</ElButton>
-        <ElButton @click="previewAll">刷新预览</ElButton>
+        <ElButton @click="leaveEditor">返回</ElButton>
+        <ElButton @click="previewAll">刷新数据</ElButton>
+        <ElButton @click="previewDraft">预览草稿</ElButton>
         <ElButton @click="saveDraft()">保存草稿</ElButton>
-        <ElButton :disabled="!screenForm.id || screenForm.status !== 'PUBLISHED'" @click="viewScreen(screenForm)">查看大屏</ElButton>
+        <ElButton :disabled="!screenForm.id || screenForm.status !== 'PUBLISHED'" @click="viewScreen(screenForm)">正式查看</ElButton>
         <ElButton type="primary" @click="publish">保存并发布</ElButton>
       </div>
     </header>
@@ -662,8 +978,8 @@ watch(chartSpecForm, fillChartSpec, { deep: true });
           <small>{{ row.refreshMode === 'LIVE' ? '每次查看实时查询' : `每 ${row.refreshIntervalSeconds}s 更新快照` }}</small>
           <div class="card-actions">
             <ElButton size="small" type="primary" @click="editScreen(row)">编辑</ElButton>
-            <ElButton size="small" :disabled="row.status !== 'PUBLISHED'" @click="viewScreen(row)">查看</ElButton>
-            <ElButton size="small" :disabled="row.status !== 'PUBLISHED'" @click="manualRefresh(row)">刷新数据</ElButton>
+            <ElButton v-if="row.status === 'PUBLISHED'" size="small" @click="viewScreen(row)">查看</ElButton>
+            <ElButton v-if="row.status === 'PUBLISHED'" size="small" @click="manualRefresh(row)">刷新数据</ElButton>
             <ElButton size="small" type="danger" text @click="removeScreen(row)">删除</ElButton>
           </div>
         </article>
@@ -702,39 +1018,112 @@ watch(chartSpecForm, fillChartSpec, { deep: true });
           </div>
         </div>
         <div class="asset-actions">
-          <ElButton class="full" @click="openChartDialog()">+ 新建图表</ElButton>
-          <ElButton class="full" @click="addTextWidget">+ 添加文本</ElButton>
+          <ElButton class="full" type="primary" plain @click="openChartDialog()">+ 新建图表</ElButton>
+          <div class="quick-widgets">
+            <ElButton size="small" @click="() => addTextWidget()">文本</ElButton>
+            <ElButton size="small" @click="() => addClockWidget()">时钟</ElButton>
+            <ElButton size="small" @click="() => addImageWidget()">图片</ElButton>
+            <ElButton size="small" @click="() => addIframeWidget()">网页</ElButton>
+          </div>
+        </div>
+        <div v-if="screenConfig.widgets.length" class="layer-panel">
+          <h4>图层 <small>上=顶层</small></h4>
+          <div
+            v-for="widget in [...screenConfig.widgets].reverse()"
+            :key="widget.id"
+            class="layer-item"
+            :class="{ active: selectedWidgetId === widget.id, locked: widget.locked }"
+            @click="selectWidgetFromLayer(widget)"
+          >
+            <span>{{ widget.title || widget.chartSpec.chartType }}</span>
+            <i>{{ widget.locked ? '锁' : widget.chartSpec.chartType }}</i>
+          </div>
         </div>
       </aside>
 
       <section class="canvas-stage" @click="selectedWidgetId = ''">
-        <div ref="canvasRef" class="canvas" :style="canvasBackgroundStyle()"
-          @dragover.prevent @drop.prevent="dropAsset">
-          <div v-if="!screenConfig.widgets.length" class="drop-hint">从左侧拖入图表，或双击图表快速添加；也可添加文本</div>
+        <div class="canvas-toolbar" @click.stop>
+          <div class="canvas-toolbar-group">
+            <ElButton size="small" :disabled="!selectedWidget" @click="alignSelected('left')">左齐</ElButton>
+            <ElButton size="small" :disabled="!selectedWidget" @click="alignSelected('hcenter')">水平居中</ElButton>
+            <ElButton size="small" :disabled="!selectedWidget" @click="alignSelected('right')">右齐</ElButton>
+            <ElButton size="small" :disabled="!selectedWidget" @click="alignSelected('top')">顶齐</ElButton>
+            <ElButton size="small" :disabled="!selectedWidget" @click="alignSelected('vcenter')">垂直居中</ElButton>
+            <ElButton size="small" :disabled="!selectedWidget" @click="alignSelected('bottom')">底齐</ElButton>
+          </div>
+          <div class="canvas-toolbar-group">
+            <ElButton size="small" :disabled="!selectedWidget" @click="duplicateWidget()">复制</ElButton>
+            <ElButton size="small" :disabled="!selectedWidget" @click="toggleLockWidget()">
+              {{ selectedWidget?.locked ? '解锁' : '锁定' }}
+            </ElButton>
+            <ElButton size="small" :disabled="!selectedWidget" @click="moveWidgetLayer(selectedWidgetId, 'top')">置顶</ElButton>
+            <ElButton size="small" :disabled="!selectedWidget" @click="moveWidgetLayer(selectedWidgetId, 'up')">上移</ElButton>
+            <ElButton size="small" :disabled="!selectedWidget" @click="moveWidgetLayer(selectedWidgetId, 'down')">下移</ElButton>
+            <ElButton size="small" :disabled="!selectedWidget" @click="moveWidgetLayer(selectedWidgetId, 'bottom')">置底</ElButton>
+            <ElSwitch v-model="screenConfig.showGrid" inline-prompt active-text="网格" inactive-text="网格" @change="dirty = true" />
+          </div>
+        </div>
+        <div
+          ref="canvasRef"
+          class="canvas"
+          :class="{ 'show-grid': screenConfig.showGrid }"
+          :style="{
+            ...canvasBackgroundStyle(),
+            aspectRatio: `${screenConfig.width} / ${screenConfig.height}`,
+            ['--canvas-w' as any]: String(screenConfig.width),
+            ['--canvas-h' as any]: String(screenConfig.height),
+            ['--grid-size' as any]: `${((screenConfig.gridSize || 10) / screenConfig.width) * 100}%`,
+          }"
+          @dragover.prevent
+          @drop.prevent="dropAsset"
+        >
+          <div v-if="!screenConfig.widgets.length" class="drop-hint">
+            <p>从左侧拖入图表，或使用快捷组件开始组装</p>
+            <div class="drop-actions">
+              <ElButton type="primary" @click.stop="() => addTextWidget()">添加文本</ElButton>
+              <ElButton @click.stop="() => addClockWidget()">添加时钟</ElButton>
+              <ElButton @click.stop="openChartDialog()">新建图表</ElButton>
+            </div>
+          </div>
           <article v-for="widget in screenConfig.widgets" :key="widget.id" class="canvas-widget"
-            :class="{ selected: selectedWidgetId === widget.id, 'text-widget-card': widget.chartSpec.chartType === 'text' }"
+            :class="{
+              selected: selectedWidgetId === widget.id,
+              locked: widget.locked,
+              'text-widget-card': ['text', 'clock'].includes(widget.chartSpec.chartType),
+              'media-widget-card': ['image', 'iframe'].includes(widget.chartSpec.chartType),
+            }"
             :style="widgetStyle(widget)"
+            @pointerdown="beginPointer($event, widget)"
             @click.stop="selectWidget(widget)" @contextmenu="openWidgetContextMenu($event, widget)">
             <header
-              v-if="widget.chartSpec.chartType !== 'text' && widget.chartSpec.appearance?.showTitle !== false"
+              v-if="!['text', 'clock', 'image', 'iframe'].includes(widget.chartSpec.chartType) && widget.chartSpec.appearance?.showTitle !== false"
               @pointerdown="beginPointer($event, widget)"
-            ><span>{{ widget.title }}</span><i>拖动</i></header>
+            ><span>{{ widget.title }}</span><i>{{ widget.locked ? '已锁定' : '拖动' }}</i></header>
             <button
-              v-else-if="selectedWidgetId === widget.id || widget.chartSpec.chartType === 'text'"
+              v-else-if="selectedWidgetId === widget.id || ['text', 'clock', 'image', 'iframe'].includes(widget.chartSpec.chartType)"
               class="widget-move-handle"
               @pointerdown="beginPointer($event, widget)"
-            >拖动</button>
+            >{{ widget.locked ? '锁定' : '拖动' }}</button>
             <div class="widget-body"><ChartRenderer :spec="widget.chartSpec" :result="results[widget.id]" /></div>
-            <button class="resize-handle east" title="向右调整宽度" @pointerdown="beginPointer($event, widget, 'east')" />
-            <button class="resize-handle south" title="向下调整高度" @pointerdown="beginPointer($event, widget, 'south')" />
-            <button class="resize-handle southeast" title="拖动调整宽高" @pointerdown="beginPointer($event, widget, 'southeast')" />
+            <template v-if="!widget.locked">
+              <button class="resize-handle east" title="向右调整宽度" @pointerdown="beginPointer($event, widget, 'east')" />
+              <button class="resize-handle south" title="向下调整高度" @pointerdown="beginPointer($event, widget, 'south')" />
+              <button class="resize-handle southeast" title="拖动调整宽高" @pointerdown="beginPointer($event, widget, 'southeast')" />
+            </template>
           </article>
         </div>
       </section>
 
       <aside v-show="!focusCanvas" class="property-panel">
         <template v-if="selectedWidget">
-          <div class="panel-title"><h3>图表设置</h3><ElButton type="danger" text @click="removeSelectedWidget">移除</ElButton></div>
+          <div class="panel-title">
+            <h3>组件设置</h3>
+            <div class="panel-title-actions">
+              <ElButton text @click="duplicateWidget()">复制</ElButton>
+              <ElButton text @click="toggleLockWidget()">{{ selectedWidget.locked ? '解锁' : '锁定' }}</ElButton>
+              <ElButton type="danger" text @click="removeSelectedWidget">移除</ElButton>
+            </div>
+          </div>
           <ElForm label-position="top" size="small">
             <ElFormItem label="标题"><ElInput v-model="selectedWidget.title" @input="dirty = true" /></ElFormItem>
             <div class="layout-fields">
@@ -743,6 +1132,24 @@ watch(chartSpecForm, fillChartSpec, { deep: true });
               <ElFormItem label="宽"><ElInputNumber v-model="selectedWidget.w" :min="widgetMinSize(selectedWidget).w" :max="screenConfig.width - selectedWidget.x" controls-position="right" @change="dirty = true" /></ElFormItem>
               <ElFormItem label="高"><ElInputNumber v-model="selectedWidget.h" :min="widgetMinSize(selectedWidget).h" :max="screenConfig.height - selectedWidget.y" controls-position="right" @change="dirty = true" /></ElFormItem>
             </div>
+            <template v-if="selectedWidget.chartSpec.chartType === 'image' || selectedWidget.chartSpec.chartType === 'iframe'">
+              <ElFormItem :label="selectedWidget.chartSpec.chartType === 'image' ? '图片地址' : '网页地址'">
+                <ElInput
+                  v-model="selectedWidget.chartSpec.mediaUrl"
+                  placeholder="https://... 或上传后的相对路径"
+                  @input="dirty = true"
+                />
+              </ElFormItem>
+              <ElFormItem v-if="selectedWidget.chartSpec.chartType === 'image'" label="上传图片">
+                <LemonUpload
+                  :model-value="selectedWidget.chartSpec.mediaUrl || ''"
+                  :image-url="selectedWidget.chartSpec.mediaUrl || ''"
+                  attach-code="BiScreenWidgetImage"
+                  :limit="1"
+                  @update:model-value="selectedWidget.chartSpec.mediaUrl = $event || ''; dirty = true"
+                />
+              </ElFormItem>
+            </template>
             <ElTabs v-model="propertyTab">
               <ElTabPane label="外观与 option" name="appearance">
                 <ChartAppearanceEditor :key="selectedWidget.id" :spec="selectedWidget.chartSpec" :result="results[selectedWidget.id]"
@@ -763,8 +1170,8 @@ watch(chartSpecForm, fillChartSpec, { deep: true });
                 <ElOption v-for="item in CHART_TYPE_OPTIONS" :key="item.value" :value="item.value" :label="item.label" />
               </ElSelect>
             </ElFormItem>
-            <template v-if="isTextWidget">
-              <ElFormItem label="文本内容">
+            <template v-if="isTextWidget || selectedWidget.chartSpec.chartType === 'clock'">
+              <ElFormItem v-if="isTextWidget" label="文本内容">
                 <ElInput
                   v-model="selectedWidget.chartSpec.textContent"
                   type="textarea"
@@ -774,13 +1181,16 @@ watch(chartSpecForm, fillChartSpec, { deep: true });
               </ElFormItem>
               <ElFormItem label="字号">
                 <ElInputNumber
-                  :model-value="selectedWidget.chartSpec.appearance?.fontSize ?? 24"
+                  :model-value="selectedWidget.chartSpec.appearance?.fontSize ?? (selectedWidget.chartSpec.chartType === 'clock' ? 36 : 24)"
                   :min="12"
                   :max="120"
                   controls-position="right"
                   @change="selectedWidget.chartSpec.appearance = { ...selectedWidget.chartSpec.appearance, fontSize: $event || 24 }; dirty = true"
                 />
               </ElFormItem>
+            </template>
+            <template v-else-if="selectedWidget.chartSpec.chartType === 'image' || selectedWidget.chartSpec.chartType === 'iframe'">
+              <ElAlert type="success" :closable="false" title="媒体地址已在上方设置" description="切换图表类型后可在此配置其它字段；图片/网页 URL 与上传控件固定显示在标题与布局下方。" />
             </template>
             <template v-else>
             <ElFormItem label="X 字段"><ElInput v-model="selectedWidget.chartSpec.xField" @input="dirty = true" /></ElFormItem>
@@ -830,6 +1240,27 @@ watch(chartSpecForm, fillChartSpec, { deep: true });
           <ElForm label-position="top" size="small">
             <ElFormItem label="名称"><ElInput v-model="screenForm.name" @input="dirty = true" /></ElFormItem>
             <ElFormItem label="说明"><ElInput v-model="screenForm.description" type="textarea" :rows="2" @input="dirty = true" /></ElFormItem>
+            <ElFormItem label="画布尺寸（16:9）">
+              <div class="preset-row">
+                <ElButton
+                  v-for="preset in CANVAS_PRESETS"
+                  :key="preset.label"
+                  size="small"
+                  :type="screenConfig.width === preset.width && screenConfig.height === preset.height ? 'primary' : 'default'"
+                  @click="applyCanvasPreset(preset.width, preset.height)"
+                >{{ preset.label }}</ElButton>
+              </div>
+              <div class="form-row size-row">
+                <ElFormItem label="宽"><ElInputNumber v-model="screenConfig.width" :min="640" :max="3840" controls-position="right" @change="dirty = true" /></ElFormItem>
+                <ElFormItem label="高"><ElInputNumber v-model="screenConfig.height" :min="360" :max="2160" controls-position="right" @change="dirty = true" /></ElFormItem>
+              </div>
+            </ElFormItem>
+            <ElFormItem label="网格吸附">
+              <div class="form-row">
+                <ElSwitch v-model="screenConfig.showGrid" @change="dirty = true" />
+                <ElInputNumber v-model="screenConfig.gridSize" :min="4" :max="40" controls-position="right" @change="dirty = true" />
+              </div>
+            </ElFormItem>
             <ElFormItem label="背景色"><ElColorPicker v-model="screenConfig.background" @change="dirty = true" /></ElFormItem>
             <ElFormItem label="背景图">
               <LemonUpload
@@ -858,7 +1289,13 @@ watch(chartSpecForm, fillChartSpec, { deep: true });
 
     <div v-if="contextMenu.visible" class="widget-context-menu"
       :style="{ left: `${contextMenu.x}px`, top: `${contextMenu.y}px` }" @click.stop>
-      <button @click="removeWidget(contextMenu.widgetId)">删除组件</button>
+      <button @click="duplicateWidget(contextMenu.widgetId)">复制组件</button>
+      <button @click="toggleLockWidget(contextMenu.widgetId)">锁定 / 解锁</button>
+      <button @click="moveWidgetLayer(contextMenu.widgetId, 'top')">置于顶层</button>
+      <button @click="moveWidgetLayer(contextMenu.widgetId, 'bottom')">置于底层</button>
+      <button @click="moveWidgetLayer(contextMenu.widgetId, 'up')">上移一层</button>
+      <button @click="moveWidgetLayer(contextMenu.widgetId, 'down')">下移一层</button>
+      <button class="danger" @click="removeWidget(contextMenu.widgetId)">删除组件</button>
     </div>
 
     <ElDialog v-model="chartDialog" title="图表编辑器" width="min(1100px, 94vw)" destroy-on-close>
@@ -868,10 +1305,10 @@ watch(chartSpecForm, fillChartSpec, { deep: true });
         <ElForm label-position="top">
           <div class="form-row">
             <ElFormItem label="图表名称"><ElInput v-model="chartForm.title" /></ElFormItem>
-            <ElFormItem v-if="!isTextChartForm" label="数据库连接"><ElSelect v-model="chartForm.dbConfigId" filterable @change="changeConnection">
+            <ElFormItem v-if="!isStaticChartForm" label="数据库连接"><ElSelect v-model="chartForm.dbConfigId" filterable @change="changeConnection">
               <ElOption v-for="item in connections" :key="item.id" :value="item.id" :label="item.dbName || item.name || item.dbHost" />
             </ElSelect></ElFormItem>
-            <ElFormItem v-if="!isTextChartForm" label="实例 / Schema"><ElSelect v-model="chartForm.instanceName" filterable allow-create>
+            <ElFormItem v-if="!isStaticChartForm" label="实例 / Schema"><ElSelect v-model="chartForm.instanceName" filterable allow-create>
               <ElOption v-for="item in instances" :key="item" :value="item" :label="item" />
             </ElSelect></ElFormItem>
           </div>
@@ -883,9 +1320,21 @@ watch(chartSpecForm, fillChartSpec, { deep: true });
               </li>
             </ul>
           </ElAlert>
-          <ElFormItem v-if="!isTextChartForm" label="只读 SQL"><ElInput v-model="chartForm.sqlText" type="textarea" :rows="7" placeholder="SELECT category, amount FROM ..." /></ElFormItem>
+          <ElFormItem v-if="!isStaticChartForm" label="只读 SQL"><ElInput v-model="chartForm.sqlText" type="textarea" :rows="7" placeholder="SELECT category, amount FROM ..." /></ElFormItem>
+          <ElFormItem label="图表类型">
+            <div class="type-gallery">
+              <button
+                v-for="item in CHART_TYPE_OPTIONS"
+                :key="item.value"
+                type="button"
+                class="type-chip"
+                :class="{ active: chartSpecForm.chartType === item.value }"
+                @click="chartSpecForm.chartType = item.value"
+              >{{ item.label }}</button>
+            </div>
+          </ElFormItem>
           <div class="form-row">
-            <ElFormItem label="图表类型"><ElSelect v-model="chartSpecForm.chartType">
+            <ElFormItem v-if="false" label="图表类型"><ElSelect v-model="chartSpecForm.chartType">
               <ElOption v-for="item in CHART_TYPE_OPTIONS" :key="item.value" :value="item.value" :label="item.label" />
             </ElSelect></ElFormItem>
             <template v-if="isTextChartForm">
@@ -899,7 +1348,7 @@ watch(chartSpecForm, fillChartSpec, { deep: true });
           <ElFormItem v-if="isTextChartForm" label="文本内容">
             <ElInput v-model="chartSpecForm.textContent" type="textarea" :rows="5" placeholder="显示在大屏上的文案" />
           </ElFormItem>
-          <div v-if="!isTextChartForm" class="form-row">
+          <div v-if="!isStaticChartForm" class="form-row">
             <ElFormItem label="系列字段"><ElInput v-model="chartSpecForm.seriesField" placeholder="可选" /></ElFormItem>
             <ElFormItem label="数值格式"><ElSelect v-model="chartSpecForm.valueFormat"><ElOption label="普通数字" value="number" /><ElOption label="百分比" value="percent" /><ElOption label="人民币" value="currency" /></ElSelect></ElFormItem>
             <ElFormItem label="排序"><ElInput v-model="chartSpecForm.sortBy" placeholder="字段名（可选）" /></ElFormItem>
@@ -912,9 +1361,41 @@ watch(chartSpecForm, fillChartSpec, { deep: true });
             <ElForm label-position="top"><ChartAppearanceEditor v-model:spec="editableChartSpec" :result="chartPreview" /></ElForm>
           </ElTabPane>
         </ElTabs>
-        <div class="dialog-preview"><ChartRenderer v-if="chartPreview" :spec="parseSpec(chartForm.chartSpec)" :result="chartPreview" /><ElEmpty v-else description="点击预览验证 SQL 和字段" /></div>
+        <div class="dialog-preview">
+          <div class="dialog-preview-title">实时预览</div>
+          <ChartRenderer
+            v-if="chartPreview || chartSpecForm.chartType === 'text' || chartSpecForm.chartType === 'clock' || chartSpecForm.chartType === 'image' || chartSpecForm.chartType === 'iframe'"
+            :spec="parseSpec(chartForm.chartSpec)"
+            :result="chartPreview || { columns: [], rows: [], rowCount: 0 }"
+          />
+          <ElEmpty v-else description="填写 SQL 后点「运行预览」；文本/时钟/图片可直接看效果" />
+        </div>
       </div>
       <template #footer><ElButton @click="doPreviewChart">运行预览</ElButton><ElButton type="primary" :loading="chartSaving" @click="doSaveChart">保存图表</ElButton></template>
+    </ElDialog>
+
+    <ElDialog v-model="draftPreviewVisible" title="草稿预览（未发布）" width="min(1100px, 96vw)" destroy-on-close>
+      <div class="draft-preview-stage">
+        <div class="draft-preview-canvas" :style="canvasBackgroundStyle()">
+          <article
+            v-for="widget in screenConfig.widgets"
+            :key="widget.id"
+            class="draft-preview-widget"
+            :style="widgetStyle(widget)"
+          >
+            <header v-if="widget.chartSpec.appearance?.showTitle !== false && !['text', 'clock', 'image', 'iframe'].includes(widget.chartSpec.chartType)">
+              {{ widget.title }}
+            </header>
+            <div class="widget-body">
+              <ChartRenderer :spec="widget.chartSpec" :result="draftPreviewResults[widget.id]" />
+            </div>
+          </article>
+        </div>
+      </div>
+      <template #footer>
+        <ElButton @click="draftPreviewVisible = false">关闭</ElButton>
+        <ElButton type="primary" @click="publish">满意则发布</ElButton>
+      </template>
     </ElDialog>
   </div>
 </template>
@@ -933,13 +1414,15 @@ watch(chartSpecForm, fillChartSpec, { deep: true });
 .asset-actions { display: flex; flex-direction: column; gap: 8px; width: 100%; }
 .asset-actions .full,
 .full { width: 100%; margin-left: 0 !important; }
-.canvas-stage { display: grid; padding: 6px; overflow: auto; place-items: center; background: #cbd2dc; }.canvas { position: relative; width: min(100%,calc((100dvh - 142px) * 1.7778)); aspect-ratio: 16/9; overflow: hidden; box-shadow: 0 5px 18px #0005; }.drop-hint { display: grid; height: 100%; place-items: center; color: #94a3b8; }.canvas-widget { position: absolute; display: flex; flex-direction: column; overflow: hidden; color: #dbeafe; touch-action: none; user-select: none; background: #101b2dcc; border: 1px solid #30435f; border-radius: 5px; }.canvas-widget.selected { z-index: 2; outline: 2px solid #409eff; outline-offset: -1px; }.canvas-widget header { display: flex; flex: 0 0 30px; align-items: center; justify-content: space-between; padding: 0 9px; cursor: move; touch-action: none; background: #16243a; font-size: 12px; }.canvas-widget header i { color: #64748b; font-style: normal; }.widget-body { flex: 1; min-height: 0; padding: 4px; }.resize-handle { position: absolute; z-index: 4; padding: 0; touch-action: none; background: transparent; border: 0; }.resize-handle.east { top: 25%; right: -1px; width: 8px; height: 50%; cursor: ew-resize; border-right: 3px solid #409eff; }.resize-handle.south { bottom: -1px; left: 25%; width: 50%; height: 8px; cursor: ns-resize; border-bottom: 3px solid #409eff; }.resize-handle.southeast { right: 0; bottom: 0; width: 24px; height: 24px; cursor: nwse-resize; background: linear-gradient(135deg,transparent 52%,#409eff 53%); }
+.canvas-stage { display: grid; padding: 6px; overflow: auto; place-items: center; background: #cbd2dc; }.canvas { position: relative; width: min(100%, calc((100dvh - 142px) * (var(--canvas-w, 16) / var(--canvas-h, 9)))); overflow: hidden; box-shadow: 0 5px 18px #0005; }.drop-hint { display: grid; height: 100%; place-items: center; color: #94a3b8; }.canvas-widget { position: absolute; display: flex; flex-direction: column; overflow: hidden; color: #dbeafe; cursor: move; touch-action: none; user-select: none; background: #101b2dcc; border: 1px solid #30435f; border-radius: 5px; }.canvas-widget.locked { cursor: default; }.canvas-widget .widget-body { pointer-events: none; }.canvas-widget.selected { outline: 2px solid #409eff; outline-offset: -1px; }.canvas-widget header { display: flex; flex: 0 0 30px; align-items: center; justify-content: space-between; padding: 0 9px; cursor: move; touch-action: none; background: #16243a; font-size: 12px; }.canvas-widget header i { color: #64748b; font-style: normal; }.widget-body { flex: 1; min-height: 0; padding: 4px; }.resize-handle { position: absolute; z-index: 4; padding: 0; touch-action: none; background: transparent; border: 0; }.resize-handle.east { top: 25%; right: -1px; width: 8px; height: 50%; cursor: ew-resize; border-right: 3px solid #409eff; }.resize-handle.south { bottom: -1px; left: 25%; width: 50%; height: 8px; cursor: ns-resize; border-bottom: 3px solid #409eff; }.resize-handle.southeast { right: 0; bottom: 0; width: 24px; height: 24px; cursor: nwse-resize; background: linear-gradient(135deg,transparent 52%,#409eff 53%); }
 .property-panel h3,.asset-panel h3 { margin: 0 0 10px; }.property-panel :deep(.el-select),.chart-editor :deep(.el-select) { width: 100%; }.form-row { align-items: flex-start; }.form-row > * { flex: 1; }.layout-fields { display: grid; grid-template-columns: repeat(4,minmax(0,1fr)); gap: 5px; }.layout-fields :deep(.el-input-number) { width: 100%; }.dialog-preview { height: 300px; padding: 8px; border: 1px dashed var(--el-border-color); border-radius: 6px; }
 .widget-context-menu { position: fixed; z-index: 4000; min-width: 136px; padding: 5px; background: var(--el-bg-color-overlay); border: 1px solid var(--el-border-color); border-radius: 6px; box-shadow: var(--el-box-shadow-light); }.widget-context-menu button { width: 100%; padding: 7px 10px; color: var(--el-color-danger); text-align: left; cursor: pointer; background: transparent; border: 0; border-radius: 4px; }.widget-context-menu button:hover { background: var(--el-color-danger-light-9); }
 .widget-move-handle { position: absolute; top: 3px; right: 3px; z-index: 3; padding: 2px 8px; cursor: move; color: #dbeafe; background: #16243acc; border: 1px solid #409eff; border-radius: 4px; font-size: 11px; }
 .canvas-widget.text-widget-card { background: transparent; border-style: dashed; }
 .canvas-widget.text-widget-card .widget-body { padding: 0; }
 .canvas-widget.text-widget-card .widget-move-handle { top: 1px; right: 1px; padding: 1px 6px; font-size: 10px; opacity: 0.85; }
+.canvas-widget.media-widget-card { background: #0f172acc; border-style: dashed; border-color: #64748b; }
+.canvas-widget.media-widget-card .widget-body { padding: 0; }
 .field-hint { margin-bottom: 12px; }
 .field-hint p, .field-hint ul { margin: 6px 0 0; padding: 0; font-size: 12px; line-height: 1.6; }
 .field-hint li { margin-left: 1.1em; list-style: disc; }
@@ -952,4 +1435,50 @@ watch(chartSpecForm, fillChartSpec, { deep: true });
 .chart-editor { display: grid; grid-template-columns: minmax(0,1.1fr) minmax(0,1fr); gap: 18px; max-height: 65vh; overflow: auto; }.chart-editor > * { min-width: 0; }.chart-editor .form-row { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); }.chart-editor .dialog-preview { position: sticky; top: 10px; margin-top: 40px; background: #101b2d; }
 @media (max-width: 760px) { .chart-editor { grid-template-columns: minmax(0,1fr); }.chart-editor .dialog-preview { position: static; margin-top: 0; } }
 @media (max-width: 1100px) { .editor { grid-template-columns: 180px minmax(390px,1fr) 250px; }.top-actions { flex-wrap: wrap; justify-content: flex-end; } }
+
+.quick-widgets { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; width: 100%; }
+.quick-widgets :deep(.el-button) { margin: 0; width: 100%; }
+.layer-panel { margin-top: 14px; padding-top: 10px; border-top: 1px solid var(--el-border-color-light); }
+.layer-panel h4 { margin: 0 0 8px; font-size: 13px; }
+.layer-panel small { margin-left: 6px; color: var(--el-text-color-secondary); font-weight: 400; }
+.layer-item { display: flex; align-items: center; justify-content: space-between; gap: 6px; padding: 6px 8px; margin-bottom: 4px; cursor: pointer; border: 1px solid var(--el-border-color-lighter); border-radius: 6px; font-size: 12px; }
+.layer-item.active { border-color: var(--el-color-primary); background: var(--el-color-primary-light-9); }
+.layer-item.locked { opacity: 0.75; }
+.layer-item span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.layer-item i { flex: 0 0 auto; color: var(--el-text-color-secondary); font-style: normal; font-size: 11px; }
+.canvas-stage { grid-template-rows: auto minmax(0, 1fr); align-content: stretch; }
+.canvas-toolbar { display: flex; flex-wrap: wrap; gap: 8px; justify-content: space-between; width: min(100%, calc((100dvh - 142px) * 1.7778)); margin: 0 auto 6px; padding: 4px 2px; }
+.canvas-toolbar-group { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.canvas-toolbar-group :deep(.el-button + .el-button) { margin-left: 0; }
+.canvas.show-grid::before {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  content: '';
+  background-image:
+    linear-gradient(to right, rgb(148 163 184 / 22%) 1px, transparent 1px),
+    linear-gradient(to bottom, rgb(148 163 184 / 22%) 1px, transparent 1px);
+  background-size: var(--grid-size, 2%) var(--grid-size, 2%);
+}
+/* 网格 ::before 已 z-index:0；切勿给子元素强制 position:relative，否则会覆盖 .canvas-widget 的 absolute，导致组件按文档流上下堆叠、无法拖到画布顶部。 */
+.canvas > .drop-hint { position: absolute; inset: 0; z-index: 0; }
+.drop-hint { display: flex; flex-direction: column; gap: 14px; height: 100%; align-items: center; justify-content: center; color: #94a3b8; text-align: center; }
+.drop-hint p { margin: 0; max-width: 360px; line-height: 1.5; }
+.drop-actions { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; }
+.canvas-widget.locked { outline-style: dashed; }
+.panel-title-actions { display: flex; gap: 2px; }
+.preset-row { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
+.preset-row :deep(.el-button) { margin: 0; }
+.size-row { margin-top: 4px; }
+.save-state.dirty { color: var(--el-color-warning); }
+.widget-context-menu button.danger { color: var(--el-color-danger); }
+.type-gallery { display: flex; flex-wrap: wrap; gap: 6px; }
+.type-chip { padding: 6px 10px; cursor: pointer; color: var(--el-text-color-regular); background: var(--el-fill-color-light); border: 1px solid var(--el-border-color); border-radius: 999px; font-size: 12px; }
+.type-chip.active { color: #fff; background: var(--el-color-primary); border-color: var(--el-color-primary); }
+.dialog-preview-title { margin-bottom: 6px; color: var(--el-text-color-secondary); font-size: 12px; }
+.draft-preview-stage { display: grid; place-items: center; min-height: 420px; padding: 8px; background: #cbd2dc; border-radius: 8px; }
+.draft-preview-canvas { position: relative; width: min(100%, 960px); aspect-ratio: 16 / 9; overflow: hidden; box-shadow: 0 5px 18px #0005; }
+.draft-preview-widget { position: absolute; display: flex; flex-direction: column; overflow: hidden; color: #dbeafe; background: #101b2dcc; border: 1px solid #30435f; border-radius: 5px; }
+.draft-preview-widget header { display: flex; flex: 0 0 28px; align-items: center; padding: 0 8px; background: #16243a; font-size: 12px; }
 </style>

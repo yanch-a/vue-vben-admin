@@ -103,6 +103,8 @@ const emit = defineEmits<{
   'export-sql': [];
   /** Messages 报错：把 SQL + 错误交给 AI 修复 */
   askAiFix: [{ sql: string; error: string }];
+  /** 多条结果里点某一条，父级把它设为导出 / 编辑目标 */
+  'focus-result-set': [index: number];
 }>();
 
 const canExport = computed(
@@ -305,10 +307,56 @@ async function confirmRowMutation(action: '修改' | '删除'): Promise<boolean>
   return true;
 }
 
-/** Messages 区文案：附带服务端耗时与响应到前台耗时 */
+/** 分步执行的全部结果；只有一条时不走堆叠布局 */
+const resultSets = computed(() =>
+  (props.result?.sets?.length || 0) > 1 ? props.result!.sets! : [],
+);
+const focusedSet = ref(0);
+
+/** 把一条语句收成单行，放在结果块标题上 */
+function previewSql(sql: string): string {
+  return String(sql || '').replace(/\s+/g, ' ').trim();
+}
+
+function focusResultSet(index: number) {
+  if (index === focusedSet.value) return;
+  if (editMode.value && dirtyCount.value > 0) {
+    ElMessage.warning('请先保存或退出当前结果集的表格编辑');
+    return;
+  }
+  // 切到另一条结果时退出编辑，避免把上一条的改动套到新表上
+  editMode.value = false;
+  editingCell.value = null;
+  dirtyCount.value = 0;
+  selectedRow.value = null;
+  selectedIndex.value = -1;
+  selectedCol.value = null;
+  selectedRows.value = [];
+  focusedSet.value = index;
+  emit('focus-result-set', index);
+}
+
+function bindFocusedTable(el: unknown) {
+  tableElRef.value = (el || null) as typeof tableElRef.value;
+}
+
+/** Messages 区文案：多条时逐条列出，单条时附带耗时 */
 const messagesText = computed(() => {
   const r = props.result;
   if (!r) return 'Ready';
+  if (resultSets.value.length > 1) {
+    const lines = resultSets.value.map((set, index) => {
+      const head = `[${set.index || index + 1}] ${set.success ? 'OK' : 'FAIL'}`;
+      const time = set.elapsedMs != null ? `  ${set.elapsedMs} ms` : '';
+      const detail = set.error || set.message || (set.columns.length ? `返回 ${set.rowCount ?? 0} 行` : '');
+      return `${head}${time}\n${previewSql(set.sql)}\n${detail}`;
+    });
+    if (r.message) lines.unshift(String(r.message));
+    if (r.clientElapsedMs != null && !Number.isNaN(r.clientElapsedMs)) {
+      lines.push(`响应到前台耗时: ${r.clientElapsedMs} ms`);
+    }
+    return lines.join('\n\n');
+  }
   const lines: string[] = [];
   const base =
     r.error ||
@@ -324,10 +372,17 @@ const messagesText = computed(() => {
   return lines.join('\n');
 });
 
-const policyError = computed(() => isClientPolicyError(props.result?.error || ''));
+const failedResultSet = computed(
+  () => resultSets.value.find((set) => !set.success && set.error) || null,
+);
 
-/** 仅查询结果集显示行数；DDL/DML 没有列，标签保持 Result */
+const policyError = computed(() =>
+  isClientPolicyError(failedResultSet.value?.error || props.result?.error || ''),
+);
+
+/** 多条时标签显示语句数；单条查询仍显示行数 */
 const resultTabLabel = computed(() => {
+  if (resultSets.value.length > 1) return `结果 (${resultSets.value.length})`;
   const r = props.result;
   if (!r?.columns?.length) return 'Result';
   const n = r.rowCount ?? r.rows?.length ?? 0;
@@ -1283,7 +1338,8 @@ watch(
 
 watch(
   () => props.result,
-  () => {
+  (result) => {
+    focusedSet.value = result?.activeSet ?? 0;
     selectedRow.value = null;
     selectedIndex.value = -1;
     selectedCol.value = null;
@@ -1439,7 +1495,70 @@ watch(
           ×
         </ElButton>
       </div>
-      <template v-if="activeTab === 'result'">
+      <template v-if="activeTab === 'result' && resultSets.length > 1">
+        <div class="result-stack">
+          <section
+            v-for="(set, index) in resultSets"
+            :key="`${set.index}-${index}`"
+            class="result-set"
+            :class="{ active: index === focusedSet }"
+            @mousedown="focusResultSet(index)"
+          >
+            <header class="result-set-head">
+              <span class="result-set-index">#{{ set.index || index + 1 }}</span>
+              <span class="result-set-kind">{{ set.kind === 'dml' ? 'DML' : set.kind === 'ddl' ? 'DDL' : '查询' }}</span>
+              <span class="result-set-sql" :title="set.sql">{{ previewSql(set.sql) }}</span>
+              <span v-if="set.success && set.columns.length" class="result-set-meta">
+                {{ set.rowCount ?? set.rows.length }} 行
+              </span>
+              <span v-else-if="set.success" class="result-set-meta">OK</span>
+              <span v-else class="result-set-meta is-error">失败</span>
+              <span v-if="set.elapsedMs != null" class="result-set-meta">{{ set.elapsedMs }} ms</span>
+            </header>
+            <div
+              v-if="set.columns.length"
+              class="stack-table"
+              :class="{ 'is-focused': index === focusedSet }"
+            >
+              <VirtualResultTable
+                v-if="index === focusedSet"
+                :ref="bindFocusedTable"
+                :rows="displayRows"
+                :columns="columns"
+                :empty-text="$tr('查询成功，无数据')"
+                :edit-mode="editMode"
+                :editing-cell="editingCell"
+                :edit-draft="editDraft"
+                :dirty-indexes="dirtyIndexSet"
+                :format-cell="displayCell"
+                :is-null-cell="isNullCell"
+                :find-match-keys="findMatchKeys"
+                :find-active-key="findActiveKey"
+                :active-cell-key="activeCellKey"
+                @current-change="onCurrentChange"
+                @selection-change="onSelectionChange"
+                @cell-activate="onCellActivate"
+                @row-contextmenu="onRowContextMenu"
+                @cell-click="startEditCell"
+                @update:edit-draft="editDraft = $event"
+                @cell-blur="onCellBlur"
+                @cell-keydown="onCellEditorKeydown"
+                @edit-offscreen="commitEditingCell"
+              />
+              <VirtualResultTable
+                v-else
+                :rows="set.rows"
+                :columns="set.columns"
+                :empty-text="$tr('查询成功，无数据')"
+                :format-cell="displayCell"
+                :is-null-cell="isNullCell"
+              />
+            </div>
+            <pre v-else class="stack-msg" :class="{ 'is-error': !!set.error }">{{ set.error || set.message || '执行完成' }}</pre>
+          </section>
+        </div>
+      </template>
+      <template v-else-if="activeTab === 'result'">
         <div v-if="result?.columns?.length" class="table-fill">
           <VirtualResultTable
             ref="tableElRef"
@@ -1470,14 +1589,14 @@ watch(
       </template>
       <template v-if="activeTab === 'messages'">
         <pre class="messages">{{ messagesText }}</pre>
-        <div v-if="result?.error" class="ai-fix">
+        <div v-if="failedResultSet || result?.error" class="ai-fix">
           <ElButton
             size="small"
             type="primary"
             @click="
               emit('askAiFix', {
-                sql: result?.sourceSql || '',
-                error: result?.error || messagesText,
+                sql: failedResultSet?.sql || result?.sourceSql || '',
+                error: failedResultSet?.error || result?.error || messagesText,
               })
             "
           >
@@ -1742,6 +1861,74 @@ watch(
 .empty {
   padding: 16px;
   color: var(--el-text-color-secondary);
+}
+.result-stack {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 8px;
+}
+.result-set {
+  flex: none;
+  border: 1px solid var(--el-border-color-lighter);
+  border-radius: 6px;
+  overflow: hidden;
+  background: var(--el-bg-color);
+}
+.result-set.active {
+  border-color: var(--el-color-primary);
+}
+.result-set-head {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding: 6px 8px;
+  font-size: 12px;
+  background: var(--el-fill-color-light);
+  cursor: pointer;
+}
+.result-set-index,
+.result-set-kind {
+  flex: none;
+  color: var(--el-text-color-secondary);
+}
+.result-set-sql {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+.result-set-meta {
+  flex: none;
+  color: var(--el-text-color-secondary);
+}
+.result-set-meta.is-error,
+.stack-msg.is-error {
+  color: var(--el-color-danger);
+}
+.stack-table {
+  display: flex;
+  flex-direction: column;
+  height: 220px;
+}
+.stack-table.is-focused {
+  height: 280px;
+}
+.stack-table > * {
+  flex: 1;
+  min-height: 0;
+}
+.stack-msg {
+  margin: 0;
+  padding: 8px 10px;
+  font-size: 12px;
+  white-space: pre-wrap;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
 .messages {
   margin: 0;

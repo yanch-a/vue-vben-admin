@@ -191,6 +191,27 @@ export function executeSql(data: {
   })
 }
 
+/**
+ * 选中多条 SQL 时一次提交，后台按语句分步执行并返回每一条的结果。
+ * 某一条失败后停止，已成功的结果仍在 items 里。
+ */
+export function executeSqlBatch(data: {
+  dbConfigId: number | string
+  instanceName?: string
+  sql: string
+  maxRows?: number
+  requestId?: string
+  source?: string
+}, opts?: { signal?: AbortSignal }) {
+  return request({
+    url: databaseUrl + 'executeSqlBatch',
+    method: 'post',
+    data,
+    signal: opts?.signal,
+    timeout: 0,
+  })
+}
+
 /** 取消正在执行的自由 SQL（服务端 kill/cancel） */
 export function cancelSql(data: { requestId: string }) {
   return request({

@@ -10,6 +10,7 @@
 
   import { getMemberUserGroupList } from '@/api/member/memberUserGroup'
   import { doDelete, getPage } from '@/api/member/memberUserApi'
+  import { formatIpWhitelist } from '@/views/member/memberUser/ipWhitelist'
   import { getDictData } from '@/utils/convert'
   import { Delete, Edit as EditIcon, Plus, Search } from '@element-plus/icons-vue'
 
@@ -133,6 +134,7 @@
         fetchData,
         groupNameOf,
         statusLabelOf,
+        formatIpWhitelist,
         Plus,
         Delete,
         EditIcon,
@@ -233,6 +235,16 @@
       <el-table-column align="center" :label="$tr('会员分组')" min-width="120">
         <template #default="{ row }">
           {{ groupNameOf(row.userGroup) }}
+        </template>
+      </el-table-column>
+      <el-table-column
+        align="center"
+        :label="$tr('IP白名单')"
+        min-width="160"
+        show-overflow-tooltip
+      >
+        <template #default="{ row }">
+          {{ formatIpWhitelist(row.ipWhitelist) || $tr('不限制') }}
         </template>
       </el-table-column>
       <el-table-column align="center" :label="$tr('状态')" width="100">

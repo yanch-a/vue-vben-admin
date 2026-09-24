@@ -10,6 +10,23 @@ import { computed, reactive } from 'vue';
 import { visualClientConfig } from '../config';
 import { notifyClientSessionChange } from './clientSessionNotify';
 
+/** 分步执行里的一条语句结果。查询带表格，DML/DDL 只有说明。 */
+export interface QueryResultSet {
+  index: number;
+  sql: string;
+  /** query / dml / ddl */
+  kind?: string;
+  success: boolean;
+  columns: string[];
+  columnTables?: string[];
+  rows: Record<string, any>[];
+  rowCount: number;
+  affectedRows?: number;
+  elapsedMs?: number;
+  message?: string;
+  error?: string;
+}
+
 export interface QueryResultState {
   columns: string[];
   /** 与 columns 等长：JDBC 表名，联表编辑用来把列归属到表 */
@@ -22,8 +39,12 @@ export interface QueryResultState {
   clientElapsedMs?: number;
   message?: string;
   error?: string;
-  /** 产生该结果的 SQL，用于解析目标表 */
+  /** 产生该结果的 SQL，用于解析目标表。多结果时对应当前聚焦的那一条 */
   sourceSql?: string;
+  /** 选中多条 SQL 分步执行后的全部结果；只有一条时不填 */
+  sets?: QueryResultSet[];
+  /** sets 里当前聚焦的下标，导出和表格编辑都跟着它 */
+  activeSet?: number;
 }
 
 export interface QueryTab {

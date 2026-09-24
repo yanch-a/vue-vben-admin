@@ -11,6 +11,9 @@ const screenUrl = `${adminUrl}/biScreen/`;
 export type ChartType =
   | 'area'
   | 'bar'
+  | 'clock'
+  | 'iframe'
+  | 'image'
   | 'kpi'
   | 'line'
   | 'pie'
@@ -29,6 +32,8 @@ export interface ChartSpec {
   stack?: boolean;
   /** 文本组件展示文案；仅 chartType=text 使用。 */
   textContent?: string;
+  /** image/iframe URL */
+  mediaUrl?: string;
   valueFormat?: 'currency' | 'number' | 'percent';
   xAxisLabel?: string;
   xField?: string;
@@ -73,6 +78,8 @@ export interface ChartAsset extends DatasetDefinition {
 export interface QueryResult {
   columns: string[];
   elapsedMs?: number;
+  /** Per-widget data error from runtime soft-fail. */
+  message?: string;
   rowCount: number;
   rows: Array<Record<string, unknown>>;
 }
@@ -83,6 +90,8 @@ export interface ScreenWidget {
   data: DatasetDefinition;
   h: number;
   id: string;
+  /** 锁定后不可拖拽缩放 */
+  locked?: boolean;
   title: string;
   w: number;
   x: number;
@@ -94,8 +103,12 @@ export interface ScreenConfig {
   background?: string;
   /** 背景图 URL（附件上传后的相对或绝对路径），铺满画布。 */
   backgroundImage?: string;
+  /** editor grid size px */
+  gridSize?: number;
   height: number;
   schemaVersion: number;
+  /** editor snap/show grid */
+  showGrid?: boolean;
   widgets: ScreenWidget[];
   width: number;
 }

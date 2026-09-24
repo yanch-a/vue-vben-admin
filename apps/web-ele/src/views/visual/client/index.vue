@@ -18,7 +18,7 @@ import {
 } from 'vue';
 import { useRouter } from 'vue-router';
 
-import { executeDdl, executeDml, executeDmlBatch, executeSql, cancelSql, exportSqlExcel, exportSqlInsert, exportTableSchemaExcel, getInstances, getObjectScript, getTableColumns, getTableDDL, getTableInfo, getTables } from '#/api/visual/database';
+import { executeDdl, executeDml, executeDmlBatch, executeSql, executeSqlBatch, cancelSql, exportSqlExcel, exportSqlInsert, exportTableSchemaExcel, getInstances, getObjectScript, getTableColumns, getTableDDL, getTableInfo, getTables } from '#/api/visual/database';
 import { feedbackSchemaDoc } from '#/api/ai/agent';
 import {
   addSavedQuery,
@@ -84,6 +84,7 @@ import {
   isQueryTabDirty,
   replaceConnectionTabs,
   useQueryTabs,
+  type QueryResultSet,
 } from './composables/useQueryTabs';
 import { visualClientConfig } from './config';
 import { isProductionConnection } from './utils/prodConnection';
@@ -98,7 +99,7 @@ import {
   type QueryTableRef,
   type TableRef,
 } from './utils/resultRowSql';
-import { confirmSqlWrite } from './utils/sqlWriteConfirmation';
+import { confirmSqlWrite, isUpdateOrDeleteSql } from './utils/sqlWriteConfirmation';
 import {
   askAiPrefillForError,
   describeSqlWriteRisk,
@@ -121,6 +122,7 @@ import {
 import {
   clearColumnCache,
   getCachedColumns,
+  listSqlStatements,
   rememberInstanceTables,
   setCachedColumns,
 } from './utils/sqlEditorAssist';
@@ -1671,6 +1673,169 @@ function newSqlRequestId() {
   return `sql-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
+/**
+ * 选区（或传入的整段 SQL）里是否包含多条可执行语句。
+ * 无选区时 getExecutableSql 只会返回光标所在的一条，不会进这里。
+ */
+function shouldExecuteAsBatch(sql: string): boolean {
+  if (listSqlStatements(sql).length > 1) return true;
+  // Mongo 脚本常常不写分号，换行后的下一条 db./use 也算多条
+  if (!isMongoDbType(activeConnection.value?.dbType)) return false;
+  const commands = sql.match(/^(?:db\.|use\s*\(|use\s+)/gim);
+  return (commands?.length || 0) > 1;
+}
+
+/** 多条里只要有写操作，就确认一次。结构变更不走 UPDATE/DELETE 的免确认。 */
+async function confirmSqlBatch(sql: string): Promise<boolean> {
+  const mongo = isMongoDbType(activeConnection.value?.dbType);
+  const parts = mongo ? sql.split(/;|\n/).map((s) => s.trim()).filter(Boolean) : listSqlStatements(sql);
+  const writes = parts.filter((part) => {
+    if (mongo) {
+      const kind = mongoCommandKind(part);
+      return kind === 'data' || kind === 'schema' || kind === 'manage';
+    }
+    return isWriteOrDangerousSql(part) || looksLikeControlledDdl(part);
+  });
+  if (!writes.length) return true;
+  const sample = writes.find((part) => !isUpdateOrDeleteSql(part)) || writes[0]!;
+  return confirmSqlWrite(sample, {
+    title: '执行多条 SQL',
+    message: `即将按顺序执行 ${parts.length} 条语句，其中 ${writes.length} 条会修改数据或结构。某一条失败后会停止，此前已成功的语句不会自动回滚。确认继续？`,
+  });
+}
+
+/** 把后台分步结果转成结果区能直接渲染的条目 */
+function mapBatchResultSet(item: any, index: number): QueryResultSet {
+  const columns = item?.columns || [];
+  const rows = markRaw(item?.rows || []);
+  return {
+    index: item?.index ?? index + 1,
+    sql: String(item?.sql || ''),
+    kind: item?.kind,
+    success: item?.success !== false && !item?.error,
+    columns,
+    columnTables: item?.columnTables || [],
+    rows,
+    rowCount: item?.rowCount ?? rows.length ?? 0,
+    affectedRows: item?.affectedRows,
+    elapsedMs: item?.elapsedMs,
+    message: item?.message,
+    error: item?.error,
+  };
+}
+
+/** 聚焦某一条分步结果，导出、表格编辑和主键解析都跟着这条 SQL */
+function onFocusResultSet(index: number) {
+  const tab = activeTab.value;
+  const sets = tab?.result?.sets;
+  const set = sets?.[index];
+  if (!tab?.result || !set) return;
+  tab.result.activeSet = index;
+  tab.result.sourceSql = set.sql;
+  tab.result.columns = set.columns;
+  tab.result.columnTables = set.columnTables;
+  tab.result.rows = set.rows;
+  tab.result.rowCount = set.rowCount;
+  tab.result.elapsedMs = set.elapsedMs;
+  tab.result.message = set.message;
+  tab.result.error = set.error;
+}
+
+/**
+ * 选中多条 SQL：后台逐条执行，前台把每条结果都铺开展示。
+ * 查询显示表格，DML/DDL 显示影响行数；失败的那条停在结果列表里。
+ */
+async function runSqlBatch(sql: string, source: string) {
+  if (!activeConnection.value || !activeTab.value) return;
+  if (!(await confirmSqlBatch(sql))) return;
+  const requestId = newSqlRequestId();
+  const abort = new AbortController();
+  sqlRunAbort = abort;
+  sqlRunRequestId = requestId;
+  activeTab.value.executing = true;
+  activeTab.value.resultVisible = true;
+  activeTab.value.resultTab = 'result';
+  if (resultHeight.value < 280) resultHeight.value = 360;
+  const t0 = performance.now();
+  try {
+    const res: any = await executeSqlBatch(
+      {
+        dbConfigId: activeConnection.value.id,
+        instanceName: activeTab.value.instanceName,
+        sql,
+        maxRows: visualClientConfig.defaultQueryMaxRows,
+        requestId,
+        source,
+      },
+      { signal: abort.signal },
+    );
+    const clientElapsedMs = Math.round(performance.now() - t0);
+    const data = res?.data || res;
+    const sets = (data?.items || []).map(mapBatchResultSet);
+    if (!sets.length) {
+      throw new Error(data?.message || '没有返回执行结果');
+    }
+    const preferred = sets.findIndex((set: QueryResultSet) => set.columns.length > 0);
+    const activeSet = preferred >= 0 ? preferred : 0;
+    const current = sets[activeSet]!;
+    activeTab.value.result = {
+      columns: current.columns,
+      columnTables: current.columnTables,
+      rows: current.rows,
+      rowCount: current.rowCount,
+      elapsedMs: data?.elapsedMs ?? current.elapsedMs,
+      clientElapsedMs,
+      message: data?.message || current.message,
+      error: sets.length > 1 ? undefined : current.error,
+      sourceSql: current.sql,
+      sets: sets.length > 1 ? sets : undefined,
+      activeSet: sets.length > 1 ? activeSet : undefined,
+    };
+    activeTab.value.resultTab = current.columns.length || sets.length > 1 ? 'result' : 'messages';
+    if (sets.length === 1 && current.error) {
+      activeTab.value.result.error = current.error;
+      activeTab.value.result.message = current.error;
+      activeTab.value.resultTab = 'messages';
+    }
+    const summary = String(data?.message || '');
+    if (data?.stopped || sets.some((set: QueryResultSet) => !set.success)) {
+      ElMessage.warning(summary || '分步执行未全部完成');
+    } else if (sets.some((set: QueryResultSet) => set.kind && set.kind !== 'query')) {
+      ElMessage.success(summary || `已执行 ${sets.length} 条 SQL`);
+    }
+    const ddl = [...sets].reverse().find((set: QueryResultSet) => set.success && set.kind === 'ddl');
+    if (ddl) {
+      if (isMongoDbType(activeConnection.value?.dbType)) {
+        objectTreeRef.value?.reload?.();
+      } else {
+        refreshObjectTreeAfterDdl(ddl.sql, activeTab.value.instanceName || '');
+      }
+    }
+    const feedbackSql = sets.find((set: QueryResultSet) => set.success && set.kind === 'query')?.sql;
+    if (feedbackSql) void feedbackSchemaDocSilent(feedbackSql);
+  } catch (e: any) {
+    const clientElapsedMs = Math.round(performance.now() - t0);
+    const cancelled = abort.signal.aborted || /查询已取消|canceled|cancelled/i.test(String(e?.msg || e?.message || ''));
+    const errText = cancelled ? '查询已取消' : pickErrorMsg(e, '执行失败');
+    activeTab.value.result = {
+      columns: [],
+      rows: [],
+      rowCount: 0,
+      error: errText,
+      message: errText,
+      clientElapsedMs,
+      sourceSql: sql,
+    };
+    activeTab.value.resultTab = 'messages';
+  } finally {
+    if (sqlRunRequestId === requestId) {
+      sqlRunAbort = null;
+      sqlRunRequestId = null;
+    }
+    activeTab.value.executing = false;
+  }
+}
+
 /** 执行当前光标所在语句（或选中片段）；不重置用户已调好的结果区高度 */
 async function runSql(opts?: { sql?: string; source?: string }) {
   if (!activeConnection.value || !activeTab.value) return;
@@ -1692,6 +1857,12 @@ async function runSql(opts?: { sql?: string; source?: string }) {
     return;
   }
   const source = opts?.source || 'manual';
+
+  // 选区里有多条语句时整段交给后台分步执行，结果区把每一条都展示出来
+  if (shouldExecuteAsBatch(sql)) {
+    await runSqlBatch(sql, source);
+    return;
+  }
 
   if (isMongoDbType(activeConnection.value.dbType)) {
     const kind = mongoCommandKind(sql);
@@ -3177,6 +3348,7 @@ onBeforeUnmount(() => {
               @export-excel="onExportExcel"
               @export-sql="onExportSqlInsert"
               @ask-ai-fix="onAskAiFix"
+              @focus-result-set="onFocusResultSet"
             />
           </div>
           </div>
