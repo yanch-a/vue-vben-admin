@@ -335,7 +335,7 @@
           instanceName: row.schemaName || '',
           dbConfigId: row.id,
         })
-        router.push({ name: 'VisualClient' })
+        router.push({ path: '/lSql/visualClient' })
       }
 
       const handleSubmit = async () => {

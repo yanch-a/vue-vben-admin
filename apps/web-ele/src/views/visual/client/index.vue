@@ -86,6 +86,8 @@ import {
   useQueryTabs,
 } from './composables/useQueryTabs';
 import { visualClientConfig } from './config';
+import { isProductionConnection } from './utils/prodConnection';
+import { humanizeApiError } from './utils/humanizeApiError';
 import { resolveSqlDialect, resolveTableIdent } from './dialect/sqlDialect';
 import { resolveDbType, resolveDialectFamily } from './dialect/dbTypes';
 import type { TableDesignSqlResult } from './dialect/tableDesignerDialect';
@@ -699,17 +701,32 @@ function onOpenConnection() {
   dialogVisible.value = true;
 }
 
-function handleOpened(conn: any) {
+async function handleOpened(conn: any) {
+  if (isProductionConnection(conn)) {
+    try {
+      await ElMessageBox.confirm(
+        `「${conn?.dbName || '未命名'}」看起来是生产连接（${conn?.dbHost || '未知主机'}）。确认打开吗？`,
+        '打开生产连接',
+        {
+          type: 'warning',
+          confirmButtonText: '确认打开生产',
+          cancelButtonText: '取消',
+          distinguishCancelAndClose: true,
+        },
+      );
+    } catch {
+      return;
+    }
+  }
   const result = openConnection(conn);
   if (!result.ok) {
     if (result.reason === 'max') {
       ElMessage.warning(
-        `最多同时打开 ${visualClientConfig.maxOpenConnections} 个数据库连接，请先关闭其它连接`,
+        `最多同时打开 ${visualClientConfig.maxOpenConnections} 个数据库连接，请先关闭部分连接`,
       );
     }
     return;
   }
-  // 打开连接后给当前 Tab 补默认库
   if (activeTab.value && !activeTab.value.instanceName) {
     activeTab.value.instanceName =
       conn?.schemaName || instanceOptions.value[0] || '';
@@ -768,6 +785,39 @@ function goSavedQueryManage() {
 }
 
 /** 跳转图表库（后台菜单路由名 Dashboard） */
+function submitAsWorkOrder() {
+  if (!activeConnection.value) {
+    ElMessage.warning('请先打开数据库连接');
+    return;
+  }
+  const sql =
+    (sqlEditorRef.value?.getSelectedText?.() as string | undefined)?.trim()
+    || (sqlEditorRef.value?.getExecutableSql?.() as string | undefined)?.trim() ||
+    activeTab.value?.sql?.trim() ||
+    '';
+  if (!sql) {
+    ElMessage.warning('请先在编辑器中填写要提交的 SQL');
+    return;
+  }
+  try {
+    sessionStorage.setItem('lemon.sqlWorkOrder.prefillSql', sql);
+  } catch {
+    // ignore quota
+  }
+  router.push({
+    path: '/lSql/sqlWorkOrder',
+    query: {
+      create: '1',
+      dbConfigId: String(activeConnection.value.id),
+      instance:
+        activeTab.value?.instanceName ||
+        activeConnection.value.schemaName ||
+        '',
+      title: `客户端提交 · ${activeConnection.value.dbName || ''}`,
+    },
+  });
+}
+
 function goChartLibrary() {
   router.push({ name: 'Dashboard' });
 }
@@ -1682,6 +1732,7 @@ async function runSql(opts?: { sql?: string; source?: string }) {
   activeTab.value.executing = true;
   activeTab.value.resultVisible = true;
   activeTab.value.resultTab = 'result';
+  if (resultHeight.value < 160) resultHeight.value = 220;
   const t0 = performance.now();
   try {
     const res: any = await executeSql(
@@ -1929,13 +1980,7 @@ async function stopSql() {
 
 /** 从 axios / 业务 reject 对象中取出可读错误文案 */
 function pickErrorMsg(e: any, fallback: string) {
-  return (
-    e?.msg ||
-    e?.message ||
-    e?.response?.data?.msg ||
-    e?.response?.data?.message ||
-    fallback
-  );
+  return humanizeApiError(e, fallback);
 }
 
 /** 格式化当前选区或光标所在 SQL（与编辑器 F12 相同） */
@@ -2870,7 +2915,7 @@ onBeforeUnmount(() => {
         @relation="goRelation"
         @saved-queries="goSavedQueryManage"
         @chart-library="goChartLibrary"
-        @redis="goRedisConsole"
+        @submit-work-order="submitAsWorkOrder"
         @progress="onOpenTaskPanel"
         @system="onOpenSystemFunctions"
         @tools="onOpenDatabaseTools"

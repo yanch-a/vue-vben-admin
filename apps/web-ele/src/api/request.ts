@@ -1,3 +1,4 @@
+import { humanizeApiError } from '#/utils/humanizeApiError';
 /**
  * 该文件可自行根据业务逻辑进行调整
  */
@@ -190,12 +191,14 @@ function createRequestClient(baseURL: string, options?: RequestClientOptions) {
       if (isAuthFailurePayload(responseData)) {
         return;
       }
-      const errorMessage =
+      const errorMessage = humanizeApiError(
         responseData?.msg ??
-        responseData?.error ??
-        responseData?.message ??
-        '';
-      ElMessage.error(errorMessage || msg);
+          responseData?.error ??
+          responseData?.message ??
+          msg,
+        msg || '请求失败',
+      );
+      ElMessage.error(errorMessage);
     }),
   );
 

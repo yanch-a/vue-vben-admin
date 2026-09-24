@@ -270,9 +270,27 @@ function resetForm() {
   instances.value = [];
 }
 
-function createOrder() {
-  if (dba.value) return;
+function createOrder(prefill?: Partial<typeof form>) {
   resetForm();
+  if (prefill) {
+    Object.assign(form, {
+      title: prefill.title || '',
+      dbConfigId: prefill.dbConfigId,
+      instanceName: prefill.instanceName || '',
+      scriptText: prefill.scriptText || '',
+      changeNote: prefill.changeNote || '',
+    });
+  }
+  if (!connections.value.length) {
+    void loadConnections().then(async () => {
+      if (form.dbConfigId) await onConnectionChange();
+      if (prefill?.instanceName) form.instanceName = String(prefill.instanceName);
+    });
+  } else if (form.dbConfigId) {
+    void onConnectionChange().then(() => {
+      if (prefill?.instanceName) form.instanceName = String(prefill.instanceName);
+    });
+  }
   editorVisible.value = true;
 }
 
@@ -531,11 +549,58 @@ async function downloadRollback(row: SqlWorkOrder) {
   }
 }
 
+
+/** 从客户端「提交为工单」或 ?create=1 预填新建表单 */
+async function openCreateFromRoute() {
+  const q = route.query || {};
+  const wantCreate =
+    String(q.create || '') === '1' ||
+    String(q.create || '').toLowerCase() === 'true';
+  let prefillSql = '';
+  try {
+    prefillSql = sessionStorage.getItem('lemon.sqlWorkOrder.prefillSql') || '';
+    if (prefillSql) sessionStorage.removeItem('lemon.sqlWorkOrder.prefillSql');
+  } catch {
+    prefillSql = '';
+  }
+  if (!wantCreate && !prefillSql && !q.dbConfigId && !q.scriptText) return;
+
+  const title =
+    (typeof q.title === 'string' && q.title) ||
+    `SQL 变更 ${new Date().toLocaleString()}`;
+  const dbConfigId = q.dbConfigId != null && q.dbConfigId !== '' ? q.dbConfigId : undefined;
+  const instanceName =
+    typeof q.instance === 'string'
+      ? q.instance
+      : typeof q.instanceName === 'string'
+        ? q.instanceName
+        : '';
+  const scriptText =
+    prefillSql ||
+    (typeof q.scriptText === 'string' ? q.scriptText : '') ||
+    (typeof q.sql === 'string' ? q.sql : '');
+
+  if (dba.value) scope.value = 'mine';
+  createOrder({
+    title,
+    dbConfigId,
+    instanceName,
+    scriptText,
+    changeNote: '由 SQL 客户端提交',
+  });
+  const nextQuery = { ...route.query };
+  delete nextQuery.create;
+  delete nextQuery.scriptText;
+  delete nextQuery.sql;
+  router.replace({ path: route.path, query: nextQuery });
+}
+
 onMounted(async () => {
   await loadCapabilities();
-  if (!dba.value) await loadConnections();
+  await loadConnections();
   await load();
   await openOrderFromNotification(route.query.orderId);
+  await openCreateFromRoute();
   refreshTimer = setInterval(async () => {
     if (!rows.value.some((item) => ['EXECUTING', 'PREPARING'].includes(item.status))) return;
     try {
@@ -576,9 +641,15 @@ watch(
             <ElOption v-for="item in statusOptions" :key="item[0]" :label="item[1]" :value="item[0]" />
           </ElSelect>
           <ElButton :icon="Refresh" circle :title="$tr('刷新')" @click="() => load()" />
-          <ElButton v-if="roleReady && !dba" type="primary" :icon="Plus" @click="createOrder">{{ $tr('新建工单') }}</ElButton>
+          <ElButton v-if="roleReady" type="primary" :icon="Plus" @click="createOrder()">{{ $tr('新建工单') }}</ElButton>
         </div>
       </header>
+      <div v-if="roleReady && dba" class="scope-bar">
+        <ElRadioGroup v-model="scope" size="small" @change="() => { query.pageNum = 1; load(); }">
+          <ElRadioButton value="review">{{ $tr('审批台') }}</ElRadioButton>
+          <ElRadioButton value="mine">{{ $tr('我的工单') }}</ElRadioButton>
+        </ElRadioGroup>
+      </div>
 
       <ElTable v-loading="loading" :data="rows" height="calc(100vh - 190px)" stripe>
         <ElTableColumn prop="title" :label="$tr('标题')" min-width="220" show-overflow-tooltip />
@@ -596,9 +667,9 @@ watch(
         <ElTableColumn :label="$tr('操作')" fixed="right" min-width="330">
           <template #default="{ row }">
             <ElButton link type="primary" @click="openDetail(row)">{{ $tr('详情') }}</ElButton>
-            <ElButton v-if="!dba && ['DRAFT','REJECTED'].includes(row.status)" link @click="editOrder(row)">{{ $tr('编辑') }}</ElButton>
-            <ElButton v-if="!dba && ['DRAFT','REJECTED'].includes(row.status)" link type="primary" @click="submit(row)">{{ $tr('提交') }}</ElButton>
-            <template v-if="dba">
+            <ElButton v-if="(!dba || scope === 'mine') && ['DRAFT','REJECTED'].includes(row.status)" link @click="editOrder(row)">{{ $tr('编辑') }}</ElButton>
+            <ElButton v-if="(!dba || scope === 'mine') && ['DRAFT','REJECTED'].includes(row.status)" link type="primary" @click="submit(row)">{{ $tr('提交') }}</ElButton>
+            <template v-if="dba && scope === 'review'">
               <ElButton v-if="canAudit && ['PENDING','APPROVED'].includes(row.status)" link type="primary" @click="openDetail(row).then(() => openAudit())">{{ $tr('AI 审计') }}</ElButton>
               <ElButton v-if="row.status === 'PENDING'" link type="success" @click="review(row, true)">{{ $tr('通过') }}</ElButton>
               <ElButton v-if="row.status === 'PENDING'" link type="danger" @click="review(row, false)">{{ $tr('驳回') }}</ElButton>
@@ -825,6 +896,12 @@ watch(
 </template>
 
 <style scoped>
+.scope-bar {
+  display: flex;
+  align-items: center;
+  padding: 0 16px 10px;
+}
+
 .work-order-page { height: 100%; min-height: 520px; background: var(--el-bg-color); }
 .toolbar { min-height: 54px; display: flex; align-items: center; gap: 12px; padding: 8px 14px; border-bottom: 1px solid var(--el-border-color); }
 .toolbar h2 { margin: 0; font-size: 17px; letter-spacing: 0; white-space: nowrap; }

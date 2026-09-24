@@ -1,6 +1,6 @@
 /**
  * 打开连接会话状态（前端内存，非后端会话）
- * - openConnections：已打开的连接列表（同一 dbConfig 可开多个页签）
+ * - openConnections：已打开的连接列表（同一 dbConfig 默认复用页签）
  * - id：dbConfigId（后端 API 用）
  * - sessionId：页签唯一键（切换/关闭/Tab 隔离用）
  * - activeConnectionId：当前工作页签的 sessionId
@@ -60,15 +60,36 @@ export function useConnectionStore() {
   );
 
   /**
-   * 打开连接（始终新建页签，允许同一库多开）。
+   * 打开连接：同一 dbConfig 默认复用已有页签（避免「测试库 (2)」）。
+   * - forceNew=true 时仍可新开
    * - allowMultipleConnections=false → 关闭其它连接后只保留当前
    * - 达到 maxOpenConnections → 拒绝打开并返回 reason
    */
   function openConnection(
-    conn: Omit<DbConnection, 'sessionId'> & { sessionId?: string },
+    conn: Omit<DbConnection, 'sessionId'> & {
+      sessionId?: string;
+      forceNew?: boolean;
+    },
   ): OpenConnectionResult {
-    const sessionId = conn.sessionId || createConnectionSessionId();
-    const next: DbConnection = { ...conn, sessionId };
+    const forceNew = Boolean((conn as { forceNew?: boolean }).forceNew);
+    const { forceNew: _ignoreForce, ...connRest } = conn as Omit<
+      DbConnection,
+      'sessionId'
+    > & { sessionId?: string; forceNew?: boolean };
+
+    if (!forceNew) {
+      const existed = openConnections.value.find(
+        (c) => String(c.id) === String(connRest.id),
+      );
+      if (existed) {
+        activeConnectionId.value = existed.sessionId;
+        notifyClientSessionChange();
+        return { ok: true, switched: true, sessionId: existed.sessionId };
+      }
+    }
+
+    const sessionId = connRest.sessionId || createConnectionSessionId();
+    const next: DbConnection = { ...connRest, sessionId };
 
     const allowMulti = visualClientConfig.allowMultipleConnections;
     const max = visualClientConfig.maxOpenConnections;

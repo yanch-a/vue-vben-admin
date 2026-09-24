@@ -25,7 +25,7 @@ const emit = defineEmits<{
   relation: [];
   /** 已保存查询文件管理 */
   savedQueries: [];
-  /** 跳转到图表库（路由名 Dashboard） */
+  /** 跳转数据大屏工作台（路由名 Dashboard） */
   chartLibrary: [];
   /** 打开右上角任务进度 */
   progress: [];
@@ -33,7 +33,7 @@ const emit = defineEmits<{
   system: [mode: 'export' | 'import'];
   /** 偏好设置（Tabs 位置等） */
   preferences: [];
-  /** 产品授权 */
+  /** 产品许可证 */
   license: [];
   /** 打开 AI 助手浮窗 */
   ai: [];
@@ -43,8 +43,8 @@ const emit = defineEmits<{
   history: [];
   /** 管理服务端官方数据库客户端 */
   tools: [];
-  /** Redis 管理工作台（路由名 Redis） */
-  redis: [];
+  /** 将当前 SQL 提交为工单 */
+  submitWorkOrder: [];
 }>();
 
 function onSystemCommand(cmd: string | number) {
@@ -80,10 +80,16 @@ function onSystemCommand(cmd: string | number) {
       {{ $tr('查询文件') }}
     </ElButton>
     <ElButton size="small" @click="emit('chartLibrary')">
-      {{ $tr('图表库') }}
+      {{ $tr('数据大屏') }}
     </ElButton>
-    <ElButton size="small" @click="emit('redis')">
-      Redis
+    <ElButton
+      size="small"
+      type="warning"
+      plain
+      :disabled="!hasConnection"
+      @click="emit('submitWorkOrder')"
+    >
+      {{ $tr('提交为工单') }}
     </ElButton>
     <ElButton size="small" type="primary" :disabled="!hasConnection" @click="emit('ai')">
       {{ $tr('AI 助手') }}
@@ -122,8 +128,8 @@ function onSystemCommand(cmd: string | number) {
     <ElButton size="small" @click="emit('preferences')">
       {{ $tr('偏好设置') }}
     </ElButton>
-    <ElButton size="small" @click="emit('license')">
-      {{ $tr('授权') }}
+    <ElButton size="small" @click="emit('license')" :title="$tr('产品许可证 / License')">
+      {{ $tr('许可证') }}
       <span v-if="licenseHint" class="lic-hint">（{{ licenseHint }}）</span>
     </ElButton>
     <ElBadge

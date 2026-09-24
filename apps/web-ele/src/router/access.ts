@@ -180,133 +180,10 @@ function collectRouteKeys(menus: RouteRecordStringComponent[]) {
 }
 
 /**
- * 后端菜单可能没有配置的隐藏详情/画布页（原版常靠静态路由或隐藏子菜单）。
- * 以 string component 形式注入，走与 backend 菜单相同的 pageMap 解析。
+ * 页面路由以后台菜单为准，不再在前端写死隐藏页列表。
+ * 若后台未下发某隐藏子页，应在菜单管理中配置，而不是在此硬编码。
  */
-const HIDDEN_PAGE_ROUTES: RouteRecordStringComponent[] = [
-  {
-    name: 'DbConfigCanvas',
-    path: '/visual/dbConfig/canvas',
-    component: '/visual/dbConfig/canvas',
-    meta: {
-      hideInMenu: true,
-      title: '表分组',
-      activePath: '/visual/client',
-    },
-  },
-  {
-    name: 'RelationCanvas',
-    path: '/visual/dbConfig/relationCanvas',
-    component: '/visual/dbConfig/relationCanvas',
-    meta: {
-      hideInMenu: true,
-      title: '关系画布',
-      activePath: '/visual/client',
-    },
-  },
-
-  {
-    name: 'VisualClient',
-    path: '/visual/client',
-    component: '/visual/client/index',
-    meta: {
-      hideInMenu: true,
-      title: '数据库客户端',
-    },
-  },
-  {
-    name: 'SavedQueryManage',
-    path: '/visual/client/savedQueries',
-    component: '/visual/client/savedQueryManage',
-    meta: {
-      hideInMenu: true,
-      title: '查询文件管理',
-      activePath: '/visual/client',
-    },
-  },
-  {
-    name: 'SqlWorkOrder',
-    path: '/lSql/sqlWorkOrder',
-    component: '/visual/sqlWorkOrder/index',
-    meta: {
-      hideInMenu: true,
-      title: 'SQL 工单',
-      activePath: '/lSql',
-    },
-  },
-  {
-    name: 'RedisConsole',
-    path: '/lSql/redisConsole',
-    component: '/visual/redisConsole/index',
-    meta: {
-      hideInMenu: true,
-      title: 'Redis 控制台',
-      activePath: '/lSql',
-    },
-  },
-  {
-    name: 'QueryConfig',
-    path: '/visual/visualQuery/index',
-    component: '/visual/visualQuery/index',
-    meta: {
-      hideInMenu: true,
-      title: '查询视图',
-    },
-  },
-  {
-    name: 'VisualDashboardWorkbench',
-    path: '/visual/dashboard',
-    component: '/visual/dashboard/index',
-    meta: {
-      hideInMenu: true,
-      title: '数据大屏工作台',
-    },
-  },
-  {
-    name: 'DbConfigIndex',
-    path: '/visual/dbConfig',
-    component: '/visual/dbConfig/index',
-    meta: {
-      hideInMenu: true,
-      title: '数据库配置',
-      activePath: '/visual/client',
-    },
-  },
-  {
-    name: 'QueryResultShare',
-    path: '/visual/queryResult/share/:shareCode',
-    component: '/visual/visualQuery/share',
-    meta: {
-      hideInMenu: true,
-      hideInTab: true,
-      hideInBreadcrumb: true,
-      noBasicLayout: true,
-      title: '共享查询结果',
-    },
-  },
-  {
-    name: 'VisualDashboardView',
-    path: '/visual/dashboard/view',
-    component: '/visual/dashboard/view',
-    meta: {
-      hideInMenu: true,
-      hideInTab: true,
-      hideInBreadcrumb: true,
-      noBasicLayout: true,
-      title: '数据大屏',
-      activePath: '/visual/dashboard',
-    },
-  },
-  {
-    name: 'AiModelManage',
-    path: '/ai/model',
-    component: '/ai/model/index',
-    meta: {
-      hideInMenu: true,
-      title: 'AI 模型配置',
-    },
-  },
-];
+const HIDDEN_PAGE_ROUTES: RouteRecordStringComponent[] = [];
 
 function mergeHiddenPageRoutes(
   menus: RouteRecordStringComponent[],
@@ -399,6 +276,7 @@ const COMPONENT_ALIASES: Record<string, string> = {
   '/visual/dbConfig/canvas': '/visual/dbConfig/canvas',
   '/visual/dbConfig/relationCanvas': '/visual/dbConfig/relationCanvas',
   '/visual/client': '/visual/client/index',
+  '/lSql/visualClient': '/visual/client/index',
   '/visual/client/savedQueries': '/visual/client/savedQueryManage',
   '/visual/dashboard/view': '/visual/dashboard/view',
   '/visual/queryResult/share/:shareCode': '/visual/visualQuery/share',

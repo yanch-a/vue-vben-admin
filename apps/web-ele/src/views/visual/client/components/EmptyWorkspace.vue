@@ -5,8 +5,10 @@
  */
 import { computed, onMounted, ref, watch } from 'vue';
 
+
 import { getDbConfigList } from '#/api/visual/vq';
 import { resolveDbType } from '../dialect/dbTypes';
+import { isProductionConnection } from '../utils/prodConnection';
 
 defineOptions({ name: 'EmptyWorkspace' });
 
@@ -25,11 +27,15 @@ const list = ref<any[]>([]);
 const keyword = ref('');
 const loadError = ref('');
 
+/** 仅非生产：隐藏名称/描述含生产关键词的连接 */
+const hideProd = ref(false);
+
 /** 按名称 / 主机 / 类型等关键字过滤卡片 */
 const filteredList = computed(() => {
   const kw = keyword.value.trim().toLowerCase();
-  if (!kw) return list.value;
   return list.value.filter((row) => {
+    if (hideProd.value && isProductionConnection(row)) return false;
+    if (!kw) return true;
     const hay = [
       row.dbName,
       row.dbType,
@@ -102,6 +108,7 @@ defineExpose({ reload: loadList });
           class="empty-workspace__search"
           :placeholder="$tr('搜索名称 / 主机 / 类型')"
         />
+        <ElCheckbox v-model="hideProd">{{ $tr('仅非生产') }}</ElCheckbox>
         <ElButton @click="loadList">{{ $tr('刷新') }}</ElButton>
         <ElButton type="primary" @click="emit('create')">{{ $tr('新建连接') }}</ElButton>
       </div>
@@ -125,11 +132,15 @@ defineExpose({ reload: loadList });
         :key="row.id"
         type="button"
         class="db-card"
+        :class="{ 'db-card--prod': isProductionConnection(row) }"
         @click="onCardClick(row)"
       >
         <div class="db-card__top">
           <span class="db-card__name" :title="row.dbName">{{ $tr(row.dbName || '未命名') }}</span>
-          <span class="db-card__type">{{ typeLabel(row) }}</span>
+          <span class="db-card__badges">
+            <span v-if="isProductionConnection(row)" class="db-card__prod">PROD</span>
+            <span class="db-card__type">{{ typeLabel(row) }}</span>
+          </span>
         </div>
         <div class="db-card__meta">
           <span class="db-card__host" :title="hostText(row)">{{ hostText(row) }}</span>
@@ -289,5 +300,35 @@ defineExpose({ reload: loadList });
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.db-card--prod {
+  border-color: var(--el-color-danger);
+  box-shadow: inset 0 0 0 1px rgba(245, 108, 108, 0.35);
+  background: linear-gradient(180deg, rgba(245, 108, 108, 0.08), var(--el-bg-color));
+}
+
+.db-card--prod:hover {
+  border-color: var(--el-color-danger);
+  background: rgba(245, 108, 108, 0.12);
+  box-shadow: 0 1px 6px rgba(245, 108, 108, 0.2);
+}
+
+.db-card__badges {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 4px;
+}
+
+.db-card__prod {
+  font-size: calc(var(--vc-ui-font-size, 13px) - 2px);
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  line-height: 1.4;
+  padding: 1px 6px;
+  border-radius: 4px;
+  color: #fff;
+  background: var(--el-color-danger);
 }
 </style>

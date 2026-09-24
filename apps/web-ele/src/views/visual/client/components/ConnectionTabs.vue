@@ -11,6 +11,7 @@ import { onBeforeUnmount, onMounted, reactive, ref } from 'vue';
 import { Plus } from '@element-plus/icons-vue';
 
 import type { DbConnection } from '../composables/useConnectionStore';
+import { isProductionConnection } from '../utils/prodConnection';
 import { useClientPreferences } from '../composables/useClientPreferences';
 
 defineOptions({ name: 'ConnectionTabs' });
@@ -63,12 +64,15 @@ const colorDialog = reactive({
 
 /** 同库多开时显示序号：库名 (2) */
 function tabLabel(c: DbConnection) {
+  const base = c.dbName || '未命名';
   const same = props.connections.filter(
     (x) => String(x.id) === String(c.id),
   );
-  if (same.length <= 1) return c.dbName;
-  const idx = same.findIndex((x) => x.sessionId === c.sessionId) + 1;
-  return `${c.dbName} (${idx})`;
+  const name =
+    same.length <= 1
+      ? base
+      : `${base} (${same.findIndex((x) => x.sessionId === c.sessionId) + 1})`;
+  return isProductionConnection(c) ? `PROD · ${name}` : name;
 }
 
 function tabStyle(c: DbConnection) {
@@ -228,7 +232,7 @@ defineExpose({
       v-for="c in connections"
       :key="c.sessionId"
       class="conn-tab"
-      :class="{ active: c.sessionId === activeId }"
+      :class="{ active: c.sessionId === activeId, 'tab--prod': isProductionConnection(c) }"
       :style="tabStyle(c)"
       :title="`${tabLabel(c)} · ${c.dbType} · ${c.dbHost || ''}`"
       @click="emit('change', c.sessionId)"
@@ -435,5 +439,12 @@ defineExpose({
   align-items: center;
   justify-content: space-between;
   gap: 12px;
+}
+.tab--prod {
+  border-color: var(--el-color-danger) !important;
+  color: var(--el-color-danger);
+}
+.tab--prod.active {
+  box-shadow: inset 0 -3px 0 0 var(--el-color-danger);
 }
 </style>

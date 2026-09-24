@@ -11,6 +11,17 @@ import { resolveFirstMenuPath } from '#/utils/first-menu-path';
 
 import { generateAccess } from './access';
 
+/** 旧路径 / 文档误写路径 → 规范入口 */
+const LEGACY_PATH_REDIRECTS: Record<string, string> = {
+  '/visual/client': '/lSql/visualClient',
+  '/visual/visualClient': '/lSql/visualClient',
+  '/SqlWork': '/lSql/sqlWorkOrder',
+  '/sqlWork': '/lSql/sqlWorkOrder',
+  '/visual/SqlWork': '/lSql/sqlWorkOrder',
+  '/visual/sqlWorkOrder': '/lSql/sqlWorkOrder',
+  '/lSql/SqlWork': '/lSql/sqlWorkOrder',
+};
+
 /**
  * 通用守卫配置
  * @param router
@@ -20,6 +31,16 @@ function setupCommonGuard(router: Router) {
   const loadedPaths = new Set<string>();
 
   router.beforeEach((to) => {
+    const redirectTo = LEGACY_PATH_REDIRECTS[to.path];
+    if (redirectTo) {
+      return {
+        path: redirectTo,
+        query: to.query,
+        hash: to.hash,
+        replace: true,
+      };
+    }
+
     to.meta.loaded = loadedPaths.has(to.path);
 
     // 页面加载进度条

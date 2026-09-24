@@ -1,3 +1,4 @@
+import { humanizeApiError } from '#/utils/humanizeApiError';
 import { requestClient } from '#/api/request';
 import { readBlobErrorMessage } from '#/utils/blobDownload';
 
@@ -64,10 +65,11 @@ export default async function request(config: {
   if (body && typeof body === 'object' && 'code' in body) {
     const code = (body as { code?: number | string }).code;
     if (code !== 200 && code !== 0 && code !== '200' && code !== '0') {
-      const msg =
+      const rawMsg =
         (body as { msg?: string; message?: string }).msg ||
         (body as { message?: string }).message ||
         '请求失败';
+      const msg = humanizeApiError(rawMsg, '请求失败');
       return Promise.reject(
         Object.assign(new Error(msg), {
           msg,
