@@ -4,6 +4,7 @@
  * - 跟随系统亮/暗主题
  * - Ctrl+Enter / F9 执行（由父级按光标/选区切分语句）
  * - Ctrl+S 保存
+ * - Ctrl+Q 直接关闭当前查询页签（不提示未保存）
  * - F12 格式化当前选区或光标所在语句
  * - 智能补全：写表名用本地表清单；写字段名按需拉列并缓存；Tab 接受建议
  * - 拖入 .sql / .txt：解析文本写入编辑器，并通知父级保存到当前库
@@ -77,6 +78,8 @@ const emit = defineEmits<{
   'update:modelValue': [string];
   execute: [];
   save: [];
+  /** Ctrl+Q：直接关闭当前查询页签，不提示未保存 */
+  'close-tab': [];
   /**
    * 从本地文件导入 SQL 后通知父级：
    * 内容已写入编辑器，父级负责保存到当前连接+库
@@ -479,6 +482,15 @@ onMounted(() => {
   });
   editor.addCommand(monaco.KeyCode.F12, () => {
     if (!props.readOnly) formatCurrentSql();
+  });
+  // 右键菜单项。快捷键由父级在捕获阶段处理，避免和这里各关一次。
+  editor.addAction({
+    id: 'lemon.closeQueryTab',
+    label: '关闭当前',
+    contextMenuGroupId: 'navigation',
+    contextMenuOrder: 2,
+    keybindings: [monaco.KeyMod.Ctrl | monaco.KeyCode.KeyQ],
+    run: () => emit('close-tab'),
   });
   // Ctrl+K + 右键菜单：唤出 AI 助手，携带选区 / 全文
   editor.addAction({

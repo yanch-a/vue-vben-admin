@@ -117,6 +117,7 @@ export function getTablesWithColumns(data: any) {
     url: dbTableUrl + 'getTablesWithColumns',
     method: 'post',
     data,
+    timeout: 0,
   })
 }
 
@@ -129,6 +130,7 @@ export function getGroupTablesWithColumns(
     url: dbTableUrl + 'getGroupTablesWithColumns/' + groupId,
     method: 'get',
     showErrorMessage,
+    timeout: 0,
   })
 }
 
@@ -307,6 +309,7 @@ export function findBestRelationshipPath(data: any) {
     url: tableRelationshipUrl + 'findBestRelationshipPath',
     method: 'post',
     data,
+    timeout: 0,
   })
 }
 
@@ -316,6 +319,7 @@ export function getTablesByDbConfig(dbConfigId: string) {
     url: dbTableUrl + 'getTablesWithColumns',
     method: 'post',
     data: { dbConfigId },
+    timeout: 0,
   })
 }
 
@@ -333,6 +337,7 @@ export function getTablesWithColumnsByIds(ids: Array<number | string>) {
     url: dbTableUrl + 'getTablesWithColumnsByIds',
     method: 'post',
     data: ids,
+    timeout: 0,
   })
 }
 
@@ -347,6 +352,7 @@ export function syncTableToCatalog(data: {
     url: dbTableUrl + 'syncTableToCatalog',
     method: 'post',
     data,
+    timeout: 0,
   })
 }
 
@@ -375,6 +381,7 @@ export function previewQuerySql(configId: string) {
     url: queryExecuteUrl + 'previewSql',
     method: 'post',
     data: { configId },
+    timeout: 0,
   })
 }
 
@@ -389,9 +396,9 @@ export function previewSqlBySelection(data: {
   configId?: number | string
 }) {
   return request({
-    url: queryExecuteUrl + 'previewSqlBySelection',
     method: 'post',
     data,
+    timeout: 0,
   })
 }
 
@@ -401,6 +408,7 @@ export function executeQueryConfig(configId: string, limit?: number) {
     url: queryExecuteUrl + 'execute',
     method: 'post',
     data: { configId, limit },
+    timeout: 0,
   })
 }
 
@@ -431,6 +439,7 @@ export function exportQueryExcel(configId: string, limit?: number) {
     method: 'post',
     responseType: 'blob',
     data: { configId, limit },
+    timeout: 0,
   })
 }
 
@@ -449,6 +458,7 @@ export function exportQueryExcelByDraft(data: {
     method: 'post',
     responseType: 'blob',
     data,
+    timeout: 0,
   })
 }
 

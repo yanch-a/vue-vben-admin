@@ -34,7 +34,7 @@ export function rollbackSchemaDoc(data: { docId: number | string; version: numbe
 }
 
 export function initSchemaDoc(data: { dbConfigId: number | string; instanceName: string }) {
-  return request({ url: url + 'init', method: 'post', data });
+  return request({ url: url + 'init', method: 'post', data, timeout: 0 });
 }
 
 export function generateSchemaDoc(data: {
@@ -44,7 +44,7 @@ export function generateSchemaDoc(data: {
   mode: 'FULL' | 'INCREMENTAL' | 'TABLES';
   tables?: string[];
 }) {
-  return request({ url: url + 'generate', method: 'post', data });
+  return request({ url: url + 'generate', method: 'post', data, timeout: 0 });
 }
 
 export function analyzeHistory(data: {
@@ -53,7 +53,7 @@ export function analyzeHistory(data: {
   modelId?: number | string;
   historyIds?: Array<number | string>;
 }) {
-  return request({ url: url + 'analyzeHistory', method: 'post', data });
+  return request({ url: url + 'analyzeHistory', method: 'post', data, timeout: 0 });
 }
 
 export function schemaDocTask(taskId: string, showErrorMessage = true) {
@@ -69,7 +69,7 @@ export function schemaDocTaskList(showErrorMessage = true) {
   return request({
     url: url + 'task/list',
     method: 'get',
-    timeout: 30_000,
+    timeout: 0,
     showErrorMessage,
   });
 }
@@ -79,7 +79,7 @@ export function cancelSchemaDocTask(taskId: string) {
 }
 
 export function schemaDocDrift(params: { dbConfigId: number | string; instanceName: string }) {
-  return request({ url: url + 'drift', method: 'get', params });
+  return request({ url: url + 'drift', method: 'get', params, timeout: 0 });
 }
 
 export function exportSchemaDoc(params: { dbConfigId: number | string; instanceName: string }) {
@@ -88,6 +88,7 @@ export function exportSchemaDoc(params: { dbConfigId: number | string; instanceN
     method: 'get',
     params,
     responseType: 'blob',
+    timeout: 0,
   });
 }
 
@@ -143,5 +144,6 @@ export function digestAgentMemory(data: {
     url: adminUrl + '/aiAgentMemory/digest',
     method: 'post',
     data,
+    timeout: 0,
   });
 }

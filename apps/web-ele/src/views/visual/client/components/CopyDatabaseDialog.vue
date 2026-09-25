@@ -182,7 +182,7 @@ async function loadTables() {
         props.sourceInstance,
       );
       list = (res?.data || res || [])
-        .map((t: any) => t.tableName || t.qualifiedName)
+        .map((t: any) => t.qualifiedName || t.tableName)
         .filter(Boolean);
       sourceSchemaOptions.value = [];
     }
@@ -506,7 +506,7 @@ async function onCopy() {
               </ElCheckbox>
             </div>
             <ElCheckboxGroup v-if="tablesExpanded" v-model="checkedTables" class="table-checks">
-              <ElCheckbox v-for="name in tableNames" :key="name" :label="name">
+              <ElCheckbox v-for="name in tableNames" :key="name" :value="name">
                 {{ tableDisplayName(name) }}
               </ElCheckbox>
             </ElCheckboxGroup>
@@ -600,8 +600,8 @@ async function onCopy() {
           <ElDivider />
 
           <ElRadioGroup v-model="form.mode" class="mode-radios">
-            <ElRadio label="both">{{ $tr('结构和数据') }}</ElRadio>
-            <ElRadio label="structure">{{ $tr('结构唯一') }}</ElRadio>
+            <ElRadio value="both">{{ $tr('结构和数据') }}</ElRadio>
+            <ElRadio value="structure">{{ $tr('仅结构') }}</ElRadio>
           </ElRadioGroup>
 
           <div class="opts">

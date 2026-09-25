@@ -943,44 +943,44 @@ watch(chartSpecForm, fillChartSpec, { deep: true });
   <div class="workbench" v-loading="loading" @click="contextMenu.visible = false">
     <header class="topbar" :class="{ compact: mode === 'editor' }">
       <div>
-        <h2>数据大屏工作台</h2>
-        <p>图表资产、自由编排、发布与数据刷新都在这里完成</p>
+        <h2>{{ $tr('数据大屏工作台') }}</h2>
+        <p>{{ $tr('图表资产、自由编排、发布与数据刷新都在这里完成') }}</p>
       </div>
       <div v-if="mode !== 'editor'" class="top-actions">
-        <ElButton :type="mode === 'screens' ? 'primary' : ''" @click="mode = 'screens'">我的大屏</ElButton>
-        <ElButton :type="mode === 'charts' ? 'primary' : ''" @click="mode = 'charts'">图表库</ElButton>
-        <ElButton type="primary" @click="newScreen">新建大屏</ElButton>
+        <ElButton :type="mode === 'screens' ? 'primary' : ''" @click="mode = 'screens'">{{ $tr('我的大屏') }}</ElButton>
+        <ElButton :type="mode === 'charts' ? 'primary' : ''" @click="mode = 'charts'">{{ $tr('图表库') }}</ElButton>
+        <ElButton type="primary" @click="newScreen">{{ $tr('新建大屏') }}</ElButton>
       </div>
       <div v-else class="top-actions">
         <span class="save-state" :class="{ dirty }">
-          {{ dirty ? '有未保存修改' : (lastSavedAt ? `已保存 ${lastSavedAt}` : '已保存') }}
+          {{ dirty ? $tr('有未保存修改') : (lastSavedAt ? ($tr('已保存') + ' ' + (lastSavedAt)) : $tr('已保存')) }}
         </span>
-        <ElButton @click="focusCanvas = !focusCanvas">{{ focusCanvas ? '显示侧栏' : '专注画布' }}</ElButton>
-        <ElButton @click="leaveEditor">返回</ElButton>
-        <ElButton @click="previewAll">刷新数据</ElButton>
-        <ElButton @click="previewDraft">预览草稿</ElButton>
-        <ElButton @click="saveDraft()">保存草稿</ElButton>
-        <ElButton :disabled="!screenForm.id || screenForm.status !== 'PUBLISHED'" @click="viewScreen(screenForm)">正式查看</ElButton>
-        <ElButton type="primary" @click="publish">保存并发布</ElButton>
+        <ElButton @click="focusCanvas = !focusCanvas">{{ focusCanvas ? $tr('显示侧栏') : $tr('专注画布') }}</ElButton>
+        <ElButton @click="leaveEditor">{{ $tr('返回') }}</ElButton>
+        <ElButton @click="previewAll">{{ $tr('刷新数据') }}</ElButton>
+        <ElButton @click="previewDraft">{{ $tr('预览草稿') }}</ElButton>
+        <ElButton @click="saveDraft()">{{ $tr('保存草稿') }}</ElButton>
+        <ElButton :disabled="!screenForm.id || screenForm.status !== 'PUBLISHED'" @click="viewScreen(screenForm)">{{ $tr('正式查看') }}</ElButton>
+        <ElButton type="primary" @click="publish">{{ $tr('保存并发布') }}</ElButton>
       </div>
     </header>
 
     <main v-if="mode === 'screens'" class="library">
       <div class="library-head">
-        <ElInput v-model="screenKeyword" clearable placeholder="搜索大屏" class="search" />
+        <ElInput v-model="screenKeyword" clearable :placeholder="$tr('搜索大屏')" class="search" />
         <span>{{ filteredScreens.length }} 个大屏</span>
       </div>
-      <ElEmpty v-if="!filteredScreens.length" description="还没有大屏，从新建大屏开始" />
+      <ElEmpty v-if="!filteredScreens.length" :description="$tr('还没有大屏，从新建大屏开始')" />
       <div v-else class="card-grid">
         <article v-for="row in filteredScreens" :key="row.id" class="asset-card screen-card">
-          <div class="screen-cover"><span>{{ row.status === 'PUBLISHED' ? '已发布' : '草稿' }}</span></div>
-          <h3>{{ row.name }}</h3><p>{{ row.description || '暂无说明' }}</p>
-          <small>{{ row.refreshMode === 'LIVE' ? '每次查看实时查询' : `每 ${row.refreshIntervalSeconds}s 更新快照` }}</small>
+          <div class="screen-cover"><span>{{ row.status === 'PUBLISHED' ? $tr('已发布') : $tr('草稿') }}</span></div>
+          <h3>{{ row.name }}</h3><p>{{ row.description || $tr('暂无说明') }}</p>
+          <small>{{ row.refreshMode === 'LIVE' ? '每次查看实时查询' : (`${row.refreshIntervalSeconds}s ` + $tr('更新快照')) }}</small>
           <div class="card-actions">
-            <ElButton size="small" type="primary" @click="editScreen(row)">编辑</ElButton>
-            <ElButton v-if="row.status === 'PUBLISHED'" size="small" @click="viewScreen(row)">查看</ElButton>
-            <ElButton v-if="row.status === 'PUBLISHED'" size="small" @click="manualRefresh(row)">刷新数据</ElButton>
-            <ElButton size="small" type="danger" text @click="removeScreen(row)">删除</ElButton>
+            <ElButton size="small" type="primary" @click="editScreen(row)">{{ $tr('编辑') }}</ElButton>
+            <ElButton v-if="row.status === 'PUBLISHED'" size="small" @click="viewScreen(row)">{{ $tr('查看') }}</ElButton>
+            <ElButton v-if="row.status === 'PUBLISHED'" size="small" @click="manualRefresh(row)">{{ $tr('刷新数据') }}</ElButton>
+            <ElButton size="small" type="danger" text @click="removeScreen(row)">{{ $tr('删除') }}</ElButton>
           </div>
         </article>
       </div>
@@ -988,18 +988,18 @@ watch(chartSpecForm, fillChartSpec, { deep: true });
 
     <main v-else-if="mode === 'charts'" class="library">
       <div class="library-head">
-        <ElInput v-model="chartKeyword" clearable placeholder="搜索图表" class="search" />
-        <ElButton type="primary" @click="openChartDialog()">新建图表</ElButton>
+        <ElInput v-model="chartKeyword" clearable :placeholder="$tr('搜索图表')" class="search" />
+        <ElButton type="primary" @click="openChartDialog()">{{ $tr('新建图表') }}</ElButton>
       </div>
-      <ElEmpty v-if="!filteredCharts.length" description="AI SQL 保存的图表和手工图表会出现在这里" />
+      <ElEmpty v-if="!filteredCharts.length" :description="$tr('AI SQL 保存的图表和手工图表会出现在这里')" />
       <div v-else class="card-grid">
         <article v-for="asset in filteredCharts" :key="asset.id" class="asset-card">
           <div class="chart-badge">{{ parseSpec(asset.chartSpec).chartType.toUpperCase() }}</div>
           <h3>{{ asset.title }}</h3><p>{{ asset.description || asset.sqlText }}</p>
           <div class="card-actions">
-            <ElButton size="small" type="primary" @click="openChartDialog(asset)">编辑</ElButton>
-            <ElButton size="small" @click="newScreen(); addChart(asset)">加入新大屏</ElButton>
-            <ElButton size="small" type="danger" text @click="removeChart(asset)">删除</ElButton>
+            <ElButton size="small" type="primary" @click="openChartDialog(asset)">{{ $tr('编辑') }}</ElButton>
+            <ElButton size="small" @click="newScreen(); addChart(asset)">{{ $tr('加入新大屏') }}</ElButton>
+            <ElButton size="small" type="danger" text @click="removeChart(asset)">{{ $tr('删除') }}</ElButton>
           </div>
         </article>
       </div>
@@ -1007,27 +1007,27 @@ watch(chartSpecForm, fillChartSpec, { deep: true });
 
     <main v-else class="editor" :class="{ 'focus-canvas': focusCanvas }">
       <aside v-show="!focusCanvas" class="asset-panel">
-        <h3>图表资产</h3>
-        <ElInput v-model="chartKeyword" size="small" clearable placeholder="搜索，拖入画布" />
+        <h3>{{ $tr('图表资产') }}</h3>
+        <ElInput v-model="chartKeyword" size="small" clearable :placeholder="$tr('搜索，拖入画布')" />
         <div class="asset-list">
           <div v-for="asset in filteredCharts" :key="asset.id" class="drag-asset"
             :class="{ used: usedChartCounts.has(String(asset.id)) }" draggable="true"
             @dragstart="startAssetDrag($event, asset)" @dblclick="addChart(asset)">
-            <div><b>{{ asset.title }}</b><small v-if="usedChartCounts.has(String(asset.id))">画布中已使用 {{ usedChartCounts.get(String(asset.id)) }} 次</small></div>
+            <div><b>{{ asset.title }}</b><small v-if="usedChartCounts.has(String(asset.id))">{{ $tr('画布中已使用') }} {{ usedChartCounts.get(String(asset.id))  }} {{ $tr('次') }}</small></div>
             <span>{{ parseSpec(asset.chartSpec).chartType }}</span>
           </div>
         </div>
         <div class="asset-actions">
-          <ElButton class="full" type="primary" plain @click="openChartDialog()">+ 新建图表</ElButton>
+          <ElButton class="full" type="primary" plain @click="openChartDialog()">{{ $tr('+ 新建图表') }}</ElButton>
           <div class="quick-widgets">
-            <ElButton size="small" @click="() => addTextWidget()">文本</ElButton>
-            <ElButton size="small" @click="() => addClockWidget()">时钟</ElButton>
-            <ElButton size="small" @click="() => addImageWidget()">图片</ElButton>
-            <ElButton size="small" @click="() => addIframeWidget()">网页</ElButton>
+            <ElButton size="small" @click="() => addTextWidget()">{{ $tr('文本') }}</ElButton>
+            <ElButton size="small" @click="() => addClockWidget()">{{ $tr('时钟') }}</ElButton>
+            <ElButton size="small" @click="() => addImageWidget()">{{ $tr('图片') }}</ElButton>
+            <ElButton size="small" @click="() => addIframeWidget()">{{ $tr('网页') }}</ElButton>
           </div>
         </div>
         <div v-if="screenConfig.widgets.length" class="layer-panel">
-          <h4>图层 <small>上=顶层</small></h4>
+          <h4>{{ $tr('图层') }} <small>{{ $tr('上=顶层') }}</small></h4>
           <div
             v-for="widget in [...screenConfig.widgets].reverse()"
             :key="widget.id"
@@ -1036,7 +1036,7 @@ watch(chartSpecForm, fillChartSpec, { deep: true });
             @click="selectWidgetFromLayer(widget)"
           >
             <span>{{ widget.title || widget.chartSpec.chartType }}</span>
-            <i>{{ widget.locked ? '锁' : widget.chartSpec.chartType }}</i>
+            <i>{{ widget.locked ? $tr('锁') : widget.chartSpec.chartType }}</i>
           </div>
         </div>
       </aside>
@@ -1044,23 +1044,23 @@ watch(chartSpecForm, fillChartSpec, { deep: true });
       <section class="canvas-stage" @click="selectedWidgetId = ''">
         <div class="canvas-toolbar" @click.stop>
           <div class="canvas-toolbar-group">
-            <ElButton size="small" :disabled="!selectedWidget" @click="alignSelected('left')">左齐</ElButton>
-            <ElButton size="small" :disabled="!selectedWidget" @click="alignSelected('hcenter')">水平居中</ElButton>
-            <ElButton size="small" :disabled="!selectedWidget" @click="alignSelected('right')">右齐</ElButton>
-            <ElButton size="small" :disabled="!selectedWidget" @click="alignSelected('top')">顶齐</ElButton>
-            <ElButton size="small" :disabled="!selectedWidget" @click="alignSelected('vcenter')">垂直居中</ElButton>
-            <ElButton size="small" :disabled="!selectedWidget" @click="alignSelected('bottom')">底齐</ElButton>
+            <ElButton size="small" :disabled="!selectedWidget" @click="alignSelected('left')">{{ $tr('左齐') }}</ElButton>
+            <ElButton size="small" :disabled="!selectedWidget" @click="alignSelected('hcenter')">{{ $tr('水平居中') }}</ElButton>
+            <ElButton size="small" :disabled="!selectedWidget" @click="alignSelected('right')">{{ $tr('右齐') }}</ElButton>
+            <ElButton size="small" :disabled="!selectedWidget" @click="alignSelected('top')">{{ $tr('顶齐') }}</ElButton>
+            <ElButton size="small" :disabled="!selectedWidget" @click="alignSelected('vcenter')">{{ $tr('垂直居中') }}</ElButton>
+            <ElButton size="small" :disabled="!selectedWidget" @click="alignSelected('bottom')">{{ $tr('底齐') }}</ElButton>
           </div>
           <div class="canvas-toolbar-group">
-            <ElButton size="small" :disabled="!selectedWidget" @click="duplicateWidget()">复制</ElButton>
+            <ElButton size="small" :disabled="!selectedWidget" @click="duplicateWidget()">{{ $tr('复制') }}</ElButton>
             <ElButton size="small" :disabled="!selectedWidget" @click="toggleLockWidget()">
-              {{ selectedWidget?.locked ? '解锁' : '锁定' }}
+              {{ selectedWidget?.locked ? $tr('解锁') : $tr('锁定') }}
             </ElButton>
-            <ElButton size="small" :disabled="!selectedWidget" @click="moveWidgetLayer(selectedWidgetId, 'top')">置顶</ElButton>
-            <ElButton size="small" :disabled="!selectedWidget" @click="moveWidgetLayer(selectedWidgetId, 'up')">上移</ElButton>
-            <ElButton size="small" :disabled="!selectedWidget" @click="moveWidgetLayer(selectedWidgetId, 'down')">下移</ElButton>
-            <ElButton size="small" :disabled="!selectedWidget" @click="moveWidgetLayer(selectedWidgetId, 'bottom')">置底</ElButton>
-            <ElSwitch v-model="screenConfig.showGrid" inline-prompt active-text="网格" inactive-text="网格" @change="dirty = true" />
+            <ElButton size="small" :disabled="!selectedWidget" @click="moveWidgetLayer(selectedWidgetId, 'top')">{{ $tr('置顶') }}</ElButton>
+            <ElButton size="small" :disabled="!selectedWidget" @click="moveWidgetLayer(selectedWidgetId, 'up')">{{ $tr('上移') }}</ElButton>
+            <ElButton size="small" :disabled="!selectedWidget" @click="moveWidgetLayer(selectedWidgetId, 'down')">{{ $tr('下移') }}</ElButton>
+            <ElButton size="small" :disabled="!selectedWidget" @click="moveWidgetLayer(selectedWidgetId, 'bottom')">{{ $tr('置底') }}</ElButton>
+            <ElSwitch v-model="screenConfig.showGrid" inline-prompt :active-text="$tr('网格')" :inactive-text="$tr('网格')" @change="dirty = true" />
           </div>
         </div>
         <div
@@ -1078,11 +1078,11 @@ watch(chartSpecForm, fillChartSpec, { deep: true });
           @drop.prevent="dropAsset"
         >
           <div v-if="!screenConfig.widgets.length" class="drop-hint">
-            <p>从左侧拖入图表，或使用快捷组件开始组装</p>
+            <p>{{ $tr('从左侧拖入图表，或使用快捷组件开始组装') }}</p>
             <div class="drop-actions">
-              <ElButton type="primary" @click.stop="() => addTextWidget()">添加文本</ElButton>
-              <ElButton @click.stop="() => addClockWidget()">添加时钟</ElButton>
-              <ElButton @click.stop="openChartDialog()">新建图表</ElButton>
+              <ElButton type="primary" @click.stop="() => addTextWidget()">{{ $tr('添加文本') }}</ElButton>
+              <ElButton @click.stop="() => addClockWidget()">{{ $tr('添加时钟') }}</ElButton>
+              <ElButton @click.stop="openChartDialog()">{{ $tr('新建图表') }}</ElButton>
             </div>
           </div>
           <article v-for="widget in screenConfig.widgets" :key="widget.id" class="canvas-widget"
@@ -1098,17 +1098,17 @@ watch(chartSpecForm, fillChartSpec, { deep: true });
             <header
               v-if="!['text', 'clock', 'image', 'iframe'].includes(widget.chartSpec.chartType) && widget.chartSpec.appearance?.showTitle !== false"
               @pointerdown="beginPointer($event, widget)"
-            ><span>{{ widget.title }}</span><i>{{ widget.locked ? '已锁定' : '拖动' }}</i></header>
+            ><span>{{ widget.title }}</span><i>{{ widget.locked ? $tr('已锁定') : $tr('拖动') }}</i></header>
             <button
               v-else-if="selectedWidgetId === widget.id || ['text', 'clock', 'image', 'iframe'].includes(widget.chartSpec.chartType)"
               class="widget-move-handle"
               @pointerdown="beginPointer($event, widget)"
-            >{{ widget.locked ? '锁定' : '拖动' }}</button>
+            >{{ widget.locked ? $tr('锁定') : $tr('拖动') }}</button>
             <div class="widget-body"><ChartRenderer :spec="widget.chartSpec" :result="results[widget.id]" /></div>
             <template v-if="!widget.locked">
-              <button class="resize-handle east" title="向右调整宽度" @pointerdown="beginPointer($event, widget, 'east')" />
-              <button class="resize-handle south" title="向下调整高度" @pointerdown="beginPointer($event, widget, 'south')" />
-              <button class="resize-handle southeast" title="拖动调整宽高" @pointerdown="beginPointer($event, widget, 'southeast')" />
+              <button class="resize-handle east" :title="$tr('向右调整宽度')" @pointerdown="beginPointer($event, widget, 'east')" />
+              <button class="resize-handle south" :title="$tr('向下调整高度')" @pointerdown="beginPointer($event, widget, 'south')" />
+              <button class="resize-handle southeast" :title="$tr('拖动调整宽高')" @pointerdown="beginPointer($event, widget, 'southeast')" />
             </template>
           </article>
         </div>
@@ -1117,30 +1117,30 @@ watch(chartSpecForm, fillChartSpec, { deep: true });
       <aside v-show="!focusCanvas" class="property-panel">
         <template v-if="selectedWidget">
           <div class="panel-title">
-            <h3>组件设置</h3>
+            <h3>{{ $tr('组件设置') }}</h3>
             <div class="panel-title-actions">
-              <ElButton text @click="duplicateWidget()">复制</ElButton>
-              <ElButton text @click="toggleLockWidget()">{{ selectedWidget.locked ? '解锁' : '锁定' }}</ElButton>
-              <ElButton type="danger" text @click="removeSelectedWidget">移除</ElButton>
+              <ElButton text @click="duplicateWidget()">{{ $tr('复制') }}</ElButton>
+              <ElButton text @click="toggleLockWidget()">{{ selectedWidget.locked ? $tr('解锁') : $tr('锁定') }}</ElButton>
+              <ElButton type="danger" text @click="removeSelectedWidget">{{ $tr('移除') }}</ElButton>
             </div>
           </div>
           <ElForm label-position="top" size="small">
-            <ElFormItem label="标题"><ElInput v-model="selectedWidget.title" @input="dirty = true" /></ElFormItem>
+            <ElFormItem :label="$tr('标题')"><ElInput v-model="selectedWidget.title" @input="dirty = true" /></ElFormItem>
             <div class="layout-fields">
               <ElFormItem label="X"><ElInputNumber v-model="selectedWidget.x" :min="0" :max="screenConfig.width - selectedWidget.w" controls-position="right" @change="dirty = true" /></ElFormItem>
               <ElFormItem label="Y"><ElInputNumber v-model="selectedWidget.y" :min="0" :max="screenConfig.height - selectedWidget.h" controls-position="right" @change="dirty = true" /></ElFormItem>
-              <ElFormItem label="宽"><ElInputNumber v-model="selectedWidget.w" :min="widgetMinSize(selectedWidget).w" :max="screenConfig.width - selectedWidget.x" controls-position="right" @change="dirty = true" /></ElFormItem>
-              <ElFormItem label="高"><ElInputNumber v-model="selectedWidget.h" :min="widgetMinSize(selectedWidget).h" :max="screenConfig.height - selectedWidget.y" controls-position="right" @change="dirty = true" /></ElFormItem>
+              <ElFormItem :label="$tr('宽')"><ElInputNumber v-model="selectedWidget.w" :min="widgetMinSize(selectedWidget).w" :max="screenConfig.width - selectedWidget.x" controls-position="right" @change="dirty = true" /></ElFormItem>
+              <ElFormItem :label="$tr('高')"><ElInputNumber v-model="selectedWidget.h" :min="widgetMinSize(selectedWidget).h" :max="screenConfig.height - selectedWidget.y" controls-position="right" @change="dirty = true" /></ElFormItem>
             </div>
             <template v-if="selectedWidget.chartSpec.chartType === 'image' || selectedWidget.chartSpec.chartType === 'iframe'">
-              <ElFormItem :label="selectedWidget.chartSpec.chartType === 'image' ? '图片地址' : '网页地址'">
+              <ElFormItem :label="selectedWidget.chartSpec.chartType === 'image' ? $tr('图片地址') : $tr('网页地址')">
                 <ElInput
                   v-model="selectedWidget.chartSpec.mediaUrl"
-                  placeholder="https://... 或上传后的相对路径"
+                  :placeholder="$tr('https://... 或上传后的相对路径')"
                   @input="dirty = true"
                 />
               </ElFormItem>
-              <ElFormItem v-if="selectedWidget.chartSpec.chartType === 'image'" label="上传图片">
+              <ElFormItem v-if="selectedWidget.chartSpec.chartType === 'image'" :label="$tr('上传图片')">
                 <LemonUpload
                   :model-value="selectedWidget.chartSpec.mediaUrl || ''"
                   :image-url="selectedWidget.chartSpec.mediaUrl || ''"
@@ -1151,27 +1151,27 @@ watch(chartSpecForm, fillChartSpec, { deep: true });
               </ElFormItem>
             </template>
             <ElTabs v-model="propertyTab">
-              <ElTabPane label="外观与 option" name="appearance">
+              <ElTabPane :label="$tr('外观与 option')" name="appearance">
                 <ChartAppearanceEditor :key="selectedWidget.id" :spec="selectedWidget.chartSpec" :result="results[selectedWidget.id]"
                   :preview-width="selectedWidget.w" :preview-height="selectedWidget.h"
                   @update:spec="selectedWidget.chartSpec = $event; dirty = true" />
               </ElTabPane>
-              <ElTabPane label="数据与字段" name="data">
-            <ElAlert class="field-hint" type="info" :closable="false" :title="widgetFieldHint.summary">
-              <p>SQL 示例：{{ widgetFieldHint.sqlExample }}</p>
+              <ElTabPane :label="$tr('数据与字段')" name="data">
+            <ElAlert class="field-hint" type="info" :closable="false" :title="$tr(widgetFieldHint.summary)">
+              <p>SQL 示例：{{ $tr(widgetFieldHint.sqlExample) }}</p>
               <ul>
                 <li v-for="item in widgetFieldHint.fields" :key="item.name">
-                  <b>{{ item.name }}</b>{{ item.required ? '（必填）' : '（可选）' }}：{{ item.desc }}
+                  <b>{{ $tr(item.name) }}</b>{{ item.required ? $tr('（必填）') : $tr('（可选）') }}：{{ $tr(item.desc) }}
                 </li>
               </ul>
             </ElAlert>
-            <ElFormItem label="图表类型">
+            <ElFormItem :label="$tr('图表类型')">
               <ElSelect v-model="selectedWidget.chartSpec.chartType" @change="onWidgetChartTypeChange">
-                <ElOption v-for="item in CHART_TYPE_OPTIONS" :key="item.value" :value="item.value" :label="item.label" />
+                <ElOption v-for="item in CHART_TYPE_OPTIONS" :key="item.value" :value="item.value" :label="$tr(item.label)" />
               </ElSelect>
             </ElFormItem>
             <template v-if="isTextWidget || selectedWidget.chartSpec.chartType === 'clock'">
-              <ElFormItem v-if="isTextWidget" label="文本内容">
+              <ElFormItem v-if="isTextWidget" :label="$tr('文本内容')">
                 <ElInput
                   v-model="selectedWidget.chartSpec.textContent"
                   type="textarea"
@@ -1179,7 +1179,7 @@ watch(chartSpecForm, fillChartSpec, { deep: true });
                   @input="dirty = true"
                 />
               </ElFormItem>
-              <ElFormItem label="字号">
+              <ElFormItem :label="$tr('字号')">
                 <ElInputNumber
                   :model-value="selectedWidget.chartSpec.appearance?.fontSize ?? (selectedWidget.chartSpec.chartType === 'clock' ? 36 : 24)"
                   :min="12"
@@ -1190,45 +1190,45 @@ watch(chartSpecForm, fillChartSpec, { deep: true });
               </ElFormItem>
             </template>
             <template v-else-if="selectedWidget.chartSpec.chartType === 'image' || selectedWidget.chartSpec.chartType === 'iframe'">
-              <ElAlert type="success" :closable="false" title="媒体地址已在上方设置" description="切换图表类型后可在此配置其它字段；图片/网页 URL 与上传控件固定显示在标题与布局下方。" />
+              <ElAlert type="success" :closable="false" :title="$tr('媒体地址已在上方设置')" :description="$tr('切换图表类型后可在此配置其它字段；图片/网页 URL 与上传控件固定显示在标题与布局下方。')" />
             </template>
             <template v-else>
-            <ElFormItem label="X 字段"><ElInput v-model="selectedWidget.chartSpec.xField" @input="dirty = true" /></ElFormItem>
-            <ElFormItem label="Y 字段（逗号分隔）">
+            <ElFormItem :label="$tr('X 字段')"><ElInput v-model="selectedWidget.chartSpec.xField" @input="dirty = true" /></ElFormItem>
+            <ElFormItem :label="$tr('Y 字段（逗号分隔）')">
               <ElInput :model-value="selectedWidget.chartSpec.yFields.join(', ')"
                 @input="selectedWidget.chartSpec.yFields = String($event).split(',').map(v => v.trim()).filter(Boolean); dirty = true" />
             </ElFormItem>
-            <ElFormItem label="系列字段"><ElInput v-model="selectedWidget.chartSpec.seriesField" placeholder="可选：按该字段拆分系列" @input="dirty = true" /></ElFormItem>
+            <ElFormItem :label="$tr('系列字段')"><ElInput v-model="selectedWidget.chartSpec.seriesField" :placeholder="$tr('可选：按该字段拆分系列')" @input="dirty = true" /></ElFormItem>
             <div class="form-row">
-              <ElFormItem label="数值格式"><ElSelect v-model="selectedWidget.chartSpec.valueFormat" @change="dirty = true">
-                <ElOption label="普通数字" value="number" /><ElOption label="百分比" value="percent" /><ElOption label="人民币" value="currency" />
+              <ElFormItem :label="$tr('数值格式')"><ElSelect v-model="selectedWidget.chartSpec.valueFormat" @change="dirty = true">
+                <ElOption :label="$tr('普通数字')" value="number" /><ElOption :label="$tr('百分比')" value="percent" /><ElOption :label="$tr('人民币')" value="currency" />
               </ElSelect></ElFormItem>
-              <ElFormItem label="堆叠"><ElSwitch v-model="selectedWidget.chartSpec.stack" @change="dirty = true" /></ElFormItem>
+              <ElFormItem :label="$tr('堆叠')"><ElSwitch v-model="selectedWidget.chartSpec.stack" @change="dirty = true" /></ElFormItem>
             </div>
             <div class="form-row">
-              <ElFormItem label="排序字段"><ElInput v-model="selectedWidget.chartSpec.sortBy" placeholder="可选" @input="dirty = true" /></ElFormItem>
-              <ElFormItem label="顺序"><ElSelect v-model="selectedWidget.chartSpec.sortOrder" @change="dirty = true"><ElOption label="升序" value="asc" /><ElOption label="降序" value="desc" /></ElSelect></ElFormItem>
+              <ElFormItem :label="$tr('排序字段')"><ElInput v-model="selectedWidget.chartSpec.sortBy" :placeholder="$tr('可选')" @input="dirty = true" /></ElFormItem>
+              <ElFormItem :label="$tr('顺序')"><ElSelect v-model="selectedWidget.chartSpec.sortOrder" @change="dirty = true"><ElOption :label="$tr('升序')" value="asc" /><ElOption :label="$tr('降序')" value="desc" /></ElSelect></ElFormItem>
             </div>
-            <ElFormItem label="SQL（支持 :name 参数）">
+            <ElFormItem :label="$tr('SQL（支持 :name 参数）')">
               <ElInput v-model="selectedWidget.data.sqlText" type="textarea" :rows="9" @input="dirty = true" />
             </ElFormItem>
-            <ElFormItem label="数据库连接">
+            <ElFormItem :label="$tr('数据库连接')">
               <ElSelect v-model="selectedWidget.data.dbConfigId" filterable @change="changeWidgetConnection(selectedWidget)">
                 <ElOption v-for="item in connections" :key="item.id" :value="item.id" :label="item.dbName || item.name || item.dbHost" />
               </ElSelect>
             </ElFormItem>
-            <ElFormItem label="实例 / Schema">
+            <ElFormItem :label="$tr('实例 / Schema')">
               <ElSelect v-model="selectedWidget.data.instanceName" filterable allow-create @change="dirty = true">
                 <ElOption v-for="item in instances" :key="item" :value="item" :label="item" />
               </ElSelect>
             </ElFormItem>
-            <ElFormItem label="默认参数 JSON">
+            <ElFormItem :label="$tr('默认参数 JSON')">
               <ElInput :model-value="defaultParamsText(selectedWidget)" type="textarea" :rows="3"
                 placeholder='{"startDate":"2026-01-01"}' @change="updateDefaultParams(selectedWidget, String($event))" />
             </ElFormItem>
             <div class="form-row">
-              <ElFormItem label="最大行数"><ElInputNumber v-model="selectedWidget.data.maxRows" :min="1" :max="5000" @change="dirty = true" /></ElFormItem>
-              <ElFormItem label="超时(秒)"><ElInputNumber v-model="selectedWidget.data.timeoutSeconds" :min="1" :max="120" @change="dirty = true" /></ElFormItem>
+              <ElFormItem :label="$tr('最大行数')"><ElInputNumber v-model="selectedWidget.data.maxRows" :min="1" :max="5000" @change="dirty = true" /></ElFormItem>
+              <ElFormItem :label="$tr('超时(秒)')"><ElInputNumber v-model="selectedWidget.data.timeoutSeconds" :min="1" :max="120" @change="dirty = true" /></ElFormItem>
             </div>
             </template>
               </ElTabPane>
@@ -1236,11 +1236,11 @@ watch(chartSpecForm, fillChartSpec, { deep: true });
           </ElForm>
         </template>
         <template v-else>
-          <h3>大屏设置</h3>
+          <h3>{{ $tr('大屏设置') }}</h3>
           <ElForm label-position="top" size="small">
-            <ElFormItem label="名称"><ElInput v-model="screenForm.name" @input="dirty = true" /></ElFormItem>
-            <ElFormItem label="说明"><ElInput v-model="screenForm.description" type="textarea" :rows="2" @input="dirty = true" /></ElFormItem>
-            <ElFormItem label="画布尺寸（16:9）">
+            <ElFormItem :label="$tr('名称')"><ElInput v-model="screenForm.name" @input="dirty = true" /></ElFormItem>
+            <ElFormItem :label="$tr('说明')"><ElInput v-model="screenForm.description" type="textarea" :rows="2" @input="dirty = true" /></ElFormItem>
+            <ElFormItem :label="$tr('画布尺寸（16:9）')">
               <div class="preset-row">
                 <ElButton
                   v-for="preset in CANVAS_PRESETS"
@@ -1251,18 +1251,18 @@ watch(chartSpecForm, fillChartSpec, { deep: true });
                 >{{ preset.label }}</ElButton>
               </div>
               <div class="form-row size-row">
-                <ElFormItem label="宽"><ElInputNumber v-model="screenConfig.width" :min="640" :max="3840" controls-position="right" @change="dirty = true" /></ElFormItem>
-                <ElFormItem label="高"><ElInputNumber v-model="screenConfig.height" :min="360" :max="2160" controls-position="right" @change="dirty = true" /></ElFormItem>
+                <ElFormItem :label="$tr('宽')"><ElInputNumber v-model="screenConfig.width" :min="640" :max="3840" controls-position="right" @change="dirty = true" /></ElFormItem>
+                <ElFormItem :label="$tr('高')"><ElInputNumber v-model="screenConfig.height" :min="360" :max="2160" controls-position="right" @change="dirty = true" /></ElFormItem>
               </div>
             </ElFormItem>
-            <ElFormItem label="网格吸附">
+            <ElFormItem :label="$tr('网格吸附')">
               <div class="form-row">
                 <ElSwitch v-model="screenConfig.showGrid" @change="dirty = true" />
                 <ElInputNumber v-model="screenConfig.gridSize" :min="4" :max="40" controls-position="right" @change="dirty = true" />
               </div>
             </ElFormItem>
-            <ElFormItem label="背景色"><ElColorPicker v-model="screenConfig.background" @change="dirty = true" /></ElFormItem>
-            <ElFormItem label="背景图">
+            <ElFormItem :label="$tr('背景色')"><ElColorPicker v-model="screenConfig.background" @change="dirty = true" /></ElFormItem>
+            <ElFormItem :label="$tr('背景图')">
               <LemonUpload
                 :model-value="screenConfig.backgroundImage || ''"
                 :image-url="screenConfig.backgroundImage || ''"
@@ -1270,18 +1270,18 @@ watch(chartSpecForm, fillChartSpec, { deep: true });
                 :limit="1"
                 @update:model-value="onBackgroundImageChange"
               />
-              <p class="bg-hint">建议 16:9 图片，上传后铺满画布；清除图片后仅显示背景色。</p>
+              <p class="bg-hint">{{ $tr('建议 16:9 图片，上传后铺满画布；清除图片后仅显示背景色。') }}</p>
             </ElFormItem>
-            <ElFormItem label="数据更新策略">
+            <ElFormItem :label="$tr('数据更新策略')">
               <ElRadioGroup v-model="screenForm.refreshMode" @change="dirty = true">
-                <ElRadio value="LIVE">每次查看实时查询</ElRadio>
-                <ElRadio value="INTERVAL_SNAPSHOT">后台定时快照</ElRadio>
+                <ElRadio value="LIVE">{{ $tr('每次查看实时查询') }}</ElRadio>
+                <ElRadio value="INTERVAL_SNAPSHOT">{{ $tr('后台定时快照') }}</ElRadio>
               </ElRadioGroup>
             </ElFormItem>
-            <ElFormItem v-if="screenForm.refreshMode === 'INTERVAL_SNAPSHOT'" label="更新间隔（秒）">
+            <ElFormItem v-if="screenForm.refreshMode === 'INTERVAL_SNAPSHOT'" :label="$tr('更新间隔（秒）')">
               <ElInputNumber v-model="screenForm.refreshIntervalSeconds" :min="30" :max="86400" @change="dirty = true" />
             </ElFormItem>
-            <ElAlert title="发布后查看页读取冻结版本；继续编辑草稿不会影响线上大屏。" type="info" :closable="false" />
+            <ElAlert :title="$tr('发布后查看页读取冻结版本；继续编辑草稿不会影响线上大屏。')" type="info" :closable="false" />
           </ElForm>
         </template>
       </aside>
@@ -1289,39 +1289,39 @@ watch(chartSpecForm, fillChartSpec, { deep: true });
 
     <div v-if="contextMenu.visible" class="widget-context-menu"
       :style="{ left: `${contextMenu.x}px`, top: `${contextMenu.y}px` }" @click.stop>
-      <button @click="duplicateWidget(contextMenu.widgetId)">复制组件</button>
-      <button @click="toggleLockWidget(contextMenu.widgetId)">锁定 / 解锁</button>
-      <button @click="moveWidgetLayer(contextMenu.widgetId, 'top')">置于顶层</button>
-      <button @click="moveWidgetLayer(contextMenu.widgetId, 'bottom')">置于底层</button>
-      <button @click="moveWidgetLayer(contextMenu.widgetId, 'up')">上移一层</button>
-      <button @click="moveWidgetLayer(contextMenu.widgetId, 'down')">下移一层</button>
-      <button class="danger" @click="removeWidget(contextMenu.widgetId)">删除组件</button>
+      <button @click="duplicateWidget(contextMenu.widgetId)">{{ $tr('复制组件') }}</button>
+      <button @click="toggleLockWidget(contextMenu.widgetId)">{{ $tr('锁定 / 解锁') }}</button>
+      <button @click="moveWidgetLayer(contextMenu.widgetId, 'top')">{{ $tr('置于顶层') }}</button>
+      <button @click="moveWidgetLayer(contextMenu.widgetId, 'bottom')">{{ $tr('置于底层') }}</button>
+      <button @click="moveWidgetLayer(contextMenu.widgetId, 'up')">{{ $tr('上移一层') }}</button>
+      <button @click="moveWidgetLayer(contextMenu.widgetId, 'down')">{{ $tr('下移一层') }}</button>
+      <button class="danger" @click="removeWidget(contextMenu.widgetId)">{{ $tr('删除组件') }}</button>
     </div>
 
-    <ElDialog v-model="chartDialog" title="图表编辑器" width="min(1100px, 94vw)" destroy-on-close>
+    <ElDialog v-model="chartDialog" :title="$tr('图表编辑器')" width="min(1100px, 94vw)" destroy-on-close>
       <div class="chart-editor">
         <ElTabs v-model="chartEditorTab">
-          <ElTabPane label="数据与字段" name="data">
+          <ElTabPane :label="$tr('数据与字段')" name="data">
         <ElForm label-position="top">
           <div class="form-row">
-            <ElFormItem label="图表名称"><ElInput v-model="chartForm.title" /></ElFormItem>
-            <ElFormItem v-if="!isStaticChartForm" label="数据库连接"><ElSelect v-model="chartForm.dbConfigId" filterable @change="changeConnection">
+            <ElFormItem :label="$tr('图表名称')"><ElInput v-model="chartForm.title" /></ElFormItem>
+            <ElFormItem v-if="!isStaticChartForm" :label="$tr('数据库连接')"><ElSelect v-model="chartForm.dbConfigId" filterable @change="changeConnection">
               <ElOption v-for="item in connections" :key="item.id" :value="item.id" :label="item.dbName || item.name || item.dbHost" />
             </ElSelect></ElFormItem>
-            <ElFormItem v-if="!isStaticChartForm" label="实例 / Schema"><ElSelect v-model="chartForm.instanceName" filterable allow-create>
+            <ElFormItem v-if="!isStaticChartForm" :label="$tr('实例 / Schema')"><ElSelect v-model="chartForm.instanceName" filterable allow-create>
               <ElOption v-for="item in instances" :key="item" :value="item" :label="item" />
             </ElSelect></ElFormItem>
           </div>
-          <ElAlert class="field-hint" type="info" :closable="false" :title="chartFieldHint.summary">
-            <p>SQL 示例：{{ chartFieldHint.sqlExample }}</p>
+          <ElAlert class="field-hint" type="info" :closable="false" :title="$tr(chartFieldHint.summary)">
+            <p>SQL 示例：{{ $tr(chartFieldHint.sqlExample) }}</p>
             <ul>
               <li v-for="item in chartFieldHint.fields" :key="item.name">
-                <b>{{ item.name }}</b>{{ item.required ? '（必填）' : '（可选）' }}：{{ item.desc }}
+                <b>{{ $tr(item.name) }}</b>{{ item.required ? $tr('（必填）') : $tr('（可选）') }}：{{ $tr(item.desc) }}
               </li>
             </ul>
           </ElAlert>
-          <ElFormItem v-if="!isStaticChartForm" label="只读 SQL"><ElInput v-model="chartForm.sqlText" type="textarea" :rows="7" placeholder="SELECT category, amount FROM ..." /></ElFormItem>
-          <ElFormItem label="图表类型">
+          <ElFormItem v-if="!isStaticChartForm" :label="$tr('只读 SQL')"><ElInput v-model="chartForm.sqlText" type="textarea" :rows="7" placeholder="SELECT category, amount FROM ..." /></ElFormItem>
+          <ElFormItem :label="$tr('图表类型')">
             <div class="type-gallery">
               <button
                 v-for="item in CHART_TYPE_OPTIONS"
@@ -1330,51 +1330,51 @@ watch(chartSpecForm, fillChartSpec, { deep: true });
                 class="type-chip"
                 :class="{ active: chartSpecForm.chartType === item.value }"
                 @click="chartSpecForm.chartType = item.value"
-              >{{ item.label }}</button>
+              >{{ $tr(item.label) }}</button>
             </div>
           </ElFormItem>
           <div class="form-row">
-            <ElFormItem v-if="false" label="图表类型"><ElSelect v-model="chartSpecForm.chartType">
-              <ElOption v-for="item in CHART_TYPE_OPTIONS" :key="item.value" :value="item.value" :label="item.label" />
+            <ElFormItem v-if="false" :label="$tr('图表类型')"><ElSelect v-model="chartSpecForm.chartType">
+              <ElOption v-for="item in CHART_TYPE_OPTIONS" :key="item.value" :value="item.value" :label="$tr(item.label)" />
             </ElSelect></ElFormItem>
             <template v-if="isTextChartForm">
-              <ElFormItem label="字号"><ElInputNumber v-model="chartSpecForm.fontSize" :min="12" :max="120" controls-position="right" /></ElFormItem>
+              <ElFormItem :label="$tr('字号')"><ElInputNumber v-model="chartSpecForm.fontSize" :min="12" :max="120" controls-position="right" /></ElFormItem>
             </template>
             <template v-else>
-              <ElFormItem label="X 字段"><ElInput v-model="chartSpecForm.xField" /></ElFormItem>
-              <ElFormItem label="Y 字段（逗号分隔）"><ElInput v-model="chartSpecForm.yFields" /></ElFormItem>
+              <ElFormItem :label="$tr('X 字段')"><ElInput v-model="chartSpecForm.xField" /></ElFormItem>
+              <ElFormItem :label="$tr('Y 字段（逗号分隔）')"><ElInput v-model="chartSpecForm.yFields" /></ElFormItem>
             </template>
           </div>
-          <ElFormItem v-if="isTextChartForm" label="文本内容">
-            <ElInput v-model="chartSpecForm.textContent" type="textarea" :rows="5" placeholder="显示在大屏上的文案" />
+          <ElFormItem v-if="isTextChartForm" :label="$tr('文本内容')">
+            <ElInput v-model="chartSpecForm.textContent" type="textarea" :rows="5" :placeholder="$tr('显示在大屏上的文案')" />
           </ElFormItem>
           <div v-if="!isStaticChartForm" class="form-row">
-            <ElFormItem label="系列字段"><ElInput v-model="chartSpecForm.seriesField" placeholder="可选" /></ElFormItem>
-            <ElFormItem label="数值格式"><ElSelect v-model="chartSpecForm.valueFormat"><ElOption label="普通数字" value="number" /><ElOption label="百分比" value="percent" /><ElOption label="人民币" value="currency" /></ElSelect></ElFormItem>
-            <ElFormItem label="排序"><ElInput v-model="chartSpecForm.sortBy" placeholder="字段名（可选）" /></ElFormItem>
-            <ElFormItem label="顺序"><ElSelect v-model="chartSpecForm.sortOrder"><ElOption label="升序" value="asc" /><ElOption label="降序" value="desc" /></ElSelect></ElFormItem>
-            <ElFormItem label="堆叠"><ElSwitch v-model="chartSpecForm.stack" /></ElFormItem>
+            <ElFormItem :label="$tr('系列字段')"><ElInput v-model="chartSpecForm.seriesField" :placeholder="$tr('可选')" /></ElFormItem>
+            <ElFormItem :label="$tr('数值格式')"><ElSelect v-model="chartSpecForm.valueFormat"><ElOption :label="$tr('普通数字')" value="number" /><ElOption :label="$tr('百分比')" value="percent" /><ElOption :label="$tr('人民币')" value="currency" /></ElSelect></ElFormItem>
+            <ElFormItem :label="$tr('排序')"><ElInput v-model="chartSpecForm.sortBy" :placeholder="$tr('字段名（可选）')" /></ElFormItem>
+            <ElFormItem :label="$tr('顺序')"><ElSelect v-model="chartSpecForm.sortOrder"><ElOption :label="$tr('升序')" value="asc" /><ElOption :label="$tr('降序')" value="desc" /></ElSelect></ElFormItem>
+            <ElFormItem :label="$tr('堆叠')"><ElSwitch v-model="chartSpecForm.stack" /></ElFormItem>
           </div>
         </ElForm>
           </ElTabPane>
-          <ElTabPane label="外观与 option" name="appearance">
+          <ElTabPane :label="$tr('外观与 option')" name="appearance">
             <ElForm label-position="top"><ChartAppearanceEditor v-model:spec="editableChartSpec" :result="chartPreview" /></ElForm>
           </ElTabPane>
         </ElTabs>
         <div class="dialog-preview">
-          <div class="dialog-preview-title">实时预览</div>
+          <div class="dialog-preview-title">{{ $tr('实时预览') }}</div>
           <ChartRenderer
             v-if="chartPreview || chartSpecForm.chartType === 'text' || chartSpecForm.chartType === 'clock' || chartSpecForm.chartType === 'image' || chartSpecForm.chartType === 'iframe'"
             :spec="parseSpec(chartForm.chartSpec)"
             :result="chartPreview || { columns: [], rows: [], rowCount: 0 }"
           />
-          <ElEmpty v-else description="填写 SQL 后点「运行预览」；文本/时钟/图片可直接看效果" />
+          <ElEmpty v-else :description="$tr('填写 SQL 后点「运行预览」；文本/时钟/图片可直接看效果')" />
         </div>
       </div>
-      <template #footer><ElButton @click="doPreviewChart">运行预览</ElButton><ElButton type="primary" :loading="chartSaving" @click="doSaveChart">保存图表</ElButton></template>
+      <template #footer><ElButton @click="doPreviewChart">{{ $tr('运行预览') }}</ElButton><ElButton type="primary" :loading="chartSaving" @click="doSaveChart">{{ $tr('保存图表') }}</ElButton></template>
     </ElDialog>
 
-    <ElDialog v-model="draftPreviewVisible" title="草稿预览（未发布）" width="min(1100px, 96vw)" destroy-on-close>
+    <ElDialog v-model="draftPreviewVisible" :title="$tr('草稿预览（未发布）')" width="min(1100px, 96vw)" destroy-on-close>
       <div class="draft-preview-stage">
         <div class="draft-preview-canvas" :style="canvasBackgroundStyle()">
           <article
@@ -1393,8 +1393,8 @@ watch(chartSpecForm, fillChartSpec, { deep: true });
         </div>
       </div>
       <template #footer>
-        <ElButton @click="draftPreviewVisible = false">关闭</ElButton>
-        <ElButton type="primary" @click="publish">满意则发布</ElButton>
+        <ElButton @click="draftPreviewVisible = false">{{ $tr('关闭') }}</ElButton>
+        <ElButton type="primary" @click="publish">{{ $tr('满意则发布') }}</ElButton>
       </template>
     </ElDialog>
   </div>

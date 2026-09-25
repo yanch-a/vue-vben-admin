@@ -191,23 +191,23 @@ function applyOption() {
 <template>
   <div class="appearance-editor">
     <div class="appearance-row">
-      <ElFormItem label="组件标题">
+      <ElFormItem :label="$tr('组件标题')">
         <ElSwitch
           :model-value="appearance.showTitle !== false"
           @change="updateAppearance('showTitle', $event)"
         />
       </ElFormItem>
-      <ElFormItem v-if="supportsOption" label="图例">
+      <ElFormItem v-if="supportsOption" :label="$tr('图例')">
         <ElSelect
           :model-value="appearance.legend || 'auto'"
           @change="updateAppearance('legend', $event)"
         >
-          <ElOption label="自适应" value="auto" /><ElOption
-            label="隐藏"
+          <ElOption :label="$tr('自适应')" value="auto" /><ElOption
+            :label="$tr('隐藏')"
             value="hidden"
           />
-          <ElOption label="顶部" value="top" /><ElOption
-            label="底部"
+          <ElOption :label="$tr('顶部')" value="top" /><ElOption
+            :label="$tr('底部')"
             value="bottom"
           />
         </ElSelect>
@@ -215,7 +215,7 @@ function applyOption() {
     </div>
     <template v-if="supportsOption">
       <div class="appearance-row">
-        <ElFormItem label="字号（空为自动）">
+        <ElFormItem :label="$tr('字号（空为自动）')">
           <ElInputNumber
             :model-value="appearance.fontSize"
             :min="8"
@@ -224,7 +224,7 @@ function applyOption() {
             @change="updateAppearance('fontSize', $event)"
           />
         </ElFormItem>
-        <ElFormItem label="数据标签">
+        <ElFormItem :label="$tr('数据标签')">
           <ElSelect
             :model-value="
               appearance.showLabels == null
@@ -240,14 +240,14 @@ function applyOption() {
               )
             "
           >
-            <ElOption label="自适应" value="auto" /><ElOption
-              label="显示"
+            <ElOption :label="$tr('自适应')" value="auto" /><ElOption
+              :label="$tr('显示')"
               value="show"
-            /><ElOption label="隐藏" value="hide" />
+            /><ElOption :label="$tr('隐藏')" value="hide" />
           </ElSelect>
         </ElFormItem>
       </div>
-      <ElFormItem v-if="spec.chartType === 'pie'" label="饼图尺寸（%）">
+      <ElFormItem v-if="spec.chartType === 'pie'" :label="$tr('饼图尺寸（%）')">
         <ElSlider
           :model-value="appearance.pieRadius ?? 78"
           :min="30"
@@ -257,24 +257,24 @@ function applyOption() {
       </ElFormItem>
       <ElFormItem
         v-if="['line', 'area'].includes(spec.chartType)"
-        label="平滑曲线"
+        :label="$tr('平滑曲线')"
       >
         <ElSwitch
           :model-value="appearance.smooth ?? false"
           @change="updateAppearance('smooth', $event)"
         />
       </ElFormItem>
-      <ElFormItem label="系列颜色（HEX，逗号分隔）">
+      <ElFormItem :label="$tr('系列颜色（HEX，逗号分隔）')">
         <ElInput
           :model-value="appearance.colors?.join(', ') || ''"
-          placeholder="#38bdf8, #34d399，空为默认"
+          :placeholder="$tr('#38bdf8, #34d399，空为默认')"
           @change="updateColors(String($event))"
         />
       </ElFormItem>
-      <ElFormItem v-if="hasAxes" label="绘图区边距（px，留空自动）">
+      <ElFormItem v-if="hasAxes" :label="$tr('绘图区边距（px，留空自动）')">
         <div class="margin-fields">
           <label v-for="key in margins" :key="key"
-            >{{ marginLabels[key] }}
+            >{{ $tr(marginLabels[key]) }}
             <ElInputNumber
               :model-value="appearance.grid?.[key]"
               :min="0"
@@ -286,15 +286,15 @@ function applyOption() {
         </div>
       </ElFormItem>
       <ElButton class="option-button" @click="openOptionEditor"
-        >编辑 ECharts option</ElButton
+        >{{ $tr('编辑 ECharts option') }}</ElButton
       >
       <p class="hint">
-        高级 option 优先于常用设置；默认保留 SQL 数据，只有显式设置 data
-        时才覆盖。
+        {{ $tr('高级 option 优先于常用设置；默认保留 SQL 数据，只有显式设置 data
+        时才覆盖。') }}
       </p>
     </template>
     <template v-else-if="spec.chartType === 'text'">
-      <ElFormItem label="文本字号">
+      <ElFormItem :label="$tr('文本字号')">
         <ElInputNumber
           :model-value="appearance.fontSize ?? 24"
           :min="12"
@@ -303,22 +303,22 @@ function applyOption() {
           @change="updateAppearance('fontSize', $event)"
         />
       </ElFormItem>
-      <ElFormItem label="文字颜色（HEX）">
+      <ElFormItem :label="$tr('文字颜色（HEX）')">
         <ElInput
           :model-value="appearance.colors?.[0] || ''"
           placeholder="#e2e8f0"
           @change="updateColors(String($event || '#e2e8f0'))"
         />
       </ElFormItem>
-      <p class="hint">文本内容请在「数据与字段」中编辑；不使用 ECharts option。</p>
+      <p class="hint">{{ $tr('文本内容请在「数据与字段」中编辑；不使用 ECharts option。') }}</p>
     </template>
     <p v-else class="hint">
-      指标卡和表格不使用 ECharts option，请通过字段映射及数值格式配置。
+      {{ $tr('指标卡和表格不使用 ECharts option，请通过字段映射及数值格式配置。') }}
     </p>
 
     <ElDialog
       v-model="optionDialog"
-      title="ECharts option 配置"
+      :title="$tr('ECharts option 配置')"
       width="min(1100px, 94vw)"
       append-to-body
       destroy-on-close
@@ -326,17 +326,17 @@ function applyOption() {
       <ElAlert
         type="info"
         :closable="false"
-        title="填写 JSON 对象即可覆盖图例、坐标轴、绘图区、配色和系列样式。series 按索引合并；不支持 JavaScript 函数。若已保存过 option，打开时会自动载入；也可点「载入现有」带入当前样式。"
+        :title="$tr('填写 JSON 对象即可覆盖图例、坐标轴、绘图区、配色和系列样式。series 按索引合并；不支持 JavaScript 函数。若已保存过 option，打开时会自动载入；也可点「载入现有」带入当前样式。')"
       />
       <div class="option-layout">
         <section class="option-source">
           <div class="option-toolbar">
-            <span>增量 option JSON</span
+            <span>{{ $tr('增量 option JSON') }}</span
             ><ElButton size="small" @click="reloadExistingOption"
-              >载入现有</ElButton
+              >{{ $tr('载入现有') }}</ElButton
             ><ElButton size="small" @click="useCompactExample"
-              >填入紧凑示例</ElButton
-            ><ElButton size="small" @click="editOption('{}')">清空</ElButton>
+              >{{ $tr('填入紧凑示例') }}</ElButton
+            ><ElButton size="small" @click="editOption('{}')">{{ $tr('清空') }}</ElButton>
           </div>
           <ElInput
             :key="optionEditorKey"
@@ -359,7 +359,7 @@ function applyOption() {
               aspectRatio: `${previewWidth} / ${previewHeight}`,
             }"
           >
-            <header v-if="appearance.showTitle !== false">图表预览</header>
+            <header v-if="appearance.showTitle !== false">{{ $tr('图表预览') }}</header>
             <div class="preview-body">
               <ChartRenderer
                 :spec="previewSpec"
@@ -370,21 +370,19 @@ function applyOption() {
             </div>
           </div>
           <p class="hint">
-            {{
-              result?.rows?.length
-                ? '使用当前 SQL 预览结果，不额外查询数据库。'
-                : '尚无数据。先运行图表或刷新画布预览，再检查数据呈现。'
-            }}
+            {{ result?.rows?.length
+                ? $tr('使用当前 SQL 预览结果，不额外查询数据库。')
+                : $tr('尚无数据。先运行图表或刷新画布预览，再检查数据呈现。') }}
           </p>
         </section>
       </div>
       <template #footer
-        ><ElButton @click="optionDialog = false">取消</ElButton
+        ><ElButton @click="optionDialog = false">{{ $tr('取消') }}</ElButton
         ><ElButton
           type="primary"
           :disabled="!!syntaxError || !!previewError || previewPending"
           @click="applyOption"
-          >应用到图表</ElButton
+          >{{ $tr('应用到图表') }}</ElButton
         ></template
       >
     </ElDialog>

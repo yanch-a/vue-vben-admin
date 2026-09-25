@@ -32,6 +32,12 @@ import { ElCheckbox, ElMessage, ElMessageBox } from 'element-plus';
 
 import { buildResultTsv } from '../../utils/resultClipboard';
 import {
+  dedupeDeleteSql,
+  MAX_DELETE_STATEMENTS,
+  planDeleteTargets,
+  sameDeletePlan,
+} from '../../utils/resultDeleteTargets';
+import {
   buildDeleteSql,
   buildInsertSql,
   buildUpdateSql,
@@ -227,6 +233,11 @@ const canMutate = computed(
     !!selectedRow.value,
 );
 const canDeleteRow = computed(() => canMutate.value && !isJoinQuery.value);
+/** 有勾选时菜单写明将删的行数，避免用户以为只删右键那一行 */
+const deleteMenuLabel = computed(() => {
+  const count = selectedRows.value.length;
+  return count > 0 ? `删除已勾选的 ${count} 行` : '删除';
+});
 const canCopyInsert = computed(() => canMutate.value && !isJoinQuery.value);
 
 /** 进入表格编辑不依赖当前选中行；单表或联表均可（联表按各表主键保存） */
@@ -785,9 +796,52 @@ function onEditField(col: string, v: string) {
     : v;
 }
 
+/**
+ * 只为已经定格的行生成删除语句。
+ * SQL 相同 WHERE 只留一条；MongoDB deleteOne 按行各生成一条，避免少删一个文档。
+ */
+function buildDeleteStatements(rows: Record<string, any>[]):
+  | { ok: true; sqls: string[] }
+  | { ok: false; message: string } {
+  let statements: string[] = [];
+  try {
+    const ref = requireTable();
+    statements = rows.map((row) =>
+      isMongo.value
+        ? buildMongoDeleteCommand(ref, row, columns.value, whereCols.value)
+        : buildDeleteSql(ref, row, columns.value, whereCols.value, dbType.value),
+    );
+  } catch (e: any) {
+    return { ok: false, message: e?.message || '生成 DELETE 失败' };
+  }
+  const sqls = isMongo.value ? statements : dedupeDeleteSql(statements);
+  if (!sqls.length) {
+    return { ok: false, message: '没有可执行的删除语句' };
+  }
+  if (!isMongo.value && sqls.length > MAX_DELETE_STATEMENTS) {
+    return {
+      ok: false,
+      message: `一次最多删除 ${MAX_DELETE_STATEMENTS} 行，请减少勾选后再试。本次未删除任何数据。`,
+    };
+  }
+  return { ok: true, sqls };
+}
+
 async function onDelete() {
   closeCtxMenu();
-  if (!selectedRow.value) return;
+  // 先定格勾选和右键行。后面的确认框是异步的，不能再读实时勾选，否则会删错行。
+  const resultAtClick = props.result;
+  const checkedSnapshot = selectedRows.value.slice();
+  const contextSnapshot = selectedRow.value;
+  const plan = planDeleteTargets(checkedSnapshot, contextSnapshot, displayRows.value);
+  if (!plan.ok) {
+    ElMessage.warning(
+      plan.reason === 'stale'
+        ? '勾选行已不在当前结果中，已取消删除'
+        : '请先勾选要删除的行，或在某一行上右键删除',
+    );
+    return;
+  }
   if (!canDeleteRow.value) {
     ElMessage.warning(
       isJoinQuery.value
@@ -799,40 +853,100 @@ async function onDelete() {
   if (!(await confirmRowMutation('删除'))) {
     return;
   }
+  if (props.result !== resultAtClick) {
+    ElMessage.warning('结果已更新，已取消删除');
+    return;
+  }
+  const prepared = buildDeleteStatements(plan.rows);
+  if (!prepared.ok) {
+    ElMessage.warning(prepared.message);
+    return;
+  }
+  const count = plan.rows.length;
+  const contextChecked =
+    plan.mode === 'checked' &&
+    contextSnapshot != null &&
+    plan.rows.includes(contextSnapshot);
+  const scopeText =
+    plan.mode === 'checked'
+      ? contextChecked
+        ? `将删除已勾选的 ${count} 行，未勾选的行不会删除。`
+        : `将删除已勾选的 ${count} 行。右键所在行没有勾选，不会删除。`
+      : '当前没有勾选，将只删除右键所在的这一行。';
+  const locateText = tableHasPk.value
+    ? '按主键定位，删除后不可恢复。'
+    : '当前无主键，按全部结果列匹配，可能删除值相同的其它行，且不可恢复。';
   try {
-    await ElMessageBox.confirm(
-      tableHasPk.value
-        ? '确认按主键删除选中行？删除后不可恢复。'
-        : '确认删除选中行？当前无主键，可能删除多行，且不可恢复。',
-      '删除确认',
-      { type: 'warning', confirmButtonText: '删除', cancelButtonText: '取消' },
-    );
+    await ElMessageBox.confirm(`${scopeText}${locateText}`, '删除确认', {
+      type: 'warning',
+      confirmButtonText: '删除',
+      cancelButtonText: '取消',
+    });
   } catch {
     return;
   }
-  try {
-    const ref = requireTable();
-    if (isMongo.value) {
-      const command = buildMongoDeleteCommand(
-        ref,
-        selectedRow.value,
-        columns.value,
-        whereCols.value,
-      );
-      emit('run-dml', command);
+  // 确认期间结果被换掉，或勾选集合变了，就整批取消，不按旧快照硬删。
+  if (props.result !== resultAtClick) {
+    ElMessage.warning('结果已更新，已取消删除');
+    return;
+  }
+  const latest = planDeleteTargets(
+    selectedRows.value,
+    selectedRow.value,
+    displayRows.value,
+  );
+  if (!sameDeletePlan(plan, latest)) {
+    ElMessage.warning('勾选已变化，已取消删除');
+    return;
+  }
+  const again = buildDeleteStatements(plan.rows);
+  if (!again.ok || again.sqls.join('\n') !== prepared.sqls.join('\n')) {
+    ElMessage.warning(again.ok ? '删除条件已变化，已取消删除' : again.message);
+    return;
+  }
+  const sqls = prepared.sqls;
+  if (sqls.length === 1) {
+    emit('run-dml', sqls[0]!);
+    return;
+  }
+  if (isMongo.value) {
+    const run = props.executeRowDml;
+    if (!run) {
+      ElMessage.error('当前页未提供删除接口，已取消，未删除任何数据');
       return;
     }
-    const sql = buildDeleteSql(
-      ref,
-      selectedRow.value,
-      columns.value,
-      whereCols.value,
-      dbType.value,
-    );
-    emit('run-dml', sql);
-  } catch (e: any) {
-    ElMessage.warning(e?.message || '生成 DELETE 失败');
+    let done = 0;
+    try {
+      for (const command of sqls) {
+        await run(command);
+        done += 1;
+      }
+    } catch (e: any) {
+      ElMessage.error(pickErrorText(e, '删除中断'));
+      if (done > 0) {
+        expectResultRefresh.value = true;
+        emit('refresh-result');
+      }
+      return;
+    }
+    expectResultRefresh.value = true;
+    emit('refresh-result');
+    ElMessage.success(`已删除勾选的 ${count} 行`);
+    return;
   }
+  if (!props.executeRowDmlBatch) {
+    ElMessage.error('当前页未提供批量删除接口，已取消，未删除任何数据');
+    return;
+  }
+  try {
+    await props.executeRowDmlBatch(sqls);
+  } catch (e: any) {
+    ElMessage.error(pickErrorText(e, '删除失败，事务已回滚，没有数据被删除'));
+    return;
+  }
+  expectResultRefresh.value = true;
+  emit('refresh-result');
+  ElMessage.success(`已删除勾选的 ${count} 行`);
 }
 
 async function onSaveEdit() {
@@ -1683,7 +1797,7 @@ watch(
         </div>
         <div class="divider" />
         <div class="item danger" :class="{ disabled: !canDeleteRow }" @click="canDeleteRow && onDelete()">
-          {{ $tr('删除') }}
+          {{ $tr(deleteMenuLabel) }}
         </div>
       </div>
     </Teleport>

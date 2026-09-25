@@ -25,11 +25,11 @@ export function initBuiltinProviders() {
 }
 
 export function testProvider(data: { providerId: number | string; modelCode?: string }) {
-  return request({ url: pUrl + 'test', method: 'post', data });
+  return request({ url: pUrl + 'test', method: 'post', data, timeout: 0 });
 }
 
 export function fetchProviderModels(data: { providerId: number | string }) {
-  return request({ url: pUrl + 'fetchModels', method: 'post', data });
+  return request({ url: pUrl + 'fetchModels', method: 'post', data, timeout: 0 });
 }
 
 export function listModels(providerId: number | string) {

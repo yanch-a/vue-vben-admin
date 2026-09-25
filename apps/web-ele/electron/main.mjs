@@ -488,7 +488,27 @@ function installApplicationMenu() {
       ],
     },
     { role: 'viewMenu', label: desktopText('视图', 'View') },
-    { role: 'windowMenu', label: desktopText('窗口', 'Window') },
+    // 自定义窗口菜单：不把 Cmd/Ctrl+W 绑到关窗口，留给查询编辑器关页签
+    {
+      label: desktopText('窗口', 'Window'),
+      submenu: [
+        { role: 'minimize', label: desktopText('最小化', 'Minimize') },
+        { role: 'zoom', label: desktopText('缩放', 'Zoom') },
+        { type: 'separator' },
+        ...(process.platform === 'darwin'
+          ? [{ role: 'front', label: desktopText('前置全部窗口', 'Bring All to Front') }]
+          : []),
+        {
+          accelerator: 'CmdOrCtrl+Shift+W',
+          click: () => {
+            if (mainWindow && !mainWindow.isDestroyed()) {
+              mainWindow.close();
+            }
+          },
+          label: desktopText('关闭窗口', 'Close Window'),
+        },
+      ],
+    },
   ];
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
 }

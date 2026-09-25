@@ -133,11 +133,11 @@ export function submitWorkOrder(
 
 /** 规则预审（快路径）：立即返回规则步骤与报告，不调大模型 */
 export function auditWorkOrderRules(id: number | string) {
-  return request({ url: url + id + '/audit/rules', method: 'post', timeout: 60_000 });
+  return request({ url: url + id + '/audit/rules', method: 'post', timeout: 0 });
 }
 
 export function auditWorkOrder(id: number | string, data: Record<string, any>) {
-  return request({ url: url + id + '/audit', method: 'post', data, timeout: 120_000 });
+  return request({ url: url + id + '/audit', method: 'post', data, timeout: 0 });
 }
 
 export function reviewWorkOrder(id: number | string, data: Record<string, any>) {
@@ -153,10 +153,10 @@ export function executeWorkOrder(
     url: url + id + '/execute',
     method: 'post',
     data: { allowIncompleteRollback, ...(extra || {}) },
-    timeout: 120_000,
+    timeout: 0,
   });
 }
 
 export function downloadWorkOrderRollback(id: number | string) {
-  return request({ url: url + id + '/rollback', method: 'get', responseType: 'blob' });
+  return request({ url: url + id + '/rollback', method: 'get', responseType: 'blob', timeout: 0 });
 }

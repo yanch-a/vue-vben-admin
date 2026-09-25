@@ -164,7 +164,7 @@ watch(
 <template>
   <div ref="rootRef" class="renderer">
     <div v-if="isText" class="text-widget" :style="textStyle">
-      {{ spec.textContent || '请输入文本内容' }}
+      {{ spec.textContent || $tr('请输入文本内容') }}
     </div>
     <div v-else-if="isClock" class="text-widget clock-widget" :style="textStyle">
       {{ clockText }}
@@ -173,15 +173,15 @@ watch(
       <img v-if="mediaSrc && !mediaBroken" :src="mediaSrc" alt="" @error="onMediaError" />
       <div v-else class="media-empty">
         <span class="media-empty-icon" aria-hidden="true">IMG</span>
-        <strong>{{ mediaBroken ? '图片加载失败' : '图片组件' }}</strong>
-        <span>{{ mediaBroken ? '请检查地址是否可访问' : '请在右侧填写或上传图片地址' }}</span>
+        <strong>{{ mediaBroken ? $tr('图片加载失败') : $tr('图片组件') }}</strong>
+        <span>{{ mediaBroken ? $tr('请检查地址是否可访问') : $tr('请在右侧填写或上传图片地址') }}</span>
       </div>
     </div>
     <div v-else-if="isIframe" class="media-widget">
       <iframe v-if="mediaSrc" :src="mediaSrc" title="embed" frameborder="0" />
       <div v-else class="media-empty">
-        <strong>网页组件</strong>
-        <span>请在右侧填写网页地址</span>
+        <strong>{{ $tr('网页组件') }}</strong>
+        <span>{{ $tr('请在右侧填写网页地址') }}</span>
       </div>
     </div>
     <div v-else-if="isKpi" class="kpi">{{ kpiValue ?? '—' }}</div>

@@ -67,6 +67,7 @@ export function startDbCopy(data: DbCopyStartPayload) {
     url: dbCopyUrl + 'start',
     method: 'post',
     data,
+    timeout: 0,
   });
 }
 
@@ -75,8 +76,8 @@ export function listDbCopyTasks(showErrorMessage = true) {
   return request({
     url: dbCopyUrl + 'tasks',
     method: 'get',
-    // 复制进行中列表可能较大，避免默认 10s 超时把连接掐断
-    timeout: 30_000,
+    // 复制任务查询不限制客户端等待，避免默认 10 秒把连接掐断
+    timeout: 0,
     showErrorMessage,
   });
 }
@@ -86,7 +87,7 @@ export function getDbCopyTask(taskId: string, showErrorMessage = true) {
   return request({
     url: dbCopyUrl + 'task/' + encodeURIComponent(taskId),
     method: 'get',
-    timeout: 30_000,
+    timeout: 0,
     showErrorMessage,
   });
 }

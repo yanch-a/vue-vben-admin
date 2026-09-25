@@ -399,6 +399,15 @@ onBeforeUnmount(() => {
   ro = null;
 });
 
+/** 新结果到来时把横向、纵向滚动都回到起点，避免沿用上一条 SQL 的滚动位置 */
+function resetResultScroll() {
+  scrollTop.value = 0;
+  const el = scrollRef.value;
+  if (!el) return;
+  el.scrollTop = 0;
+  el.scrollLeft = 0;
+}
+
 watch(
   () => [
     props.columns.join('\0'),
@@ -409,6 +418,18 @@ watch(
   () => {
     userResized.value = false;
     initColWidths();
+  },
+);
+
+/**
+ * 换了一份结果就回到左上角。
+ * 只看 rows / columns 引用，单元格原地修改不会把滚动条拽回去。
+ */
+watch(
+  () => [props.rows, props.columns] as const,
+  () => {
+    resetResultScroll();
+    void nextTick(resetResultScroll);
   },
 );
 

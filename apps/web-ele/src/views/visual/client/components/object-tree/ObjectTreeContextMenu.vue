@@ -10,6 +10,7 @@ defineOptions({ name: 'ObjectTreeContextMenu' });
 export type TreeCtxAction =
   | 'refreshInstance'
   | 'refreshTree'
+  | 'refreshTables'
   | 'createDatabase'
   | 'dropDatabase'
   | 'importData'
@@ -136,6 +137,8 @@ function onAction(action: TreeCtxAction) {
         </div>
       </template>
       <template v-else-if="isTablesFolder()">
+        <div class="item" @click="onAction('refreshTables')">{{ $tr('刷新') }}</div>
+        <div class="divider" />
         <div class="item" @click="onAction('createTable')">{{ $tr('创建表') }}</div>
         <div class="item" @click="onAction('copyDbToHost')">{{ $tr('将表复制到不同主机') }}</div>
       </template>

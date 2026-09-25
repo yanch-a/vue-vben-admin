@@ -41,7 +41,7 @@ import {
   VbenIconButton,
 } from '@vben-core/shadcn-ui';
 
-import { useFullscreen, useMagicKeys, whenever } from '@vueuse/core';
+import { useFullscreen } from '@vueuse/core';
 
 import { GlobalSearch } from '../global-search';
 import { LockScreenModal } from '../lock-screen';
@@ -102,7 +102,6 @@ const props = withDefaults(defineProps<Props>(), {
 const emit = defineEmits<{ clearPreferencesAndLogout: []; logout: [] }>();
 
 const {
-  globalLogoutShortcutKey,
   globalLockScreenShortcutKey,
   globalSearchShortcutKey,
   isDark,
@@ -214,10 +213,6 @@ const hasAnyInDropdown = computed(
 
 const altView = computed(() => (isWindowsOs() ? 'Alt' : '⌥'));
 
-const enableLogoutShortcutKey = computed(() => {
-  return showLogoutInDropdown.value && globalLogoutShortcutKey.value;
-});
-
 const enableLockScreenShortcutKey = computed(() => {
   return showLockInDropdown.value && globalLockScreenShortcutKey.value;
 });
@@ -298,20 +293,6 @@ async function handleLocaleChange(event: Event, value: 'en-US' | 'zh-CN') {
   await loadLocaleMessages(value);
   showLanguageList.value = false;
   openPopover.value = false;
-}
-
-// 已关闭锁屏快捷键（Alt+L / L），避免输入字母 L 误触锁屏
-if (preferences.shortcutKeys.enable) {
-  const keys = useMagicKeys();
-  const logoutKey = keys['Alt+KeyQ'];
-
-  if (logoutKey) {
-    whenever(logoutKey, () => {
-      if (enableLogoutShortcutKey.value) {
-        handleLogout();
-      }
-    });
-  }
 }
 </script>
 
@@ -434,9 +415,6 @@ if (preferences.shortcutKeys.enable) {
               <LogOut class="size-4" />
             </VbenIconButton>
             {{ $t('common.logout') }}
-            <DropdownMenuShortcut v-if="enableLogoutShortcutKey">
-              {{ altView }} Q
-            </DropdownMenuShortcut>
           </DropdownMenuItem>
         </template>
         <template

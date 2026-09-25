@@ -2,7 +2,7 @@
 /**
  * 顶部已打开连接栏
  * - 单击切换；关闭按钮关闭页签
- * - 连接页签右键：刷新 / 改颜色 / 导入导出本连接查询
+ * - 连接页签右键：刷新 / 改颜色 / 已执行 SQL / 导入导出本连接查询
  * - 空白区域右键：导入 / 导出全部临时查询记录（本地会话缓存）
  * @author yanch
  */
@@ -35,6 +35,8 @@ const emit = defineEmits<{
   importSession: [file: File];
   /** 导出当前右键连接的查询记录 */
   exportConnectionQueries: [sessionId: number | string];
+  /** 查看该连接在前端缓存的最近已执行 SQL */
+  executedSql: [sessionId: number | string];
   /** 导入查询记录到当前右键连接 */
   importConnectionQueries: [sessionId: number | string, file: File];
 }>();
@@ -137,6 +139,12 @@ function onRefreshBrowse() {
   const sid = ctx.sessionId;
   closeCtx();
   if (sid) emit('refresh', sid);
+}
+
+function onShowExecutedSql() {
+  const sid = ctx.sessionId;
+  closeCtx();
+  if (sid) emit('executedSql', sid);
 }
 
 function onEditColor() {
@@ -285,6 +293,7 @@ defineExpose({
       >
         <template v-if="ctx.mode === 'tab'">
           <div class="item" @click="onRefreshBrowse">{{ $tr('刷新当前浏览对象') }}</div>
+          <div class="item" @click="onShowExecutedSql">{{ $tr('已执行 SQL') }}</div>
           <div class="item" @click="onEditColor">{{ $tr('修改浏览对象颜色') }}</div>
           <div class="item divider" @click="onExportConnectionQueries">
             {{ $tr('导出本连接查询记录') }}

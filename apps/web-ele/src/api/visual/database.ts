@@ -10,6 +10,8 @@ export function testConnection(dbConfigId: any) {
   return request({
     url: databaseUrl + 'testConnection/' + dbConfigId,
     method: 'get',
+    // 0：不限制客户端等待。连库、查元数据、执行和导出都可能超过默认 10 秒。
+    timeout: 0,
   })
 }
 
@@ -40,6 +42,7 @@ export function testConnectionDraft(data: {
     url: databaseUrl + 'testConnectionDraft',
     method: 'post',
     data,
+    timeout: 0,
   })
 }
 
@@ -73,6 +76,7 @@ export function getInstances(dbConfigId: any) {
   return request({
     url: databaseUrl + 'getInstances/' + dbConfigId,
     method: 'get',
+    timeout: 0,
   })
 }
 
@@ -88,6 +92,7 @@ export function getTables(dbConfigId: any, instanceName: any) {
       '/' +
       encodeURIComponent(instanceName),
     method: 'get',
+    timeout: 0,
   })
 }
 
@@ -104,6 +109,7 @@ export function getTableTree(dbConfigId: any, instanceName: any) {
       '/' +
       encodeURIComponent(instanceName),
     method: 'get',
+    timeout: 0,
   })
 }
 
@@ -121,6 +127,7 @@ export function getTableColumns(dbConfigId: any, instanceName: any, tableName: a
       '/' +
       encodeURIComponent(tableName),
     method: 'get',
+    timeout: 0,
   })
 }
 
@@ -131,6 +138,7 @@ export function getTablesWithColumns(dbConfigId: any, instanceName: any) {
   return request({
     url: databaseUrl + 'getTablesWithColumns/' + dbConfigId + '/' + instanceName,
     method: 'get',
+    timeout: 0,
   })
 }
 
@@ -148,6 +156,7 @@ export function getTableDDL(dbConfigId: any, instanceName: any, tableName: any) 
       '/' +
       tableName,
     method: 'get',
+    timeout: 0,
   })
 }
 
@@ -167,6 +176,7 @@ export function getTableInfo(
       '/' +
       encodeURIComponent(tableName),
     method: 'get',
+    timeout: 0,
   })
 }
 
@@ -235,6 +245,7 @@ export function executeDml(data: {
     url: databaseUrl + 'executeDml',
     method: 'post',
     data,
+    timeout: 0,
   })
 }
 
@@ -250,6 +261,7 @@ export function executeDdl(data: {
     url: databaseUrl + 'executeDdl',
     method: 'post',
     data,
+    timeout: 0,
   })
 }
 
@@ -268,6 +280,7 @@ export function exportSqlExcel(data: {
     method: 'post',
     responseType: 'blob',
     data,
+    timeout: 0,
   })
 }
 
@@ -281,6 +294,7 @@ export function exportTableSchemaExcel(data: {
     method: 'post',
     responseType: 'blob',
     data,
+    timeout: 0,
   })
 }
 
@@ -301,6 +315,7 @@ export function exportSqlInsert(data: {
     method: 'post',
     responseType: 'blob',
     data,
+    timeout: 0,
   })
 }
 
@@ -329,6 +344,7 @@ export function exportSqlDump(data: {
     responseType: 'blob',
     responseReturn: 'raw',
     data,
+    timeout: 0,
   })
 }
 
@@ -343,6 +359,7 @@ export function executeDmlBatch(data: {
     url: databaseUrl + 'executeDmlBatch',
     method: 'post',
     data,
+    timeout: 0,
   })
 }
 
@@ -350,6 +367,7 @@ export function getViews(dbConfigId: any, instanceName: any) {
   return request({
     url: databaseUrl + 'getViews/' + dbConfigId + '/' + instanceName,
     method: 'get',
+    timeout: 0,
   })
 }
 
@@ -357,6 +375,7 @@ export function getProcedures(dbConfigId: any, instanceName: any) {
   return request({
     url: databaseUrl + 'getProcedures/' + dbConfigId + '/' + instanceName,
     method: 'get',
+    timeout: 0,
   })
 }
 
@@ -364,6 +383,7 @@ export function getFunctions(dbConfigId: any, instanceName: any) {
   return request({
     url: databaseUrl + 'getFunctions/' + dbConfigId + '/' + instanceName,
     method: 'get',
+    timeout: 0,
   })
 }
 
@@ -371,6 +391,7 @@ export function getTriggers(dbConfigId: any, instanceName: any) {
   return request({
     url: databaseUrl + 'getTriggers/' + dbConfigId + '/' + instanceName,
     method: 'get',
+    timeout: 0,
   })
 }
 
@@ -378,6 +399,7 @@ export function getEvents(dbConfigId: any, instanceName: any) {
   return request({
     url: databaseUrl + 'getEvents/' + dbConfigId + '/' + instanceName,
     method: 'get',
+    timeout: 0,
   })
 }
 
@@ -397,5 +419,6 @@ export function getObjectScript(data: {
     url: databaseUrl + 'objectScript',
     method: 'post',
     data,
+    timeout: 0,
   })
 }

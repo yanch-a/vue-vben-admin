@@ -65,6 +65,8 @@ import AiChatWindow from './components/ai/AiChatWindow.vue';
 import AiDockBar from './components/ai/AiDockBar.vue';
 import SchemaDocDrawer from './components/ai/SchemaDocDrawer.vue';
 import QueryHistoryDrawer from './components/ai/QueryHistoryDrawer.vue';
+import ExecutedSqlDrawer from './components/query/ExecutedSqlDrawer.vue';
+import { rememberExecutedSql } from './utils/executedSqlHistory';
 import {
   bindVisualClientFontScope,
   useClientPreferences,
@@ -192,6 +194,12 @@ async function closeTab(tabId: string) {
   closeTabDirect(tabId);
 }
 
+/** 快捷键关闭当前查询：不弹未保存提示，直接丢掉当前页签 */
+function closeActiveQueryTabNow() {
+  if (!activeTabId.value) return;
+  closeTabDirect(activeTabId.value);
+}
+
 async function closeAllTabs() {
   if (!(await confirmDiscardQueryTabs(tabs.value))) return;
   closeAllTabsDirect();
@@ -255,6 +263,12 @@ let offDesktopSessionImport: (() => void) | undefined;
 const aiChatRef = ref<InstanceType<typeof AiChatWindow>>();
 const schemaDocVisible = ref(false);
 const historyVisible = ref(false);
+/** 连接栏右键「已执行 SQL」：只看这个连接在前端记下的最近语句 */
+const executedSqlDrawer = reactive({
+  visible: false,
+  dbConfigId: '' as string | number,
+  connectionName: '',
+});
 /** 右侧工作区 DOM，用于计算可拖拽高度上下限 */
 const rightPaneRef = ref<HTMLElement | null>(null);
 /** 导出 Excel loading */
@@ -1241,6 +1255,15 @@ async function onTreeContextAction(payload: {
     case 'refreshTree':
       await refreshBrowseObjects(undefined, { silent: false });
       return;
+    case 'refreshTables':
+      if (!instanceName) {
+        ElMessage.warning(`请先选择${instanceLabel.value}`);
+        return;
+      }
+      if (await objectTreeRef.value?.reloadTables?.(instanceName)) {
+        ElMessage.success('已刷新 Tables');
+      }
+      return;
     case 'importData':
       if (!activeConnection.value) {
         ElMessage.warning('请先打开数据库连接');
@@ -1478,7 +1501,10 @@ async function onTreeContextAction(payload: {
       return;
     case 'exportTableSql':
       sqlDump.instanceName = instanceName;
-      sqlDump.preselectedTables = tableName ? [tableName] : [];
+      // 必须带限定名。只用裸表名时，PG/Oracle 会导出到默认 schema 里的同名空表，文件里就只剩结构。
+      sqlDump.preselectedTables = tableName
+        ? [node.qualifiedName || node.name || tableName]
+        : [];
       sqlDump.visible = true;
       return;
     case 'openSavedQuery':
@@ -1813,10 +1839,13 @@ async function runSqlBatch(sql: string, source: string) {
     }
     const feedbackSql = sets.find((set: QueryResultSet) => set.success && set.kind === 'query')?.sql;
     if (feedbackSql) void feedbackSchemaDocSilent(feedbackSql);
+    const batchOk = !data?.stopped && !sets.some((set: QueryResultSet) => !set.success);
+    recordExecutedSql(sql, batchOk);
   } catch (e: any) {
     const clientElapsedMs = Math.round(performance.now() - t0);
     const cancelled = abort.signal.aborted || /查询已取消|canceled|cancelled/i.test(String(e?.msg || e?.message || ''));
     const errText = cancelled ? '查询已取消' : pickErrorMsg(e, '执行失败');
+    if (!cancelled) recordExecutedSql(sql, false);
     activeTab.value.result = {
       columns: [],
       rows: [],
@@ -1932,6 +1961,7 @@ async function runSql(opts?: { sql?: string; source?: string }) {
     };
     activeTab.value.resultTab = 'result';
     void feedbackSchemaDocSilent(sql);
+    recordExecutedSql(sql, true);
   } catch (e: any) {
     const clientElapsedMs = Math.round(performance.now() - t0);
     if (abort.signal.aborted || /查询已取消|canceled|cancelled/i.test(String(e?.msg || e?.message || ''))) {
@@ -1958,6 +1988,7 @@ async function runSql(opts?: { sql?: string; source?: string }) {
         sourceSql: sql,
       };
       activeTab.value.resultTab = 'messages';
+      recordExecutedSql(sql, false);
     }
   } finally {
     if (sqlRunRequestId === requestId) {
@@ -2022,6 +2053,7 @@ async function runControlledDdl(
     };
     activeTab.value.resultTab = 'messages';
     ElMessage.success(msg);
+    recordExecutedSql(sql, true);
     if (isMongoDbType(activeConnection.value?.dbType)) {
       objectTreeRef.value?.reload?.();
     } else {
@@ -2030,6 +2062,7 @@ async function runControlledDdl(
   } catch (e: any) {
     const clientElapsedMs = Math.round(performance.now() - t0);
     const errText = pickErrorMsg(e, '执行 DDL 失败');
+    recordExecutedSql(sql, false);
     activeTab.value.result = {
       columns: [],
       rows: [],
@@ -2079,9 +2112,11 @@ async function runFreeDml(sql: string, _source?: string, opts?: { skipConfirm?: 
     };
     activeTab.value.resultTab = 'messages';
     ElMessage.success(msg);
+    recordExecutedSql(sql, true);
   } catch (e: any) {
     const clientElapsedMs = Math.round(performance.now() - t0);
     const errText = pickErrorMsg(e, 'DML 执行失败');
+    recordExecutedSql(sql, false);
     activeTab.value.result = {
       columns: [],
       rows: [],
@@ -2839,7 +2874,7 @@ onMounted(() => {
     void refreshLicenseStatus();
     void bootstrapTasks();
   });
-  window.addEventListener('keydown', onGlobalKeydown);
+  window.addEventListener('keydown', onGlobalKeydown, true);
   // Electron「文件」菜单：与连接栏空白右键共用同一套导入/导出逻辑
   offDesktopSessionExport = window.lemonDesktop?.onExportTemporarySession?.(
     () => exportTemporarySession(),
@@ -2850,6 +2885,21 @@ onMounted(() => {
 });
 
 function onGlobalKeydown(e: KeyboardEvent) {
+  // Ctrl+Q：直接关闭当前查询页签。Ctrl+W 会关网页，Ctrl+Alt+W 会唤起微信。
+  const isCloseQueryKey =
+    e.ctrlKey &&
+    !e.metaKey &&
+    !e.altKey &&
+    !e.shiftKey &&
+    (e.code === 'KeyQ' || e.key.toLowerCase() === 'q');
+  if (isCloseQueryKey) {
+    if (!activeConnection.value || !activeTabId.value) return;
+    // 捕获阶段先关掉，避免 Monaco 把 Ctrl+Q 吃掉后快捷键失效
+    e.preventDefault();
+    e.stopPropagation();
+    closeActiveQueryTabNow();
+    return;
+  }
   if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'k') {
     const t = e.target as HTMLElement | null;
     const tag = t?.tagName;
@@ -3016,6 +3066,30 @@ function onOpenHistory() {
   historyVisible.value = true;
 }
 
+/** 连接页签右键：打开该库最近执行过的 SQL（仅前端缓存） */
+function onShowExecutedSql(sessionId: number | string) {
+  const conn = openConnections.value.find(
+    (item) => String(item.sessionId) === String(sessionId),
+  );
+  if (!conn) return;
+  executedSqlDrawer.dbConfigId = conn.id;
+  executedSqlDrawer.connectionName = conn.dbName || '';
+  executedSqlDrawer.visible = true;
+}
+
+/** 把用户在编辑器里执行的语句记到当前连接，最多 200 条 */
+function recordExecutedSql(sql: string, success: boolean) {
+  const id = activeConnection.value?.id;
+  if (id == null || !String(sql || '').trim()) return;
+  rememberExecutedSql({
+    dbConfigId: id,
+    instanceName:
+      activeTab.value?.instanceName || activeConnection.value?.schemaName || '',
+    sql,
+    success,
+  });
+}
+
 function onHistoryOpenSql(sql: string) {
   openSqlInNewTab(sql, '历史 SQL', activeTab.value?.instanceName);
 }
@@ -3058,7 +3132,7 @@ watch(
 
 onBeforeUnmount(() => {
   unbindClientFontScope?.();
-  window.removeEventListener('keydown', onGlobalKeydown);
+  window.removeEventListener('keydown', onGlobalKeydown, true);
   offDesktopSessionExport?.();
   offDesktopSessionImport?.();
   offDesktopSessionExport = undefined;
@@ -3108,6 +3182,7 @@ onBeforeUnmount(() => {
         @import-session="importTemporarySession"
         @export-connection-queries="exportConnectionQueries"
         @import-connection-queries="importConnectionQueries"
+        @executed-sql="onShowExecutedSql"
       />
 
       <div
@@ -3307,6 +3382,7 @@ onBeforeUnmount(() => {
               :load-tables="loadEditorTables"
               @execute="runSql"
               @save="onSaveQuery"
+              @close-tab="closeActiveQueryTabNow"
               @import-file="onImportSqlFile"
               @ask-ai="onAskAiFromEditor"
               @view-table-info="onViewTableInfoFromEditor"
@@ -3394,6 +3470,12 @@ onBeforeUnmount(() => {
       :db-config-id="activeConnection?.id"
       :instance-name="activeTab?.instanceName"
       @open-sql="onHistoryOpenSql"
+    />
+
+    <ExecutedSqlDrawer
+      v-model="executedSqlDrawer.visible"
+      :db-config-id="executedSqlDrawer.dbConfigId"
+      :connection-name="executedSqlDrawer.connectionName"
     />
 
     <ConnectionDialog

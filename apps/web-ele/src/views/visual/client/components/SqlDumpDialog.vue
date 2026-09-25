@@ -45,7 +45,8 @@ const dialect = computed(() => resolveSqlDialect(props.dbType));
 
 const loadingTables = ref(false);
 const exporting = ref(false);
-const tableNames = ref<string[]>([]);
+/** key 用限定名（schema.table），和对象树右键带过来的名字一致，避免导出到同名空表 */
+const tableOptions = ref<{ key: string; label: string }[]>([]);
 const checkedTables = ref<string[]>([]);
 const fileName = ref('dump.sql');
 
@@ -75,20 +76,44 @@ const dumpExtension = computed(() => {
 
 async function loadTables() {
   if (!props.dbConfigId || !props.instanceName) {
-    tableNames.value = [];
+    tableOptions.value = [];
+    checkedTables.value = [];
     return;
   }
   loadingTables.value = true;
   try {
     const res: any = await getTables(props.dbConfigId, props.instanceName);
     const list = (res?.data || res || [])
-      .map((t: any) => t.tableName)
-      .filter(Boolean);
-    tableNames.value = list;
-    const pre = (props.preselectedTables || []).filter((t) => list.includes(t));
-    checkedTables.value = pre.length ? pre : [...list];
+      .map((t: any) => {
+        const key = String(t?.qualifiedName || t?.tableName || '').trim();
+        if (!key) return null;
+        const raw = String(t?.rawTableName || t?.tableName || key);
+        const schema = String(t?.schemaName || '').trim();
+        const label =
+          schema && key.toLowerCase() !== raw.toLowerCase()
+            ? `${schema}.${raw}`
+            : raw;
+        return { key, label };
+      })
+      .filter(Boolean) as { key: string; label: string }[];
+    tableOptions.value = list;
+    const keys = list.map((t) => t.key);
+    const pre = (props.preselectedTables || []).filter((t) => keys.includes(t));
+    // 右键带来的是 schema.table，列表若仍是裸表名，再按后缀对齐，避免误选全库
+    const resolved =
+      pre.length > 0
+        ? pre
+        : keys.filter((key) =>
+            (props.preselectedTables || []).some(
+              (name) =>
+                key === name ||
+                key.endsWith(`.${name}`) ||
+                name.endsWith(`.${key}`),
+            ),
+          );
+    checkedTables.value = resolved.length ? resolved : [...keys];
   } catch {
-    tableNames.value = [];
+    tableOptions.value = [];
     checkedTables.value = [];
   } finally {
     loadingTables.value = false;
@@ -122,7 +147,7 @@ watch(
 );
 
 function toggleAll(check: boolean) {
-  checkedTables.value = check ? [...tableNames.value] : [];
+  checkedTables.value = check ? tableOptions.value.map((t) => t.key) : [];
 }
 
 async function resolveDownloadExtension(fileBlob: Blob, response: any) {
@@ -214,9 +239,9 @@ async function onExport() {
       <div class="mode-row">
         <span class="label">{{ $tr('SQL导出') }}</span>
         <ElRadioGroup v-model="form.mode" size="small">
-          <ElRadioButton label="structure">{{ $tr('结构唯一') }}</ElRadioButton>
-          <ElRadioButton label="data">{{ $tr('仅有数据') }}</ElRadioButton>
-          <ElRadioButton label="both">{{ $tr('结构和数据') }}</ElRadioButton>
+          <ElRadioButton value="structure">{{ $tr('仅结构') }}</ElRadioButton>
+          <ElRadioButton value="data">{{ $tr('仅数据') }}</ElRadioButton>
+          <ElRadioButton value="both">{{ $tr('结构和数据') }}</ElRadioButton>
         </ElRadioGroup>
       </div>
       <div class="meta-row">
@@ -240,11 +265,11 @@ async function onExport() {
           <ElCheckboxGroup v-model="checkedTables" class="table-checks">
             <div class="folder">{{ $tr('表') }}</div>
             <ElCheckbox
-              v-for="name in tableNames"
-              :key="name"
-              :label="name"
+              v-for="item in tableOptions"
+              :key="item.key"
+              :value="item.key"
             >
-              {{ name }}
+              {{ item.label }}
             </ElCheckbox>
           </ElCheckboxGroup>
         </ElScrollbar>

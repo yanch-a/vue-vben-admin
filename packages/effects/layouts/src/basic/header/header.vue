@@ -14,8 +14,6 @@ import {
   VbenTooltip,
 } from '@vben-core/shadcn-ui';
 
-import { useMagicKeys, whenever } from '@vueuse/core';
-
 import {
   GlobalSearch,
   LanguageToggle,
@@ -64,7 +62,6 @@ const REFERENCE_VALUE = 100;
 
 const accessStore = useAccessStore();
 const {
-  globalLogoutShortcutKey,
   globalSearchShortcutKey,
   preferencesButtonPosition,
 } = usePreferences();
@@ -80,10 +77,6 @@ const showLockInHeader = computed(
 const showLogoutInHeader = computed(
   () => preferences.widget.logoutButtonPosition === 'header',
 );
-
-const enableLogoutShortcutKey = computed(() => {
-  return showLogoutInHeader.value && globalLogoutShortcutKey.value;
-});
 
 const [LockModal, lockModalApi] = useVbenModal({
   connectedComponent: LockScreenModal,
@@ -115,20 +108,6 @@ function handleLogout() {
 function handleSubmitLogout() {
   emit('logout');
   logoutModalApi.close();
-}
-
-// 快捷键：已关闭锁屏快捷键（Alt+L / L），避免输入字母 L 误触锁屏
-if (preferences.shortcutKeys.enable) {
-  const keys = useMagicKeys();
-  const logoutKey = keys['Alt+KeyQ'];
-
-  if (logoutKey) {
-    whenever(logoutKey, () => {
-      if (enableLogoutShortcutKey.value) {
-        handleLogout();
-      }
-    });
-  }
 }
 
 /**

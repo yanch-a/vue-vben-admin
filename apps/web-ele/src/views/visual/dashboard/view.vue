@@ -174,10 +174,10 @@ onBeforeUnmount(() => {
     :style="letterboxStyle"
     @mousemove="bumpStatus"
   >
-    <ElResult v-if="loadError" icon="error" title="大屏无法显示" :sub-title="loadError">
+    <ElResult v-if="loadError" icon="error" :title="$tr('大屏无法显示')" :sub-title="$tr(loadError)">
       <template #extra>
-        <ElButton type="primary" @click="load">重新加载</ElButton>
-        <ElButton @click="goWorkbench">返回工作台</ElButton>
+        <ElButton type="primary" @click="load">{{ $tr('重新加载') }}</ElButton>
+        <ElButton @click="goWorkbench">{{ $tr('返回工作台') }}</ElButton>
       </template>
     </ElResult>
     <div v-if="bundle" class="screen" :style="screenStyle">
@@ -195,10 +195,10 @@ onBeforeUnmount(() => {
       </article>
     </div>
     <div class="status" :class="{ hidden: !statusVisible && !loadError }">
-      <span>{{ bundle?.refreshMode === 'LIVE' ? '实时数据' : `快照：${bundle?.generatedAt || '—'}` }}</span>
-      <span v-if="bundle?.stale" class="warning" :title="bundle?.lastRefreshError">刷新失败，正在展示上一份数据</span>
-      <button type="button" @click="load">{{ bundle?.refreshMode === 'LIVE' ? '刷新数据' : '重新加载' }}</button>
-      <button type="button" @click="toggleFullscreen">{{ isFullscreen ? '退出全屏' : '全屏 (F)' }}</button>
+      <span>{{ bundle?.refreshMode === 'LIVE' ? $tr('实时数据') : ($tr('快照：') + (bundle?.generatedAt || '—')) }}</span>
+      <span v-if="bundle?.stale" class="warning" :title="bundle?.lastRefreshError">{{ $tr('刷新失败，正在展示上一份数据') }}</span>
+      <button type="button" @click="load">{{ bundle?.refreshMode === 'LIVE' ? $tr('刷新数据') : $tr('重新加载') }}</button>
+      <button type="button" @click="toggleFullscreen">{{ isFullscreen ? $tr('退出全屏') : $tr('全屏 (F)') }}</button>
     </div>
   </div>
 </template>

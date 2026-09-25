@@ -163,9 +163,6 @@ const shortcutKeysEnable = defineModel<boolean>('shortcutKeysEnable');
 const shortcutKeysGlobalSearch = defineModel<boolean>(
   'shortcutKeysGlobalSearch',
 );
-const shortcutKeysGlobalLogout = defineModel<boolean>(
-  'shortcutKeysGlobalLogout',
-);
 const shortcutKeysGlobalEscape = defineModel<boolean>(
   'shortcutKeysGlobalEscape',
 );
@@ -560,7 +557,6 @@ function handleCustomPreferencesUpdate(updates: CustomPreferencesRecord) {
                 v-model:shortcut-keys-enable="shortcutKeysEnable"
                 v-model:shortcut-keys-global-search="shortcutKeysGlobalSearch"
                 v-model:shortcut-keys-lock-screen="shortcutKeysGlobalLockScreen"
-                v-model:shortcut-keys-logout="shortcutKeysGlobalLogout"
                 v-model:shortcut-keys-escape="shortcutKeysGlobalEscape"
               />
             </Block>

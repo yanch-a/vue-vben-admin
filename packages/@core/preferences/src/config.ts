@@ -80,7 +80,7 @@ const defaultPreferences: Preferences = {
     enable: true,
     globalEscape: false,
     globalLockScreen: true,
-    globalLogout: true,
+    globalLogout: false,
     globalPreferences: true,
     globalSearch: true,
   },

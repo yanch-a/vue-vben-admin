@@ -128,5 +128,6 @@ export function exportQueryResultExcel(data: {
     method: 'post',
     responseType: 'blob',
     data,
+    timeout: 0,
   });
 }

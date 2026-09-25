@@ -126,7 +126,7 @@ export function previewChart(data: ChartAsset) {
     url: `${chartUrl}preview`,
     method: 'post',
     data,
-    timeout: 120_000,
+    timeout: 0,
   });
 }
 
@@ -134,7 +134,7 @@ export function runChart(id: number | string) {
   return request({
     url: `${chartUrl}run/${id}`,
     method: 'post',
-    timeout: 120_000,
+    timeout: 0,
   });
 }
 
@@ -162,7 +162,7 @@ export function previewScreen(
     url: `${screenUrl}preview`,
     method: 'post',
     data: { config, params },
-    timeout: 120_000,
+    timeout: 0,
   });
 }
 
@@ -170,7 +170,7 @@ export function publishScreen(id: number | string) {
   return request({
     url: `${screenUrl}publish/${id}`,
     method: 'post',
-    timeout: 120_000,
+    timeout: 0,
   });
 }
 
@@ -182,7 +182,7 @@ export function runtimeScreen(
     url: `${screenUrl}runtime/${id}`,
     method: 'post',
     data: { params },
-    timeout: 120_000,
+    timeout: 0,
   });
 }
 
@@ -190,7 +190,7 @@ export function refreshScreen(id: number | string) {
   return request({
     url: `${screenUrl}refresh/${id}`,
     method: 'post',
-    timeout: 120_000,
+    timeout: 0,
   });
 }
 

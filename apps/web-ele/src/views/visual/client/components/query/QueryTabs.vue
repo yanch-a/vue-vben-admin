@@ -109,7 +109,7 @@ function onTabContextMenu(e: MouseEvent, tab: QueryTab) {
   e.preventDefault();
   e.stopPropagation();
   const pad = 8;
-  const menuW = 160;
+  const menuW = 220;
   const menuH = 120;
   let x = e.clientX;
   let y = e.clientY;
@@ -196,7 +196,10 @@ onBeforeUnmount(() => {
         @click.stop
         @contextmenu.prevent
       >
-        <div class="item" @click="onCloseCurrent">{{ $tr('关闭当前') }}</div>
+        <div class="item item-with-kbd" @click="onCloseCurrent">
+          <span>{{ $tr('关闭当前') }}</span>
+          <span class="kbd">Ctrl+Q</span>
+        </div>
         <div class="item" @click="onCloseAll">{{ $tr('关闭所有') }}</div>
         <div class="item" @click="onCloseOthers">{{ $tr('关闭其他') }}</div>
       </div>
@@ -340,6 +343,16 @@ onBeforeUnmount(() => {
   padding: 8px 14px;
   cursor: pointer;
   white-space: nowrap;
+}
+.query-tabs-ctx-menu .item-with-kbd {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 28px;
+}
+.query-tabs-ctx-menu .kbd {
+  color: var(--el-text-color-secondary);
+  font-size: 12px;
 }
 .query-tabs-ctx-menu .item:hover {
   background: var(--el-fill-color-light);

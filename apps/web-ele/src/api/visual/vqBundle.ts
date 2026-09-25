@@ -42,6 +42,7 @@ export function exportVqBundle(data: {
     method: 'post',
     data,
     responseType: 'blob',
+    timeout: 0,
   });
 }
 
@@ -52,6 +53,7 @@ export function previewVqBundleImport(form: FormData) {
     method: 'post',
     data: form,
     headers: { 'Content-Type': 'multipart/form-data' },
+    timeout: 0,
   });
 }
 
@@ -62,6 +64,7 @@ export function importVqBundle(form: FormData) {
     method: 'post',
     data: form,
     headers: { 'Content-Type': 'multipart/form-data' },
+    timeout: 0,
   });
 }
 
