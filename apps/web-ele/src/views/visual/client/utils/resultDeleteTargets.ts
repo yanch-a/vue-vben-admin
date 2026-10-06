@@ -10,9 +10,6 @@
  */
 import { toRaw } from 'vue';
 
-/** 与后台 executeDmlBatch 单次事务上限一致，超出则整批取消，避免拆开后删一半 */
-export const MAX_DELETE_STATEMENTS = 50;
-
 export type DeleteTargetPlan<T> =
   | { ok: true; mode: 'checked' | 'context'; rows: T[] }
   | { ok: false; reason: 'empty' | 'stale' };

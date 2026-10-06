@@ -14,8 +14,13 @@ export interface DirtyRowEdit {
   rowIndex: number;
   original: Record<string, unknown>;
   edited: Record<string, unknown>;
-  /** 实际变化的列，生成 UPDATE 时只 SET 这些列 */
+  /** 实际变化的列。UPDATE 只 SET 这些列；INSERT 只写入这些列 */
   changedColumns: string[];
+  /**
+   * 结果区底部追加的新行。
+   * 为 true 时保存生成 INSERT，而不是按原值 WHERE 的 UPDATE。
+   */
+  inserted?: boolean;
 }
 
 function isNullish(v: unknown): boolean {

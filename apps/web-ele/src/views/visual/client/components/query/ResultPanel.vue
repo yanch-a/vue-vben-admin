@@ -1,8 +1,10 @@
 <script lang="ts" setup>
 /**
  * 查询结果面板
- * - 工具栏：表格编辑、导出 Excel/SQL、复制全部/选定行（TSV 可粘贴 Excel）
+ * - 工具栏：表格编辑、添加行、导出 Excel/SQL、复制全部/选定行（TSV 可粘贴 Excel）
  * - 选中行/单元格右键：修改 / 复制单元格 / 格式化显示 / 拷贝 INSERT·UPDATE / 复制行 / 删除
+ * - 添加行：进入编辑，在最底部追加空行；填过的字段保存时 INSERT，留空字段不写入
+ * - 复制行：把当前行字段复制成底部新行，改完后同样按 INSERT 保存
  * - 单击单元格：选中行 + 单元格边框高亮；Ctrl+C 复制当前单元格
  * - 表格编辑：同一张结果表点单元格改，脏行底色，保存时按原值 WHERE 逐行 UPDATE（主键可改）
  * - 联表：改哪张表就必须带上该表主键，只按主键 UPDATE，不按全列定位
@@ -33,7 +35,6 @@ import { ElCheckbox, ElMessage, ElMessageBox } from 'element-plus';
 import { buildResultTsv } from '../../utils/resultClipboard';
 import {
   dedupeDeleteSql,
-  MAX_DELETE_STATEMENTS,
   planDeleteTargets,
   sameDeletePlan,
 } from '../../utils/resultDeleteTargets';
@@ -130,7 +131,7 @@ const selectedRows = ref<Record<string, any>[]>([]);
 const tableElRef = ref<{
   getSelectionRows?: () => Record<string, any>[];
   clearSelection?: () => void;
-  scrollToRow?: (index: number) => void;
+  scrollToRow?: (index: number, resetX?: boolean) => void;
 } | null>(null);
 /** 结果面板根节点：用于判断 Ctrl+F 是否落在结果区 */
 const panelRef = ref<HTMLElement | null>(null);
@@ -168,6 +169,11 @@ const editMode = ref(false);
 const sheetSaving = ref(false);
 const dirtyCount = ref(0);
 const dirtyIndexSet = shallowRef(new Set<number>());
+/**
+ * 本次编辑在结果底部追加的行。
+ * 这些行不在原查询结果里，保存时走 INSERT；下标只往末尾加，不插到中间。
+ */
+const newRowIndexes = shallowRef(new Set<number>());
 /** 编辑副本（浅拷贝，不包深层响应式） */
 const editRows = shallowRef<Record<string, any>[]>([]);
 /** 进入编辑时的原值快照，WHERE / 对比用 */
@@ -239,6 +245,45 @@ const deleteMenuLabel = computed(() => {
   return count > 0 ? `删除已勾选的 ${count} 行` : '删除';
 });
 const canCopyInsert = computed(() => canMutate.value && !isJoinQuery.value);
+
+/**
+ * 单表且能识别目标表时才允许新增。
+ * 联表一行可能跨多张表，没有唯一的 INSERT 目标。
+ */
+const canAddRow = computed(
+  () =>
+    !isJoinQuery.value &&
+    !!props.tableRef?.table &&
+    columns.value.length > 0 &&
+    !props.executing &&
+    !sheetSaving.value,
+);
+/** 右键「复制行」：当前有行，且这张结果允许新增 */
+const canDuplicateRow = computed(
+  () => canAddRow.value && !!selectedRow.value,
+);
+const addRowTitle = computed(() => {
+  if (isJoinQuery.value) return '联表结果不能新增行，请对单表查询';
+  if (!props.tableRef?.table) return '无法识别结果对应的表，不能新增行';
+  if (!columns.value.length) return '当前没有结果列，不能新增行';
+  return '在表格底部添加一行，填写后保存';
+});
+/**
+ * 保存按钮要在失焦前提前可点。
+ * 新增行还没改过时 dirtyCount 仍是 0，若这时按钮是禁用的，点保存会先失焦写回、点击却落空。
+ */
+const pendingSaveCount = computed(() => {
+  const seen = new Set<number>();
+  let count = 0;
+  dirtyIndexSet.value.forEach((i) => {
+    seen.add(i);
+    count += 1;
+  });
+  newRowIndexes.value.forEach((i) => {
+    if (!seen.has(i)) count += 1;
+  });
+  return count;
+});
 
 /** 进入表格编辑不依赖当前选中行；单表或联表均可（联表按各表主键保存） */
 const canEnterSheet = computed(
@@ -331,7 +376,10 @@ function previewSql(sql: string): string {
 
 function focusResultSet(index: number) {
   if (index === focusedSet.value) return;
-  if (editMode.value && dirtyCount.value > 0) {
+  if (
+    editMode.value &&
+    (dirtyCount.value > 0 || newRowIndexes.value.size > 0)
+  ) {
     ElMessage.warning('请先保存或退出当前结果集的表格编辑');
     return;
   }
@@ -339,6 +387,7 @@ function focusResultSet(index: number) {
   editMode.value = false;
   editingCell.value = null;
   dirtyCount.value = 0;
+  newRowIndexes.value = new Set();
   selectedRow.value = null;
   selectedIndex.value = -1;
   selectedCol.value = null;
@@ -396,15 +445,17 @@ const resultTabLabel = computed(() => {
   if (resultSets.value.length > 1) return `结果 (${resultSets.value.length})`;
   const r = props.result;
   if (!r?.columns?.length) return 'Result';
-  const n = r.rowCount ?? r.rows?.length ?? 0;
+  const extra = editMode.value ? newRowIndexes.value.size : 0;
+  const n = (r.rowCount ?? r.rows?.length ?? 0) + extra;
   return `Result (${n})`;
 });
 
-/** 状态栏展示的总行数（优先服务端 rowCount） */
+/** 状态栏行数：服务端行数，再加上本次编辑底部尚未落库的新行 */
 const statusRowCount = computed(() => {
   const r = props.result;
-  if (!r?.columns?.length) return 0;
-  return r.rowCount ?? r.rows?.length ?? 0;
+  const extra = editMode.value ? newRowIndexes.value.size : 0;
+  if (!r?.columns?.length) return extra;
+  return (r.rowCount ?? r.rows?.length ?? 0) + extra;
 });
 
 /** 修改弹窗 label 按最长列名自适应，避免截断 */
@@ -469,7 +520,7 @@ function onRowContextMenu(
   resultFocused.value = true;
   const pad = 8;
   const menuW = 220;
-  const menuH = 320;
+  const menuH = 380;
   let x = event.clientX;
   let y = event.clientY;
   if (x + menuW > window.innerWidth - pad) x = window.innerWidth - menuW - pad;
@@ -533,7 +584,42 @@ function joinUpdateContext() {
   };
 }
 
+/**
+ * 新增行走 INSERT。只带用户填过的列，留空列不写，好让自增和默认值生效。
+ */
+function buildInsertedRowSql(item: DirtyRowEdit): string {
+  if (isJoinQuery.value) {
+    throw new Error('联表结果不支持新增行，请对单表查询后再添加');
+  }
+  const table = requireTable();
+  const cols = item.changedColumns.filter(
+    (col) => item.edited[col] !== null && item.edited[col] !== undefined,
+  );
+  if (!cols.length) {
+    throw new Error('新增行没有可写入的字段');
+  }
+  if (isMongo.value) {
+    if (!isMongoEditableQuery(props.result?.sourceSql || '')) {
+      throw new Error('MongoDB 聚合/命令结果不支持直接新增，请对单集合执行 find/findOne');
+    }
+    return buildMongoInsertCommand(
+      table,
+      item.edited as Record<string, any>,
+      cols,
+    );
+  }
+  return buildInsertSql(
+    table,
+    item.edited as Record<string, any>,
+    cols,
+    dbType.value,
+  );
+}
+
 function buildEditsSqls(item: DirtyRowEdit): string[] {
+  if (item.inserted) {
+    return [buildInsertedRowSql(item)];
+  }
   if (isMongo.value) {
     if (!isMongoEditableQuery(props.result?.sourceSql || '')) {
       throw new Error('MongoDB 聚合/命令结果不支持直接编辑，请对单集合执行 find/findOne');
@@ -818,12 +904,6 @@ function buildDeleteStatements(rows: Record<string, any>[]):
   if (!sqls.length) {
     return { ok: false, message: '没有可执行的删除语句' };
   }
-  if (!isMongo.value && sqls.length > MAX_DELETE_STATEMENTS) {
-    return {
-      ok: false,
-      message: `一次最多删除 ${MAX_DELETE_STATEMENTS} 行，请减少勾选后再试。本次未删除任何数据。`,
-    };
-  }
   return { ok: true, sqls };
 }
 
@@ -993,16 +1073,57 @@ function resetEditCopies() {
   editRows.value = markRaw(cloneRows(tableRows.value));
   dirtyIndexSet.value = new Set();
   dirtyCount.value = 0;
+  newRowIndexes.value = new Set();
   editingCell.value = null;
   editDraft.value = '';
 }
 
+/** 单元格值拷到新行上，避免和原行共享对象引用 */
+function cloneCellValue(value: unknown): unknown {
+  if (value === null || value === undefined) return null;
+  if (value instanceof Date) return new Date(value.getTime());
+  if (typeof value !== 'object') return value;
+  try {
+    return JSON.parse(JSON.stringify(value));
+  } catch {
+    return value;
+  }
+}
+
+/** 新增行的原值快照：全是 NULL，这样只有用户填过的列会算作改动 */
+function blankRow(): Record<string, any> {
+  const row: Record<string, any> = {};
+  for (const col of columns.value) row[col] = null;
+  return row;
+}
+
+/**
+ * 在编辑副本最底部追加一行。
+ * source 有值时按列复制（复制行）；没有则是空行（添加行）。
+ * 原值保持全 NULL，保存时只 INSERT 填过的列。
+ */
+function appendEditableRow(source?: Record<string, any> | null): number {
+  const row = blankRow();
+  if (source) {
+    for (const col of columns.value) {
+      if (!Object.prototype.hasOwnProperty.call(source, col)) continue;
+      row[col] = cloneCellValue(source[col]);
+    }
+  }
+  const nextRows = editRows.value.slice();
+  nextRows.push(row);
+  const index = nextRows.length - 1;
+  editRows.value = markRaw(nextRows);
+  originalRows = originalRows.concat([blankRow()]);
+  const indexes = new Set(newRowIndexes.value);
+  indexes.add(index);
+  newRowIndexes.value = indexes;
+  refreshDirtySet();
+  return index;
+}
+
 function refreshDirtySet() {
-  const edits = collectDirtyFromRows(
-    originalRows,
-    editRows.value,
-    columns.value,
-  );
+  const edits = collectEdits();
   dirtyIndexSet.value = new Set(edits.map((e) => e.rowIndex));
   dirtyCount.value = edits.length;
 }
@@ -1112,14 +1233,41 @@ async function onCellEditorKeydown(e: KeyboardEvent) {
 }
 
 function collectEdits(): DirtyRowEdit[] {
-  return collectDirtyFromRows(originalRows, editRows.value, columns.value);
+  const fresh = newRowIndexes.value;
+  const updates = collectDirtyFromRows(
+    originalRows,
+    editRows.value,
+    columns.value,
+  ).filter((item) => !fresh.has(item.rowIndex));
+  const inserts: DirtyRowEdit[] = [];
+  const cols = columns.value;
+  fresh.forEach((rowIndex) => {
+    const edited = editRows.value[rowIndex];
+    const original = originalRows[rowIndex] || {};
+    if (!edited) return;
+    const changedColumns = cols.filter(
+      (col) => !sameDbValue(original[col], edited[col]),
+    );
+    if (!changedColumns.length) return;
+    inserts.push({
+      rowIndex,
+      original,
+      edited: { ...edited },
+      changedColumns,
+      inserted: true,
+    });
+  });
+  return [...updates, ...inserts].sort((a, b) => a.rowIndex - b.rowIndex);
 }
 
 function markRowsSaved(rowIndexes: number[]) {
+  const left = new Set(newRowIndexes.value);
   rowIndexes.forEach((i) => {
     const edited = editRows.value[i];
     if (edited) originalRows[i] = { ...edited };
+    left.delete(i);
   });
+  newRowIndexes.value = left;
   refreshDirtySet();
 }
 
@@ -1163,12 +1311,132 @@ async function onExitSheet() {
   editingCell.value = null;
   dirtyCount.value = 0;
   dirtyIndexSet.value = new Set();
+  newRowIndexes.value = new Set();
+}
+
+/**
+ * 添加行 / 复制行共用：不在编辑模式时先进入。
+ * 结果里已经有行时，编辑模式也能改旧行，所以仍做主键确认；空结果只插入，不弹无主键警告。
+ */
+let sheetEntering = false;
+async function enterEditForInsert(): Promise<boolean> {
+  if (isJoinQuery.value || !props.tableRef?.table) {
+    ElMessage.warning('联表结果不支持新增行，请对单表查询后再添加');
+    return false;
+  }
+  if (!columns.value.length) {
+    ElMessage.warning('当前没有结果列，无法新增行');
+    return false;
+  }
+  if (props.executing || sheetSaving.value) return false;
+  if (editMode.value) return true;
+  if (sheetEntering) return false;
+  sheetEntering = true;
+  try {
+    if (tableRows.value.length > 0 && !(await confirmRowMutation('修改'))) {
+      return false;
+    }
+    resetEditCopies();
+    editMode.value = true;
+    return true;
+  } finally {
+    sheetEntering = false;
+  }
+}
+
+/**
+ * 滚到新行。startEdit 为 true 时直接打开第一列，方便空行马上填。
+ * 连等两次 nextTick，是为了赶在虚拟表「换结果回顶」之后再定位。
+ */
+async function focusAppendedRow(index: number, startEdit: boolean) {
+  const row = editRows.value[index] || null;
+  selectedIndex.value = index;
+  selectedRow.value = row;
+  const firstCol = columns.value[0] ?? null;
+  selectedCol.value = firstCol;
+  await nextTick();
+  await nextTick();
+  tableElRef.value?.scrollToRow(index, startEdit);
+  await nextTick();
+  if (startEdit && firstCol) await startEditCell(index, firstCol);
+}
+
+/** 进入编辑，并在最底部加一条可填写的空行 */
+async function onAddRow() {
+  if (props.activeTab !== 'result') {
+    emit('update:activeTab', 'result');
+    await nextTick();
+  }
+  if (!(await enterEditForInsert())) return;
+  const index = appendEditableRow(null);
+  await focusAppendedRow(index, true);
+}
+
+/**
+ * 右键复制行：把当前行的字段复制成底部新行，用户改完再保存为 INSERT。
+ * 主键、唯一列会原样带上，重复时需要先改掉再保存。
+ */
+async function onDuplicateRow() {
+  closeCtxMenu();
+  await commitEditingCell();
+  const source =
+    selectedIndex.value >= 0
+      ? displayRows.value[selectedIndex.value] || selectedRow.value
+      : selectedRow.value;
+  if (!source) return;
+  if (props.activeTab !== 'result') {
+    emit('update:activeTab', 'result');
+    await nextTick();
+  }
+  if (!(await enterEditForInsert())) return;
+  const index = appendEditableRow(source);
+  await focusAppendedRow(index, false);
+  ElMessage.success('已在底部复制一行，修改后点保存');
+}
+
+function describeSave(edits: DirtyRowEdit[]): { title: string; message: string } {
+  if (isJoinQuery.value) {
+    return {
+      title: '保存联表修改（按各表主键定位）',
+      message: `将按行提交 UPDATE（共 ${edits.length} 行），同一行涉及的多表修改在一个事务中完成。改某表字段时必须带该表主键，WHERE 只用主键原值。是否继续？`,
+    };
+  }
+  const insertCount = edits.filter((item) => item.inserted).length;
+  const updateCount = edits.length - insertCount;
+  const bits: string[] = [];
+  if (insertCount) bits.push(`新增 ${insertCount} 行`);
+  if (updateCount) bits.push(`更新 ${updateCount} 行`);
+  const detail: string[] = [];
+  if (insertCount) {
+    detail.push(
+      '新增行只写入已填写的字段，留空的字段不出现在 INSERT 里，交给数据库默认值或自增。',
+    );
+  }
+  if (updateCount) {
+    detail.push(
+      tableHasPk.value
+        ? '更新按修改前的主键定位。'
+        : '当前表没有主键，更新按结果列旧值定位。',
+    );
+  }
+  detail.push('中途失败时，已经成功的行会保留。');
+  const title =
+    insertCount > 0 && updateCount === 0
+      ? '保存新增行'
+      : tableHasPk.value
+        ? '保存表格修改（按主键定位）'
+        : '保存表格修改（无主键）';
+  return {
+    title,
+    message: `将${bits.join('、')}。${detail.join('')}是否继续？`,
+  };
 }
 
 async function onHidePanel() {
   if (!(await confirmLeaveSheet('隐藏结果区'))) return;
   editMode.value = false;
   dirtyCount.value = 0;
+  newRowIndexes.value = new Set();
   closeFind();
   emit('update:visible', false);
 }
@@ -1194,27 +1462,26 @@ async function onSaveSheet() {
     );
     return;
   }
-  if (!(await confirmRowMutation('修改'))) {
-    return;
-  }
   const edits = collectEdits();
   if (!edits.length) {
-    ElMessage.info('没有需要保存的修改');
-    dirtyCount.value = 0;
+    ElMessage.info(
+      newRowIndexes.value.size
+        ? '新增行还没有填写内容，未写入数据库'
+        : '没有需要保存的修改',
+    );
     return;
   }
+  const hasUpdate = edits.some((item) => !item.inserted);
+  if (hasUpdate && !(await confirmRowMutation('修改'))) {
+    return;
+  }
+  const dialog = describeSave(edits);
   try {
-    await ElMessageBox.confirm(
-      isJoinQuery.value
-        ? `将按行提交 UPDATE（共 ${edits.length} 行），同一行涉及的多表修改在一个事务中完成。改某表字段时必须带该表主键，WHERE 只用主键原值。是否继续？`
-        : `将按行依次提交 ${edits.length} 条 UPDATE。主键若被改过，WHERE 使用修改前的原值。中途失败则已成功的行已写入。是否继续？`,
-      isJoinQuery.value
-        ? '保存联表修改（按各表主键定位）'
-        : tableHasPk.value
-          ? '保存表格修改（按主键定位）'
-          : '保存表格修改（无主键）',
-      { type: 'warning', confirmButtonText: '保存', cancelButtonText: '取消' },
-    );
+    await ElMessageBox.confirm(dialog.message, dialog.title, {
+      type: 'warning',
+      confirmButtonText: '保存',
+      cancelButtonText: '取消',
+    });
   } catch {
     return;
   }
@@ -1250,8 +1517,8 @@ async function onSaveSheet() {
   } catch (e: any) {
     ElMessage.error(
       saved.length
-        ? `已保存 ${saved.length} 行，第 ${saved.length + 1} 条失败：${pickErrorText(e, '更新失败')}`
-        : pickErrorText(e, '更新失败'),
+        ? `已保存 ${saved.length} 行，第 ${saved.length + 1} 条失败：${pickErrorText(e, '保存失败')}`
+        : pickErrorText(e, '保存失败'),
     );
   } finally {
     sheetSaving.value = false;
@@ -1502,11 +1769,20 @@ watch(
           <ElButton
             link
             type="primary"
-            :disabled="dirtyCount <= 0 || executing || sheetSaving"
+            :title="addRowTitle"
+            :disabled="!canAddRow"
+            @click="onAddRow"
+          >
+            {{ $tr('添加行') }}
+          </ElButton>
+          <ElButton
+            link
+            type="primary"
+            :disabled="pendingSaveCount <= 0 || executing || sheetSaving"
             :loading="sheetSaving"
             @click="onSaveSheet"
           >
-            {{ $tr('保存修改') }}{{ dirtyCount > 0 ? ` (${dirtyCount})` : '' }}
+            {{ $tr('保存修改') }}{{ pendingSaveCount > 0 ? ` (${pendingSaveCount})` : '' }}
           </ElButton>
           <ElButton
             link
@@ -1516,15 +1792,25 @@ watch(
             {{ $tr('退出编辑') }}
           </ElButton>
         </template>
-        <ElButton
-          v-else
-          link
-          type="primary"
-          :disabled="!canEnterSheet"
-          @click="onEnterSheet"
-        >
-          {{ $tr('表格编辑') }}
-        </ElButton>
+        <template v-else>
+          <ElButton
+            link
+            type="primary"
+            :disabled="!canEnterSheet"
+            @click="onEnterSheet"
+          >
+            {{ $tr('表格编辑') }}
+          </ElButton>
+          <ElButton
+            link
+            type="primary"
+            :title="addRowTitle"
+            :disabled="!canAddRow"
+            @click="onAddRow"
+          >
+            {{ $tr('添加行') }}
+          </ElButton>
+        </template>
         <ElDropdown
           trigger="click"
           :disabled="!canCopyRows || executing"
@@ -1572,7 +1858,7 @@ watch(
           {{ $tr('联表只能按各表主键 UPDATE。改某表字段时，SELECT 必须带上该表主键；两表都有 id 时请写成 别名.id 或 id AS user_id。') }}
         </template>
         <template v-else>
-          {{ $tr('单击单元格编辑，改过的行会整行标黄。主键也可以改，保存时按修改前的原值定位。NULL 显示为 NULL，空着保存仍是 NULL。') }}
+          {{ $tr('单击单元格编辑，改过的行会整行标黄。主键也可以改，保存时按修改前的原值定位。NULL 显示为 NULL，空着保存仍是 NULL。底部新增行左侧有绿线，只保存填写过的字段。') }}
         </template>
       </p>
       <!-- Ctrl+F 查找条（结果区聚焦时可用） -->
@@ -1620,9 +1906,10 @@ watch(
           >
             <header class="result-set-head">
               <span class="result-set-index">#{{ set.index || index + 1 }}</span>
-              <span class="result-set-kind">{{ set.kind === 'dml' ? 'DML' : set.kind === 'ddl' ? 'DDL' : '查询' }}</span>
+              <span class="result-set-kind">{{ set.kind === 'dml' ? 'DML' : set.kind === 'ddl' ? 'DDL' : set.kind === 'skip' ? '未执行' : '查询' }}</span>
               <span class="result-set-sql" :title="set.sql">{{ previewSql(set.sql) }}</span>
-              <span v-if="set.success && set.columns.length" class="result-set-meta">
+              <span v-if="set.kind === 'skip' || set.error === '未执行'" class="result-set-meta">未执行</span>
+              <span v-else-if="set.success && set.columns.length" class="result-set-meta">
                 {{ set.rowCount ?? set.rows.length }} 行
               </span>
               <span v-else-if="set.success" class="result-set-meta">OK</span>
@@ -1644,6 +1931,7 @@ watch(
                 :editing-cell="editingCell"
                 :edit-draft="editDraft"
                 :dirty-indexes="dirtyIndexSet"
+                :new-indexes="newRowIndexes"
                 :format-cell="displayCell"
                 :is-null-cell="isNullCell"
                 :find-match-keys="findMatchKeys"
@@ -1683,6 +1971,7 @@ watch(
             :editing-cell="editingCell"
             :edit-draft="editDraft"
             :dirty-indexes="dirtyIndexSet"
+            :new-indexes="newRowIndexes"
             :format-cell="displayCell"
             :is-null-cell="isNullCell"
             :find-match-keys="findMatchKeys"
@@ -1796,6 +2085,14 @@ watch(
           {{ $tr('拷贝 UPDATE 语句') }}
         </div>
         <div class="divider" />
+        <div
+          class="item"
+          :class="{ disabled: !canDuplicateRow }"
+          :title="$tr('把当前行复制到底部，作为新行编辑后保存')"
+          @click="canDuplicateRow && onDuplicateRow()"
+        >
+          {{ $tr('复制行') }}
+        </div>
         <div class="item danger" :class="{ disabled: !canDeleteRow }" @click="canDeleteRow && onDelete()">
           {{ $tr(deleteMenuLabel) }}
         </div>

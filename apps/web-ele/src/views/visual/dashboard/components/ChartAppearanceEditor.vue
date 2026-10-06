@@ -289,8 +289,11 @@ function applyOption() {
         >{{ $tr('编辑 ECharts option') }}</ElButton
       >
       <p class="hint">
-        {{ $tr('高级 option 优先于常用设置；默认保留 SQL 数据，只有显式设置 data
-        时才覆盖。') }}
+        {{
+          $tr(
+            '高级 option 优先于常用设置；默认保留 SQL 数据，只有显式设置 data 时才覆盖。',
+          )
+        }}
       </p>
     </template>
     <template v-else-if="spec.chartType === 'text'">

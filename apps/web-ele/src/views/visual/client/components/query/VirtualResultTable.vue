@@ -42,6 +42,8 @@ const props = defineProps<{
   editingCell?: { row: number; col: string } | null;
   editDraft?: string;
   dirtyIndexes?: Set<number>;
+  /** 底部追加、尚未落库的新行，用来画绿色左边线 */
+  newIndexes?: Set<number>;
   formatCell: (value: unknown) => string;
   isNullCell: (value: unknown) => boolean;
   /** Ctrl+F 命中的单元格，key = `${rowIndex}\0${col}` */
@@ -266,6 +268,7 @@ function rowClass(index: number) {
   const cls: string[] = [];
   if (index % 2 === 1) cls.push('is-stripe');
   if (index === currentIndex.value) cls.push('is-current');
+  if (props.editMode && props.newIndexes?.has(index)) cls.push('is-new-row');
   if (props.editMode && props.dirtyIndexes?.has(index)) cls.push('is-dirty-row');
   return cls.join(' ');
 }
@@ -317,8 +320,11 @@ function clearSelection() {
   currentIndex.value = -1;
 }
 
-/** 滚动到指定行（尽量置于可视区中部），供 Ctrl+F 定位 */
-function scrollToRow(index: number) {
+/**
+ * 滚动到指定行（尽量置于可视区中部），供 Ctrl+F 和新行定位。
+ * resetX 为 true 时回到最左列，避免第一列编辑框被横向滚动挡住。
+ */
+function scrollToRow(index: number, resetX = false) {
   const el = scrollRef.value;
   if (!el || index < 0) return;
   const max = Math.max(0, rowCount.value - 1);
@@ -327,8 +333,12 @@ function scrollToRow(index: number) {
     0,
     i * ROW_HEIGHT - Math.max(0, (viewportHeight.value - ROW_HEIGHT) / 2),
   );
-  el.scrollTop = target;
-  scrollTop.value = target;
+  // 用真实滚动高度封顶，避免新行落在表头或底部外面
+  const maxScroll = Math.max(0, el.scrollHeight - el.clientHeight);
+  const top = Math.min(target, maxScroll);
+  el.scrollTop = top;
+  scrollTop.value = top;
+  if (resetX) el.scrollLeft = 0;
   currentIndex.value = i;
 }
 
@@ -415,7 +425,20 @@ watch(
     // 同一长度换结果时也重算（取首行签名）
     props.rows?.[0] ? props.columns.map((c) => String(props.rows[0]?.[c] ?? '')).join('\0') : '',
   ],
-  () => {
+  (curr, prev) => {
+    if (prev) {
+      const colsSame = curr[0] === prev[0];
+      const grew = Number(curr[1]) > Number(prev[1]);
+      // 编辑时往底部加行，不要把用户拖好的列宽重算掉
+      if (
+        props.editMode &&
+        colsSame &&
+        grew &&
+        (userResized.value || Number(prev[1]) > 0)
+      ) {
+        return;
+      }
+    }
     userResized.value = false;
     initColWidths();
   },
@@ -427,7 +450,19 @@ watch(
  */
 watch(
   () => [props.rows, props.columns] as const,
-  () => {
+  (curr, prev) => {
+    const prevRows = prev?.[0];
+    const nextRows = curr[0];
+    const sameCols = curr[1] === prev?.[1];
+    // 编辑中只是在末尾追加行：留在原地，由外部 scrollToRow 滚到新行
+    const appended =
+      !!props.editMode &&
+      sameCols &&
+      !!prevRows &&
+      !!nextRows &&
+      nextRows.length > prevRows.length &&
+      (prevRows.length === 0 || nextRows[0] === prevRows[0]);
+    if (appended) return;
     resetResultScroll();
     void nextTick(resetResultScroll);
   },
@@ -718,6 +753,12 @@ defineExpose({
 }
 .vrt-tr.is-dirty-row {
   background: color-mix(in srgb, var(--el-color-warning) 28%, transparent);
+}
+.vrt-tr.is-new-row .vrt-rownum {
+  box-shadow: inset 3px 0 0 var(--el-color-success);
+}
+.vrt-tr.is-new-row:not(.is-dirty-row) {
+  background: color-mix(in srgb, var(--el-color-success) 18%, var(--el-bg-color));
 }
 .vrt-tr .vrt-check,
 .vrt-tr .vrt-rownum {
