@@ -132,100 +132,358 @@ function stripIdentQuotes(name: string): string {
 
 // ─────────────────────────── 按分号切分语句 ───────────────────────────
 
-/**
- * 按分号切分 SQL，忽略字符串/注释中的分号。
- * 返回每条语句在原文中的 [start, end)（不含末尾分号）。
- */
-export function splitSqlStatements(fullText: string): SqlRange[] {
-  const ranges: SqlRange[] = [];
-  let start = 0;
-  let i = 0;
-  let inSingle = false;
-  let inDouble = false;
-  let inLineComment = false;
-  let inBlockComment = false;
+function isSqlIdentStart(c: string | undefined): boolean {
+  return !!c && /[A-Za-z_\u0080-\uFFFF#]/.test(c);
+}
 
-  const pushRange = (end: number) => {
-    // 跳过首尾空白
-    let s = start;
-    let e = end;
-    while (s < e && /\s/.test(fullText[s]!)) s++;
-    while (e > s && /\s/.test(fullText[e - 1]!)) e--;
-    if (e > s) ranges.push({ start: s, end: e });
-  };
+function isSqlIdentPart(c: string | undefined): boolean {
+  return !!c && /[A-Za-z0-9_\u0080-\uFFFF#$]/.test(c);
+}
 
-  while (i < fullText.length) {
-    const c = fullText[i]!;
-    const n = fullText[i + 1];
+function matchSqlWord(text: string, pos: number, word: string): boolean {
+  if (pos < 0 || pos + word.length > text.length) return false;
+  if (pos > 0 && isSqlIdentPart(text[pos - 1])) return false;
+  if (text.slice(pos, pos + word.length).toLowerCase() !== word.toLowerCase()) return false;
+  return !isSqlIdentPart(text[pos + word.length]);
+}
 
-    if (inLineComment) {
-      if (c === '\n') inLineComment = false;
-      i++;
+function skipSqlWord(text: string, pos: number, stopDelimiter = ';'): number {
+  let p = pos;
+  if (isSqlIdentStart(text[p])) {
+    p++;
+    // $ 属于标识符字符，但 END$$ 里的 $$ 是终止符，不能被单词吞掉
+    while (isSqlIdentPart(text[p])) {
+      if (stopDelimiter !== ';' && text.startsWith(stopDelimiter, p)) break;
+      p++;
+    }
+  }
+  return p;
+}
+
+/** 跳过空白和注释，不越过字符串。供例程头识别使用。 */
+function skipSqlTrivia(text: string, pos: number): number {
+  let p = pos;
+  while (p < text.length) {
+    const c = text[p]!;
+    const n = text[p + 1];
+    if (c === ' ' || c === '\t' || c === '\n' || c === '\r') {
+      p++;
       continue;
     }
-    if (inBlockComment) {
-      if (c === '*' && n === '/') {
-        inBlockComment = false;
-        i += 2;
-        continue;
-      }
-      i++;
-      continue;
-    }
-    if (inSingle) {
-      if (c === "'" && n === "'") {
-        i += 2;
-        continue;
-      }
-      if (c === "'") inSingle = false;
-      i++;
-      continue;
-    }
-    if (inDouble) {
-      if (c === '"' && n === '"') {
-        i += 2;
-        continue;
-      }
-      if (c === '"') inDouble = false;
-      i++;
-      continue;
-    }
-
     if (c === '-' && n === '-') {
-      inLineComment = true;
-      i += 2;
+      while (p < text.length && text[p] !== '\n' && text[p] !== '\r') p++;
       continue;
     }
     if (c === '#') {
-      inLineComment = true;
-      i++;
+      while (p < text.length && text[p] !== '\n' && text[p] !== '\r') p++;
       continue;
     }
     if (c === '/' && n === '*') {
-      inBlockComment = true;
-      i += 2;
+      p += 2;
+      while (p + 1 < text.length && !(text[p] === '*' && text[p + 1] === '/')) p++;
+      p = p + 1 < text.length ? p + 2 : text.length;
       continue;
     }
-    if (c === "'") {
-      inSingle = true;
-      i++;
+    break;
+  }
+  return p;
+}
+
+function skipQuotedSpan(text: string, pos: number, quote: string): number {
+  let p = pos + 1;
+  while (p < text.length) {
+    const d = text[p]!;
+    p++;
+    if (d === quote) {
+      if (text[p] === quote) {
+        p++;
+        continue;
+      }
+      break;
+    }
+    if (d === '\\' && quote !== '`' && p < text.length) p++;
+  }
+  return p;
+}
+
+/**
+ * 当前位置若是 $tag$ / $$ 美元引号，返回结束位置之后；否则返回原位置。
+ * PostgreSQL 函数体里的分号必须整段跳过。
+ */
+function skipDollarQuoteSpan(text: string, pos: number): number {
+  if (text[pos] !== '$') return pos;
+  let i = pos + 1;
+  while (i < text.length) {
+    const c = text[i]!;
+    if (c === '$') {
+      const tag = text.slice(pos, i + 1);
+      const end = text.indexOf(tag, i + 1);
+      return end < 0 ? text.length : end + tag.length;
+    }
+    if (!/[A-Za-z0-9_]/.test(c)) return pos;
+    i++;
+  }
+  return pos;
+}
+
+function atSqlLineStart(text: string, pos: number): boolean {
+  let j = pos - 1;
+  while (j >= 0) {
+    const c = text[j]!;
+    if (c === '\n' || c === '\r') return true;
+    if (c === ' ' || c === '\t') {
+      j--;
       continue;
     }
-    if (c === '"') {
-      inDouble = true;
-      i++;
+    return false;
+  }
+  return true;
+}
+
+/**
+ * CREATE/ALTER 过程、函数、触发器、事件。
+ * 过程体里的分号属于同一条语句，不能当成下一条 SQL。
+ */
+function looksLikeSqlRoutine(text: string, pos: number): boolean {
+  if (!matchSqlWord(text, pos, 'CREATE') && !matchSqlWord(text, pos, 'ALTER')) return false;
+  let p = skipSqlWord(text, pos);
+  for (let guard = 0; guard < 40 && p < text.length; guard++) {
+    p = skipSqlTrivia(text, p);
+    if (p >= text.length || text[p] === '(') break;
+    if (
+      matchSqlWord(text, p, 'PROCEDURE') ||
+      matchSqlWord(text, p, 'FUNCTION') ||
+      matchSqlWord(text, p, 'TRIGGER') ||
+      matchSqlWord(text, p, 'EVENT') ||
+      matchSqlWord(text, p, 'PROC')
+    ) {
+      return true;
+    }
+    if (
+      matchSqlWord(text, p, 'TABLE') ||
+      matchSqlWord(text, p, 'INDEX') ||
+      matchSqlWord(text, p, 'VIEW') ||
+      matchSqlWord(text, p, 'DATABASE') ||
+      matchSqlWord(text, p, 'SCHEMA') ||
+      matchSqlWord(text, p, 'USER')
+    ) {
+      return false;
+    }
+    if (text[p] === '`' || text[p] === "'" || text[p] === '"') {
+      p = skipQuotedSpan(text, p, text[p]!);
+      continue;
+    }
+    if (isSqlIdentStart(text[p])) {
+      p = skipSqlWord(text, p);
+      continue;
+    }
+    p++;
+  }
+  return false;
+}
+
+/** BEGIN 后面跟事务关键字时，不是过程块 */
+function isTxnAfterBegin(text: string, pos: number): boolean {
+  return (
+    matchSqlWord(text, pos, 'TRANSACTION') ||
+    matchSqlWord(text, pos, 'TRAN') ||
+    matchSqlWord(text, pos, 'WORK') ||
+    matchSqlWord(text, pos, 'DEFERRED') ||
+    matchSqlWord(text, pos, 'IMMEDIATE') ||
+    matchSqlWord(text, pos, 'EXCLUSIVE')
+  );
+}
+
+/** END IF / END LOOP 等是复合语句的结束，不是 BEGIN 块的 END */
+function isCompoundEndWord(text: string, pos: number): boolean {
+  return (
+    matchSqlWord(text, pos, 'IF') ||
+    matchSqlWord(text, pos, 'LOOP') ||
+    matchSqlWord(text, pos, 'WHILE') ||
+    matchSqlWord(text, pos, 'REPEAT') ||
+    matchSqlWord(text, pos, 'CASE')
+  );
+}
+
+/**
+ * 按分号切分 SQL，忽略字符串、注释、美元引号里的分号。
+ * 存储过程 / 函数 / 触发器 / 事件整段算一条：BEGIN...END 内部的分号不切开，
+ * MySQL 的 DELIMITER 只改变终止符，本身不送给数据库。
+ * 返回每条语句在原文中的 [start, end)（不含末尾终止符）。
+ */
+export function splitSqlStatements(fullText: string): SqlRange[] {
+  const ranges: SqlRange[] = [];
+  const text = fullText || '';
+  const n = text.length;
+  let delimiter = ';';
+  let i = 0;
+
+  const pushRange = (from: number, end: number) => {
+    let s = from;
+    let e = end;
+    while (s < e && /\s/.test(text[s]!)) s++;
+    while (e > s && /\s/.test(text[e - 1]!)) e--;
+    if (e > s) ranges.push({ start: s, end: e });
+  };
+
+  const skipRestOfLine = () => {
+    while (i < n && text[i] !== '\n' && text[i] !== '\r') i++;
+    if (text[i] === '\r') i++;
+    if (text[i] === '\n') i++;
+  };
+
+  while (i < n) {
+    i = skipSqlTrivia(text, i);
+    if (i >= n) break;
+
+    // DELIMITER $$ 这类客户端指令不执行，只切换后面语句的结束符
+    if (atSqlLineStart(text, i) && matchSqlWord(text, i, 'DELIMITER')) {
+      i = skipSqlWord(text, i);
+      while (text[i] === ' ' || text[i] === '\t') i++;
+      const d0 = i;
+      while (i < n && text[i] !== ' ' && text[i] !== '\t' && text[i] !== '\n' && text[i] !== '\r') i++;
+      const next = text.slice(d0, i).trim();
+      if (next) delimiter = next;
+      skipRestOfLine();
       continue;
     }
 
-    if (c === ';') {
-      pushRange(i);
-      start = i + 1;
-      i++;
-      continue;
+    // 单独一行的 GO 或 / 是客户端提交符，不作为 SQL
+    if (atSqlLineStart(text, i) && matchSqlWord(text, i, 'GO')) {
+      const after = skipSqlTrivia(text, skipSqlWord(text, i));
+      if (after >= n || text[after] === '\n' || text[after] === '\r' || text[after] === ';') {
+        skipRestOfLine();
+        continue;
+      }
     }
-    i++;
+    if (atSqlLineStart(text, i) && text[i] === '/' && text[i + 1] !== '*') {
+      const after = skipSqlTrivia(text, i + 1);
+      if (after >= n || text[after] === '\n' || text[after] === '\r') {
+        skipRestOfLine();
+        continue;
+      }
+    }
+
+    const start = i;
+    const routine = looksLikeSqlRoutine(text, i);
+    let depth = 0;
+    let closed = false;
+    // 只有语句开头的 END 才关闭 BEGIN，字段名 end 不能把过程切开
+    let atStmtStart = false;
+
+    while (i < n) {
+      const c = text[i]!;
+      const next = text[i + 1];
+
+      if (c === '-' && next === '-') {
+        while (i < n && text[i] !== '\n' && text[i] !== '\r') i++;
+        continue;
+      }
+      if (c === '#') {
+        while (i < n && text[i] !== '\n' && text[i] !== '\r') i++;
+        continue;
+      }
+      if (c === '/' && next === '*') {
+        i += 2;
+        while (i + 1 < n && !(text[i] === '*' && text[i + 1] === '/')) i++;
+        i = i + 1 < n ? i + 2 : n;
+        continue;
+      }
+      if (c === "'" || c === '"' || c === '`') {
+        i = skipQuotedSpan(text, i, c);
+        continue;
+      }
+      if (delimiter === ';') {
+        const dollarEnd = skipDollarQuoteSpan(text, i);
+        if (dollarEnd > i) {
+          i = dollarEnd;
+          continue;
+        }
+      }
+      // SQL Server 的 GO、Oracle 的单独一行 /：结束当前过程，符号本身不执行
+      if (atSqlLineStart(text, i) && matchSqlWord(text, i, 'GO')) {
+        const afterGo = skipSqlTrivia(text, skipSqlWord(text, i));
+        if (afterGo >= n || text[afterGo] === '\n' || text[afterGo] === '\r' || text[afterGo] === ';') {
+          pushRange(start, i);
+          closed = true;
+          break;
+        }
+      }
+      if (routine && atSqlLineStart(text, i) && c === '/' && next !== '*') {
+        const afterSlash = skipSqlTrivia(text, i + 1);
+        if (afterSlash >= n || text[afterSlash] === '\n' || text[afterSlash] === '\r') {
+          pushRange(start, i);
+          closed = true;
+          break;
+        }
+      }
+      if (delimiter !== ';' && text.startsWith(delimiter, i)) {
+        pushRange(start, i);
+        i += delimiter.length;
+        closed = true;
+        break;
+      }
+      if (c === ' ' || c === '\t' || c === '\n' || c === '\r') {
+        i++;
+        continue;
+      }
+      if (routine && delimiter === ';' && matchSqlWord(text, i, 'BEGIN')) {
+        const after = skipSqlWord(text, i, delimiter);
+        const p = skipSqlTrivia(text, after);
+        if (matchSqlWord(text, p, 'ATOMIC')) {
+          depth++;
+          i = skipSqlWord(text, p, delimiter);
+          atStmtStart = true;
+          continue;
+        }
+        if (isTxnAfterBegin(text, p) || text[p] === ';') {
+          i = after;
+          atStmtStart = false;
+          continue;
+        }
+        depth++;
+        i = after;
+        atStmtStart = true;
+        continue;
+      }
+      if (routine && matchSqlWord(text, i, 'END')) {
+        const after = skipSqlWord(text, i, delimiter);
+        const p = skipSqlTrivia(text, after);
+        if (isCompoundEndWord(text, p)) {
+          i = skipSqlWord(text, p, delimiter);
+          atStmtStart = false;
+          continue;
+        }
+        if (depth > 0 && atStmtStart) depth--;
+        i = after;
+        atStmtStart = false;
+        continue;
+      }
+      if (c === ';' && delimiter === ';' && (!routine || depth === 0)) {
+        pushRange(start, i);
+        i++;
+        closed = true;
+        break;
+      }
+      if (c === ';' && delimiter === ';') {
+        i++;
+        atStmtStart = true;
+        continue;
+      }
+      if (isSqlIdentStart(c)) {
+        i = skipSqlWord(text, i, delimiter);
+        atStmtStart = false;
+        continue;
+      }
+      i++;
+      atStmtStart = false;
+    }
+
+    if (!closed) {
+      pushRange(start, n);
+      break;
+    }
   }
-  pushRange(fullText.length);
   return ranges;
 }
 
