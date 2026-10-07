@@ -41,6 +41,7 @@ async function mountRenderer(
     },
     onError,
   });
+  app.config.globalProperties.$tr = (value: unknown) => String(value ?? '');
   app.mount(container);
   await nextTick();
   await nextTick();

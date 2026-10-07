@@ -19,7 +19,9 @@ import {
   deleteChart,
   deleteScreen,
   getScreen,
+  getScreenMediaPolicy,
   listCharts,
+  listPublishedScreens,
   listScreens,
   previewChart,
   previewScreen,
@@ -31,11 +33,11 @@ import {
 } from '#/api/visual/dashboard';
 import { getInstances } from '#/api/visual/database';
 import { getDbConfigList } from '#/api/visual/vq';
-import { resolveBackendAssetUrl } from '#/config';
 import LemonUpload from '#/components/lemon-upload/index.vue';
 
 import ChartRenderer from './components/ChartRenderer.vue';
 import ChartAppearanceEditor from './components/ChartAppearanceEditor.vue';
+import ShareDialog from './components/ShareDialog.vue';
 import {
   alignWidgets,
   CANVAS_PRESETS,
@@ -47,10 +49,12 @@ import {
   type AlignMode,
 } from './assemblyTools';
 import { CHART_TYPE_OPTIONS, getFieldMappingHint } from './fieldMappingHints';
+import type { DashboardMediaPolicy } from './mediaUrlPolicy';
+import { resolveDashboardMediaUrl, toCssUrl } from './mediaUrlPolicy';
 
 defineOptions({ name: 'VisualDashboardWorkbench' });
 
-type WorkMode = 'charts' | 'editor' | 'screens';
+type WorkMode = 'charts' | 'editor' | 'published' | 'screens';
 
 const router = useRouter();
 const route = useRoute();
@@ -58,6 +62,10 @@ const mode = ref<WorkMode>('screens');
 const loading = ref(false);
 const charts = ref<ChartAsset[]>([]);
 const screens = ref<any[]>([]);
+/** 其他用户已发布的大屏（只读查看） */
+const publishedScreens = ref<any[]>([]);
+/** 内嵌网页域名白名单等媒体策略，与查看页一致 */
+const mediaPolicy = ref<DashboardMediaPolicy | null>(null);
 const chartKeyword = ref('');
 const screenKeyword = ref('');
 const results = reactive<Record<string, QueryResult>>({});
@@ -116,7 +124,6 @@ const widgetFieldHint = computed(() =>
 const isTextChartForm = computed(() => chartSpecForm.chartType === 'text');
 const isStaticChartForm = computed(() => ['text', 'clock', 'image', 'iframe'].includes(chartSpecForm.chartType));
 const isTextWidget = computed(() => selectedWidget.value?.chartSpec.chartType === 'text');
-const isStaticWidget = computed(() => ['text', 'clock', 'image', 'iframe'].includes(selectedWidget.value?.chartSpec.chartType || ''));
 /** 统计每个图表资产在当前画布中的使用次数，允许复用但必须给用户明确反馈。 */
 const usedChartCounts = computed(() => {
   const counts = new Map<string, number>();
@@ -135,6 +142,13 @@ const filteredScreens = computed(() => {
   const keyword = screenKeyword.value.trim().toLowerCase();
   return keyword ? screens.value.filter((item) => `${item.name} ${item.description || ''}`.toLowerCase().includes(keyword)) : screens.value;
 });
+const filteredPublishedScreens = computed(() => {
+  const keyword = screenKeyword.value.trim().toLowerCase();
+  const list = publishedScreens.value;
+  return keyword
+    ? list.filter((item) => `${item.name} ${item.description || ''} ${item.ownerName || ''}`.toLowerCase().includes(keyword))
+    : list;
+});
 
 function defaultSpec(): ChartSpec {
   return { chartType: 'bar', xField: '', yFields: [] };
@@ -149,6 +163,7 @@ function emptyConfig(): ScreenConfig {
     backgroundImage: '',
     showGrid: true,
     gridSize: 10,
+    viewRefreshSeconds: null,
     widgets: [],
   };
 }
@@ -173,9 +188,9 @@ function canvasBackgroundStyle(config: ScreenConfig = screenConfig) {
   const style: Record<string, string> = {
     backgroundColor: config.background || '#0b1220',
   };
-  const image = resolveBackendAssetUrl(config.backgroundImage);
+  const image = resolveDashboardMediaUrl(config.backgroundImage, 'image').src;
   if (image) {
-    style.backgroundImage = `url("${image}")`;
+    style.backgroundImage = toCssUrl(image);
     style.backgroundSize = 'cover';
     style.backgroundPosition = 'center center';
     style.backgroundRepeat = 'no-repeat';
@@ -226,7 +241,25 @@ async function loadAll() {
       ...item,
       id: screenIdOf(item),
     }));
+    void loadSharedExtras();
   } finally { loading.value = false; }
+}
+
+/** 他人发布的大屏与媒体策略属于附加信息，失败不影响工作台主体。 */
+async function loadSharedExtras() {
+  try {
+    const [publishedRes, policyRes] = await Promise.all([
+      listPublishedScreens().catch(() => []),
+      getScreenMediaPolicy().catch(() => null),
+    ]);
+    publishedScreens.value = unwrap<any[]>(publishedRes, []).map((item: any) => ({
+      ...item,
+      id: screenIdOf(item),
+    }));
+    mediaPolicy.value = unwrap<DashboardMediaPolicy | null>(policyRes, null);
+  } catch {
+    // 忽略：后端未升级时仍可正常编辑自己的大屏
+  }
 }
 
 async function loadConnections() {
@@ -696,7 +729,8 @@ function duplicateWidget(widgetId = selectedWidgetId.value) {
     locked: false,
   });
   screenConfig.widgets.push(clone);
-  if (results[source.id]) results[clone.id] = results[source.id];
+  const cachedResult = results[source.id];
+  if (cachedResult) results[clone.id] = cachedResult;
   selectedWidgetId.value = clone.id;
   contextMenu.visible = false;
   dirty.value = true;
@@ -878,6 +912,20 @@ async function publish() {
   await loadAll();
 }
 
+/** 分享对话框（只对自己已发布的大屏开放；后端再校验所有者与 BiScreen:share 权限）。 */
+const shareDialogVisible = ref(false);
+const shareTarget = ref<{ id: string; name: string }>({ id: '', name: '' });
+
+function openShare(value: any) {
+  const id = screenIdOf(value);
+  if (!id) {
+    ElMessage.error('大屏 ID 缺失，无法打开查看页，请刷新列表后重试');
+    return;
+  }
+  shareTarget.value = { id, name: String(value?.name || '') };
+  shareDialogVisible.value = true;
+}
+
 function viewScreen(value: any) {
   const id = screenIdOf(value);
   if (!id) {
@@ -948,6 +996,7 @@ watch(chartSpecForm, fillChartSpec, { deep: true });
       </div>
       <div v-if="mode !== 'editor'" class="top-actions">
         <ElButton :type="mode === 'screens' ? 'primary' : ''" @click="mode = 'screens'">{{ $tr('我的大屏') }}</ElButton>
+        <ElButton :type="mode === 'published' ? 'primary' : ''" @click="mode = 'published'">{{ $tr('他人发布') }}</ElButton>
         <ElButton :type="mode === 'charts' ? 'primary' : ''" @click="mode = 'charts'">{{ $tr('图表库') }}</ElButton>
         <ElButton type="primary" @click="newScreen">{{ $tr('新建大屏') }}</ElButton>
       </div>
@@ -961,6 +1010,7 @@ watch(chartSpecForm, fillChartSpec, { deep: true });
         <ElButton @click="previewDraft">{{ $tr('预览草稿') }}</ElButton>
         <ElButton @click="saveDraft()">{{ $tr('保存草稿') }}</ElButton>
         <ElButton :disabled="!screenForm.id || screenForm.status !== 'PUBLISHED'" @click="viewScreen(screenForm)">{{ $tr('正式查看') }}</ElButton>
+        <ElButton :disabled="!screenForm.id || screenForm.status !== 'PUBLISHED'" @click="openShare(screenForm)">{{ $tr('分享') }}</ElButton>
         <ElButton type="primary" @click="publish">{{ $tr('保存并发布') }}</ElButton>
       </div>
     </header>
@@ -968,19 +1018,44 @@ watch(chartSpecForm, fillChartSpec, { deep: true });
     <main v-if="mode === 'screens'" class="library">
       <div class="library-head">
         <ElInput v-model="screenKeyword" clearable :placeholder="$tr('搜索大屏')" class="search" />
-        <span>{{ filteredScreens.length }} 个大屏</span>
+        <span>{{ $tr('共') }} {{ filteredScreens.length }} {{ $tr('个大屏') }}</span>
       </div>
       <ElEmpty v-if="!filteredScreens.length" :description="$tr('还没有大屏，从新建大屏开始')" />
       <div v-else class="card-grid">
         <article v-for="row in filteredScreens" :key="row.id" class="asset-card screen-card">
           <div class="screen-cover"><span>{{ row.status === 'PUBLISHED' ? $tr('已发布') : $tr('草稿') }}</span></div>
           <h3>{{ row.name }}</h3><p>{{ row.description || $tr('暂无说明') }}</p>
-          <small>{{ row.refreshMode === 'LIVE' ? '每次查看实时查询' : (`${row.refreshIntervalSeconds}s ` + $tr('更新快照')) }}</small>
+          <small>{{ row.refreshMode === 'LIVE' ? $tr('每次查看实时查询') : (`${row.refreshIntervalSeconds}s ` + $tr('更新快照')) }}</small>
           <div class="card-actions">
             <ElButton size="small" type="primary" @click="editScreen(row)">{{ $tr('编辑') }}</ElButton>
             <ElButton v-if="row.status === 'PUBLISHED'" size="small" @click="viewScreen(row)">{{ $tr('查看') }}</ElButton>
             <ElButton v-if="row.status === 'PUBLISHED'" size="small" @click="manualRefresh(row)">{{ $tr('刷新数据') }}</ElButton>
+            <ElButton v-if="row.status === 'PUBLISHED'" size="small" @click="openShare(row)">{{ $tr('分享') }}</ElButton>
             <ElButton size="small" type="danger" text @click="removeScreen(row)">{{ $tr('删除') }}</ElButton>
+          </div>
+        </article>
+      </div>
+    </main>
+
+    <main v-else-if="mode === 'published'" class="library">
+      <div class="library-head">
+        <ElInput v-model="screenKeyword" clearable :placeholder="$tr('搜索大屏')" class="search" />
+        <span>{{ $tr('共') }} {{ filteredPublishedScreens.length }} {{ $tr('个大屏') }}</span>
+      </div>
+      <ElAlert
+        :title="$tr('这里是其他用户已发布的大屏，只能查看不能编辑；图表数据按你自己的数据库连接和表级权限过滤，无权访问的组件会显示提示。')"
+        type="info"
+        :closable="false"
+        class="published-hint"
+      />
+      <ElEmpty v-if="!filteredPublishedScreens.length" :description="$tr('暂无其他用户发布的大屏')" />
+      <div v-else class="card-grid">
+        <article v-for="row in filteredPublishedScreens" :key="row.id" class="asset-card screen-card">
+          <div class="screen-cover"><span>{{ $tr('已发布') }}</span></div>
+          <h3>{{ row.name }}</h3><p>{{ row.description || $tr('暂无说明') }}</p>
+          <small>{{ $tr('发布者') }}：{{ row.ownerName || row.ownerUserId }}</small>
+          <div class="card-actions">
+            <ElButton size="small" type="primary" @click="viewScreen(row)">{{ $tr('查看') }}</ElButton>
           </div>
         </article>
       </div>
@@ -1104,7 +1179,7 @@ watch(chartSpecForm, fillChartSpec, { deep: true });
               class="widget-move-handle"
               @pointerdown="beginPointer($event, widget)"
             >{{ widget.locked ? $tr('锁定') : $tr('拖动') }}</button>
-            <div class="widget-body"><ChartRenderer :spec="widget.chartSpec" :result="results[widget.id]" /></div>
+            <div class="widget-body"><ChartRenderer :spec="widget.chartSpec" :result="results[widget.id]" :media-policy="mediaPolicy" /></div>
             <template v-if="!widget.locked">
               <button class="resize-handle east" :title="$tr('向右调整宽度')" @pointerdown="beginPointer($event, widget, 'east')" />
               <button class="resize-handle south" :title="$tr('向下调整高度')" @pointerdown="beginPointer($event, widget, 'south')" />
@@ -1158,7 +1233,7 @@ watch(chartSpecForm, fillChartSpec, { deep: true });
               </ElTabPane>
               <ElTabPane :label="$tr('数据与字段')" name="data">
             <ElAlert class="field-hint" type="info" :closable="false" :title="$tr(widgetFieldHint.summary)">
-              <p>SQL 示例：{{ $tr(widgetFieldHint.sqlExample) }}</p>
+              <p>{{ $tr('SQL 示例：') }}{{ $tr(widgetFieldHint.sqlExample) }}</p>
               <ul>
                 <li v-for="item in widgetFieldHint.fields" :key="item.name">
                   <b>{{ $tr(item.name) }}</b>{{ item.required ? $tr('（必填）') : $tr('（可选）') }}：{{ $tr(item.desc) }}
@@ -1281,6 +1356,18 @@ watch(chartSpecForm, fillChartSpec, { deep: true });
             <ElFormItem v-if="screenForm.refreshMode === 'INTERVAL_SNAPSHOT'" :label="$tr('更新间隔（秒）')">
               <ElInputNumber v-model="screenForm.refreshIntervalSeconds" :min="30" :max="86400" @change="dirty = true" />
             </ElFormItem>
+            <ElFormItem :label="$tr('查看页自动刷新（秒）')">
+              <ElInputNumber
+                v-model="screenConfig.viewRefreshSeconds"
+                :min="0"
+                :max="86400"
+                :step="10"
+                :value-on-clear="null"
+                controls-position="right"
+                @change="dirty = true"
+              />
+              <p class="bg-hint">{{ $tr('0 表示关闭；留空时实时模式不自动刷新、快照模式跟随快照间隔。实时模式每次刷新都会查询数据库，最短 10 秒；页面切到后台时暂停。') }}</p>
+            </ElFormItem>
             <ElAlert :title="$tr('发布后查看页读取冻结版本；继续编辑草稿不会影响线上大屏。')" type="info" :closable="false" />
           </ElForm>
         </template>
@@ -1313,7 +1400,7 @@ watch(chartSpecForm, fillChartSpec, { deep: true });
             </ElSelect></ElFormItem>
           </div>
           <ElAlert class="field-hint" type="info" :closable="false" :title="$tr(chartFieldHint.summary)">
-            <p>SQL 示例：{{ $tr(chartFieldHint.sqlExample) }}</p>
+            <p>{{ $tr('SQL 示例：') }}{{ $tr(chartFieldHint.sqlExample) }}</p>
             <ul>
               <li v-for="item in chartFieldHint.fields" :key="item.name">
                 <b>{{ $tr(item.name) }}</b>{{ item.required ? $tr('（必填）') : $tr('（可选）') }}：{{ $tr(item.desc) }}
@@ -1367,6 +1454,7 @@ watch(chartSpecForm, fillChartSpec, { deep: true });
             v-if="chartPreview || chartSpecForm.chartType === 'text' || chartSpecForm.chartType === 'clock' || chartSpecForm.chartType === 'image' || chartSpecForm.chartType === 'iframe'"
             :spec="parseSpec(chartForm.chartSpec)"
             :result="chartPreview || { columns: [], rows: [], rowCount: 0 }"
+            :media-policy="mediaPolicy"
           />
           <ElEmpty v-else :description="$tr('填写 SQL 后点「运行预览」；文本/时钟/图片可直接看效果')" />
         </div>
@@ -1387,7 +1475,7 @@ watch(chartSpecForm, fillChartSpec, { deep: true });
               {{ widget.title }}
             </header>
             <div class="widget-body">
-              <ChartRenderer :spec="widget.chartSpec" :result="draftPreviewResults[widget.id]" />
+              <ChartRenderer :spec="widget.chartSpec" :result="draftPreviewResults[widget.id]" :media-policy="mediaPolicy" />
             </div>
           </article>
         </div>
@@ -1397,6 +1485,8 @@ watch(chartSpecForm, fillChartSpec, { deep: true });
         <ElButton type="primary" @click="publish">{{ $tr('满意则发布') }}</ElButton>
       </template>
     </ElDialog>
+
+    <ShareDialog v-model="shareDialogVisible" :screen-id="shareTarget.id" :screen-name="shareTarget.name" />
   </div>
 </template>
 
@@ -1405,7 +1495,7 @@ watch(chartSpecForm, fillChartSpec, { deep: true });
 .topbar { display: flex; min-height: 68px; align-items: center; justify-content: space-between; padding: 10px 16px; background: var(--el-bg-color); border-bottom: 1px solid var(--el-border-color-light); }
 .topbar.compact { min-height: 54px; padding-block: 6px; }.topbar.compact p { display: none; }.topbar.compact h2 { font-size: 17px; }
 .topbar h2,.topbar p,.asset-card h3,.asset-card p { margin: 0; }.topbar p { margin-top: 4px; color: var(--el-text-color-secondary); font-size: 13px; }
-.top-actions,.card-actions,.library-head,.panel-title,.form-row { display: flex; align-items: center; gap: 8px; }.top-actions :deep(.el-button + .el-button),.card-actions :deep(.el-button + .el-button) { margin-left: 0; }.save-state { color: var(--el-text-color-secondary); font-size: 12px; }
+.top-actions,.card-actions,.library-head,.panel-title,.form-row { display: flex; align-items: center; gap: 8px; }.published-hint { margin-bottom: 12px; }.top-actions :deep(.el-button + .el-button),.card-actions :deep(.el-button + .el-button) { margin-left: 0; }.save-state { color: var(--el-text-color-secondary); font-size: 12px; }
 .library { padding: 22px; }.library-head { justify-content: space-between; margin-bottom: 18px; }.search { max-width: 320px; }
 .card-grid { display: grid; grid-template-columns: repeat(auto-fill,minmax(280px,1fr)); gap: 16px; }.asset-card { position: relative; padding: 18px; min-height: 140px; overflow: hidden; background: var(--el-bg-color); border: 1px solid var(--el-border-color-light); border-radius: 10px; box-shadow: var(--el-box-shadow-lighter); }
 .asset-card h3 { margin: 12px 0 7px; }.asset-card p { height: 42px; overflow: hidden; color: var(--el-text-color-secondary); font-size: 12px; }.asset-card small { display: block; margin: 7px 0; color: var(--el-text-color-secondary); }.chart-badge { display: inline-block; padding: 2px 8px; background: var(--el-color-primary-light-9); color: var(--el-color-primary); border-radius: 20px; font-size: 11px; }.screen-cover { height: 76px; margin: -18px -18px 0; padding: 12px; background: linear-gradient(135deg,#15223a,#245ea8); color: #fff; }

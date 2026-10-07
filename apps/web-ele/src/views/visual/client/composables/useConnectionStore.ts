@@ -33,6 +33,10 @@ export interface DbConnection {
   aiEnabled?: number;
   /** 1=允许把真实行数据发给模型；缺省 0=脱敏 */
   aiAllowSampleData?: number;
+  /** 环境标签 DEV/TEST/UAT/PROD；空=未标记（按名称关键词兜底识别生产） */
+  env?: null | string;
+  /** 环境自定义显示名 */
+  envLabel?: null | string;
 }
 
 /** openConnection 结果，供 UI 提示 */

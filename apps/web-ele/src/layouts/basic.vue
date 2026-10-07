@@ -169,7 +169,7 @@ async function handleNotificationClick(item: NotificationItem) {
   await loadNotifications();
   if (item.businessId) {
     await router.push({
-      name: 'SqlWorkOrder',
+      name: 'SqlWork',
       query: { orderId: String(item.businessId) },
     });
   }
@@ -291,7 +291,7 @@ watch(
         @read="handleNotificationRead"
         @refresh="handleNotificationRefresh"
         @remove="handleNotificationRemove"
-        @view-all="router.push({ name: 'SqlWorkOrder' })"
+        @view-all="router.push({ name: 'SqlWork' })"
       />
     </template>
     <template #extra>

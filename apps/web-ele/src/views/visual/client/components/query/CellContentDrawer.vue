@@ -282,7 +282,7 @@ onBeforeUnmount(() => {
             :type="viewMode === 'json' ? 'primary' : 'default'"
             @click="switchMode('json')"
           >
-            JSON 编辑器
+            {{ $tr('JSON 编辑器') }}
           </ElButton>
           <ElButton
             size="small"
@@ -296,27 +296,27 @@ onBeforeUnmount(() => {
             :type="viewMode === 'raw' ? 'primary' : 'default'"
             @click="switchMode('raw')"
           >
-            原文
+            {{ $tr('原文') }}
           </ElButton>
         </div>
         <div class="ccd-actions">
-          <ElButton size="small" @click="onFormatClick">格式化</ElButton>
+          <ElButton size="small" @click="onFormatClick">{{ $tr('格式化') }}</ElButton>
           <ElButton size="small" type="primary" plain @click="copyCurrent">
-            复制
+            {{ $tr('复制') }}
           </ElButton>
         </div>
       </div>
 
       <p v-if="hint" class="ccd-hint">{{ hint }}</p>
       <p v-else-if="viewMode === 'json'" class="ccd-tip">
-        基于
+        {{ $tr('基于') }}
         <a
           href="https://github.com/josdejong/svelte-jsoneditor"
           target="_blank"
           rel="noopener"
         >vanilla-jsoneditor</a>
-        ：树形 / 文本 / 表格可切换，支持搜索、校验、转换与撤销。
-        <span v-if="!jsonValid" class="ccd-invalid">（当前 JSON 尚未通过校验）</span>
+        {{ $tr('：树形 / 文本 / 表格可切换，支持搜索、校验、转换与撤销。') }}
+        <span v-if="!jsonValid" class="ccd-invalid">{{ $tr('（当前 JSON 尚未通过校验）') }}</span>
       </p>
 
       <div class="ccd-editor">

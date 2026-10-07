@@ -11,6 +11,7 @@ import { onBeforeUnmount, onMounted, reactive, ref } from 'vue';
 import { Plus } from '@element-plus/icons-vue';
 
 import type { DbConnection } from '../composables/useConnectionStore';
+import { envTagType, resolveConnectionEnv } from '../utils/connectionEnv';
 import { isProductionConnection } from '../utils/prodConnection';
 import { useClientPreferences } from '../composables/useClientPreferences';
 
@@ -74,7 +75,20 @@ function tabLabel(c: DbConnection) {
     same.length <= 1
       ? base
       : `${base} (${same.findIndex((x) => x.sessionId === c.sessionId) + 1})`;
-  return isProductionConnection(c) ? `PROD · ${name}` : name;
+  return name;
+}
+
+/** 页签前的环境色块：PROD 红 / UAT 橙 / TEST 蓝 / DEV 绿；未标记且非生产时不显示 */
+function envBadge(c: DbConnection) {
+  const resolved = resolveConnectionEnv(c);
+  if (!resolved.text) return null;
+  return { text: resolved.text, type: envTagType(resolved.env), legacy: resolved.source === 'LEGACY_NAME' };
+}
+
+function tabTitle(c: DbConnection) {
+  const badge = envBadge(c);
+  const prefix = badge ? `[${badge.text}] ` : '';
+  return `${prefix}${tabLabel(c)} · ${c.dbType} · ${c.dbHost || ''}`;
 }
 
 function tabStyle(c: DbConnection) {
@@ -242,11 +256,16 @@ defineExpose({
       class="conn-tab"
       :class="{ active: c.sessionId === activeId, 'tab--prod': isProductionConnection(c) }"
       :style="tabStyle(c)"
-      :title="`${tabLabel(c)} · ${c.dbType} · ${c.dbHost || ''}`"
+      :title="tabTitle(c)"
       @click="emit('change', c.sessionId)"
       @contextmenu="onTabContextMenu($event, c)"
     >
       <span v-if="c.sessionId === activeId" class="active-marker" aria-hidden="true" />
+      <span
+        v-if="envBadge(c)"
+        class="env-badge"
+        :class="`env-badge--${envBadge(c)?.type}`"
+      >{{ envBadge(c)?.text }}{{ envBadge(c)?.legacy ? '?' : '' }}</span>
       <span class="name">{{ tabLabel(c) }}</span>
       <span class="meta">{{ c.dbType }} · {{ c.dbHost || '' }}</span>
       <button
@@ -455,5 +474,29 @@ defineExpose({
 }
 .tab--prod.active {
   box-shadow: inset 0 -3px 0 0 var(--el-color-danger);
+}
+.env-badge {
+  flex-shrink: 0;
+  margin-right: 4px;
+  padding: 0 5px;
+  border-radius: 3px;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 16px;
+  letter-spacing: 0.03em;
+  color: #fff;
+  background: var(--el-color-info);
+}
+.env-badge--danger {
+  background: var(--el-color-danger);
+}
+.env-badge--warning {
+  background: var(--el-color-warning);
+}
+.env-badge--primary {
+  background: var(--el-color-primary);
+}
+.env-badge--success {
+  background: var(--el-color-success);
 }
 </style>

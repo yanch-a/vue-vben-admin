@@ -31,6 +31,8 @@ import {
   resolveTableTargetFromEditor,
   setCachedColumns,
 } from '../../utils/sqlEditorAssist';
+import { translateUiText } from '#/locales/ui-text';
+
 import { formatSqlByDialect } from '../../utils/formatSql';
 import { resolveSqlDialect } from '../../dialect/sqlDialect';
 import { useClientPreferences } from '../../composables/useClientPreferences';
@@ -77,6 +79,8 @@ const props = defineProps<{
 const emit = defineEmits<{
   'update:modelValue': [string];
   execute: [];
+  /** Ctrl+Shift+E / 右键「执行计划」：对选中或当前语句做 EXPLAIN */
+  explain: [];
   save: [];
   /** Ctrl+Q：直接关闭当前查询页签，不提示未保存 */
   'close-tab': [];
@@ -116,6 +120,19 @@ const tabStates = new Map<string, TabEditorState>();
 let currentTabId: string | null = null;
 /** 切换 Model 时忽略 modelValue 回写，避免误 setValue 清掉撤销栈 */
 let applyingModelSwitch = false;
+
+/**
+ * 物理 Ctrl 键对应的 monaco 修饰位：macOS 上 CtrlCmd 指 Cmd，因此改用 WinCtrl。
+ */
+function physicalCtrlKeyMod(): number {
+  const platform =
+    typeof navigator === 'undefined'
+      ? ''
+      : `${navigator.platform || ''} ${navigator.userAgent || ''}`;
+  return /Mac|iPhone|iPad|iPod/i.test(platform)
+    ? monaco.KeyMod.WinCtrl
+    : monaco.KeyMod.CtrlCmd;
+}
 
 function themeName() {
   return isDark.value ? 'vs-dark' : 'vs';
@@ -484,12 +501,15 @@ onMounted(() => {
     if (!props.readOnly) formatCurrentSql();
   });
   // 右键菜单项。快捷键由父级在捕获阶段处理，避免和这里各关一次。
+  // 父级只认物理 Ctrl+Q（不含 Cmd）：Windows/Linux 上 CtrlCmd 即 Ctrl，
+  // macOS 上 CtrlCmd 是 Cmd，需改用 WinCtrl（Mac 的 Ctrl 键）。
+  // 注意 monaco 没有 KeyMod.Ctrl，写错会变成 undefined | KeyQ，即单按 Q 就关页签。
   editor.addAction({
     id: 'lemon.closeQueryTab',
     label: '关闭当前',
     contextMenuGroupId: 'navigation',
     contextMenuOrder: 2,
-    keybindings: [monaco.KeyMod.Ctrl | monaco.KeyCode.KeyQ],
+    keybindings: [physicalCtrlKeyMod() | monaco.KeyCode.KeyQ],
     run: () => emit('close-tab'),
   });
   // Ctrl+K + 右键菜单：唤出 AI 助手，携带选区 / 全文
@@ -500,6 +520,17 @@ onMounted(() => {
     contextMenuOrder: 0,
     keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyK],
     run: () => emitAskAi(),
+  });
+  // Ctrl+Shift+E + 右键菜单：查看选中/当前语句的执行计划（只读，不执行语句）
+  editor.addAction({
+    id: 'lemon.explainPlan',
+    label: translateUiText('执行计划'),
+    contextMenuGroupId: 'navigation',
+    contextMenuOrder: 0.5,
+    keybindings: [
+      monaco.KeyMod.CtrlCmd | monaco.KeyMod.Shift | monaco.KeyCode.KeyE,
+    ],
+    run: () => emit('explain'),
   });
   // 右键：对选中/光标处表名打开「查看表信息」（默认字段页由父级控制）
   editor.addAction({
@@ -758,6 +789,19 @@ function replaceSelectionOrAll(text: string) {
   editor.focus();
 }
 
+function hasUserSelection(): boolean {
+  const sel = editor?.getSelection();
+  return !!(sel && !sel.isEmpty());
+}
+
+function getCursorOffset(): number {
+  if (!editor) return 0;
+  const model = editor.getModel();
+  const pos = editor.getPosition();
+  if (!model || !pos) return 0;
+  return model.getOffsetAt(pos);
+}
+
 function getSelectedText(): string {
   if (!editor) return '';
   const model = editor.getModel();
@@ -848,6 +892,8 @@ defineExpose({
   insertText,
   getValue: () => editor?.getValue() || '',
   getExecutableSql,
+  getCursorOffset,
+  hasUserSelection,
   formatSql: formatCurrentSql,
   replaceSelectionOrAll,
   getSelectedText,

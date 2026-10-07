@@ -354,7 +354,7 @@ function applyOption() {
           </p>
         </section>
         <section class="option-preview">
-          <p>实时预览 · {{ previewWidth }} × {{ previewHeight }}</p>
+          <p>{{ $tr('实时预览 ·') }} {{ previewWidth }} × {{ previewHeight }}</p>
           <div
             class="preview-widget"
             :style="{

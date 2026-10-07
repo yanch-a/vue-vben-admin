@@ -491,7 +491,7 @@ function save(): void {
     <div v-loading="loading" class="designer-body">
       <ElAlert
         v-if="profile.family === 'SQLITE_LIKE' && mode === 'alter'"
-        title="SQLite 可直接新增、删除、重命名字段；修改字段类型、默认值、可空性或外键需要重建表。"
+        :title="$tr('SQLite 可直接新增、删除、重命名字段；修改字段类型、默认值、可空性或外键需要重建表。')"
         type="info"
         :closable="false"
         show-icon
@@ -499,7 +499,7 @@ function save(): void {
       />
       <ElAlert
         v-if="profile.family === 'MONGODB_LIKE'"
-        title="MongoDB 字段页配置 $jsonSchema 校验规则；外键不适用，索引按集合索引执行。"
+        :title="$tr('MongoDB 字段页配置 $jsonSchema 校验规则；外键不适用，索引按集合索引执行。')"
         type="info"
         :closable="false"
         show-icon
@@ -598,7 +598,7 @@ function save(): void {
             </ElTableColumn>
             <ElTableColumn :label="$tr('降序字段')" min-width="180">
               <template #default="{ row }">
-                <ElSelect v-model="row.descendingColumns" multiple clearable :disabled="!canSortIndex(row)" placeholder="默认全部升序">
+                <ElSelect v-model="row.descendingColumns" multiple clearable :disabled="!canSortIndex(row)" :placeholder="$tr('默认全部升序')">
                   <ElOption v-for="name in row.columns" :key="name" :label="name" :value="name" />
                 </ElSelect>
               </template>
@@ -647,7 +647,7 @@ function save(): void {
     </template>
   </ElDialog>
 
-  <ElDialog v-model="previewVisible" title="SQL 预览" width="820px" append-to-body destroy-on-close>
+  <ElDialog v-model="previewVisible" :title="$tr('SQL 预览')" width="820px" append-to-body destroy-on-close>
     <ElAlert v-if="previewResult.errors.length" :title="previewResult.errors.join('；')" type="error" :closable="false" show-icon class="preview-alert" />
     <ElAlert v-else-if="previewResult.warnings.length" :title="previewResult.warnings.join('；')" type="warning" :closable="false" show-icon class="preview-alert" />
     <pre class="sql-preview">{{ previewResult.sql || '-- 表结构没有变化' }}</pre>

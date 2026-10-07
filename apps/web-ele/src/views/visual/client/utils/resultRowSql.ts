@@ -318,7 +318,7 @@ export function identEq(a?: string | null, b?: string | null): boolean {
 
 /**
  * 拉表元数据时用的表名：PG/SS/H2 非默认 schema 写成 schema.table；
- * MySQL 的 FROM db.t 里 db 是实例不是 schema。
+ * MySQL 的 FROM db.t 里 db 是库名，表名只留 t，库名交给 metadataInstanceName。
  */
 export function metadataTableName(
   ref: TableRef,
@@ -336,6 +336,23 @@ export function metadataTableName(
     return ref.table;
   }
   return `${ref.schema}.${ref.table}`;
+}
+
+/**
+ * 拉列和主键时用的库名。
+ * MySQL 族里 `库`.`表` 的第一段就是库，必须按 SQL 限定名查，不能用左侧当前选中库。
+ * PostgreSQL / SQL Server / Oracle 的 schema 不是库，仍用当前库。
+ */
+export function metadataInstanceName(
+  ref: TableRef,
+  dbType: string | undefined | null,
+  currentInstance: string,
+): string {
+  const qualified = (ref.schema || '').trim();
+  if (resolveDialectFamily(dbType) === 'MYSQL_LIKE' && qualified) {
+    return qualified;
+  }
+  return currentInstance;
 }
 
 export function quoteIdent(name: string, dbType = 'MY_SQL'): string {

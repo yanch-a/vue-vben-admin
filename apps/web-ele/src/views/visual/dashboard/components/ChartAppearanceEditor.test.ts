@@ -100,6 +100,8 @@ async function mountEditor(initial?: Partial<ChartSpec>) {
       ),
   });
   app.use(ElementPlus);
+  // 生产环境由 bootstrap 注入 $tr；测试中按中文原文透传，保证按钮文案断言稳定。
+  app.config.globalProperties.$tr = (value: unknown) => String(value ?? '');
   app.mount(container);
   await flush();
   button('编辑 ECharts option').click();

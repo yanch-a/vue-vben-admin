@@ -6,7 +6,15 @@ import {
   unwrapFileBlob,
 } from '#/utils/blobDownload';
 
-import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
+import {
+  computed,
+  onActivated,
+  onBeforeUnmount,
+  onMounted,
+  reactive,
+  ref,
+  watch,
+} from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 
 import { Page } from '@vben/common-ui';
@@ -21,6 +29,7 @@ import {
   auditWorkOrderRules,
   downloadWorkOrderRollback,
   executeWorkOrder,
+  executeWorkOrderOverride,
   reviewWorkOrder,
   saveWorkOrder,
   submitWorkOrder,
@@ -29,6 +38,7 @@ import {
   workOrderPage,
 } from '#/api/visual/sqlWorkOrder';
 import { getDbConfigList } from '#/api/visual/vq';
+import { isChangeWindowBlockedMessage } from '#/views/visual/client/utils/connectionEnv';
 
 import { normalizeInstanceNames } from './instanceOptions';
 
@@ -43,6 +53,8 @@ const rows = ref<SqlWorkOrder[]>([]);
 const total = ref(0);
 const dba = ref(false);
 const canForceSubmit = ref(false);
+/** 变更窗口外强制执行工单（windowOverride 权限） */
+const canOverrideChangeWindow = ref(false);
 const canAudit = ref(false);
 const roleReady = ref(false);
 const scope = ref<'mine' | 'review'>('mine');
@@ -99,6 +111,7 @@ const eventActionLabel: Record<string, string> = {
   EXECUTE_SUCCESS: '执行成功',
   EXECUTE_FAILED: '执行失败',
   EXECUTION_QUEUE_REJECTED: '执行排队失败',
+  CHANGE_WINDOW_OVERRIDE: '变更窗口外强制执行',
 };
 
 /** 前端预演步骤（等待接口期间给用户过程感；完成后会被真实步骤替换） */
@@ -241,6 +254,7 @@ async function loadCapabilities() {
   const data = unbox(await workOrderCapabilities());
   dba.value = Boolean(data?.dba);
   canForceSubmit.value = Boolean(data?.canForceSubmit);
+  canOverrideChangeWindow.value = Boolean(data?.canOverrideChangeWindow);
   canAudit.value = Boolean(data?.canAudit);
   scope.value = dba.value ? 'review' : 'mine';
   roleReady.value = true;
@@ -498,27 +512,59 @@ async function execute(row: SqlWorkOrder) {
 
   executing.value = true;
   try {
-    try {
-      await executeWorkOrder(row.id, false);
-    } catch (error: any) {
-      const message = errorMessage(error);
-      // 仅“回滚不完整”允许二次确认后带 allowIncompleteRollback 重试，其它错误直接提示。
-      if (!message.includes('人工回滚') && !message.includes('无法自动还原')) {
-        ElMessage.error(message || '执行失败');
-        return;
-      }
+    // 失败后按原因二次确认再重试：变更窗口外（有权限时填写原因强制执行）、回滚不完整（接受人工回滚）。
+    let allowIncomplete = false;
+    let overrideReason = '';
+    for (let attempt = 0; attempt < 3; attempt++) {
       try {
-        await ElMessageBox.confirm(
-          `${message}\n\n确认由 DBA 人工处理无法自动还原的部分？`,
-          '回滚不完整',
-          { type: 'error', confirmButtonText: '接受风险并执行' },
-        );
-      } catch (inner) {
-        if (isMessageBoxCancel(inner)) return;
-        ElMessage.error(errorMessage(inner));
-        return;
+        await (overrideReason
+          ? executeWorkOrderOverride(row.id, overrideReason, allowIncomplete)
+          : executeWorkOrder(row.id, allowIncomplete));
+        break;
+      } catch (error: any) {
+        const message = errorMessage(error);
+        if (!overrideReason && isChangeWindowBlockedMessage(message)) {
+          if (!canOverrideChangeWindow.value) {
+            ElMessage.error(message);
+            return;
+          }
+          try {
+            const result: any = await ElMessageBox.prompt(
+              `${message}\n\n如确需在变更窗口外执行，请填写强制执行原因（将写入工单审计记录）：`,
+              '变更窗口外强制执行',
+              {
+                type: 'error',
+                confirmButtonText: '强制执行',
+                inputValidator: (value: string) =>
+                  (value?.trim().length ?? 0) >= 5 || '原因不少于 5 个字',
+              },
+            );
+            overrideReason = String(result.value || '').trim();
+          } catch (inner) {
+            if (isMessageBoxCancel(inner)) return;
+            ElMessage.error(errorMessage(inner));
+            return;
+          }
+          continue;
+        }
+        // 仅“回滚不完整”允许二次确认后带 allowIncompleteRollback 重试，其它错误直接提示。
+        if (allowIncomplete || (!message.includes('人工回滚') && !message.includes('无法自动还原'))) {
+          ElMessage.error(message || '执行失败');
+          return;
+        }
+        try {
+          await ElMessageBox.confirm(
+            `${message}\n\n确认由 DBA 人工处理无法自动还原的部分？`,
+            '回滚不完整',
+            { type: 'error', confirmButtonText: '接受风险并执行' },
+          );
+        } catch (inner) {
+          if (isMessageBoxCancel(inner)) return;
+          ElMessage.error(errorMessage(inner));
+          return;
+        }
+        allowIncomplete = true;
       }
-      await executeWorkOrder(row.id, true);
     }
     ElMessage.success('回滚文件已生成，工单进入执行队列');
     await load();
@@ -550,36 +596,71 @@ async function downloadRollback(row: SqlWorkOrder) {
 }
 
 
-/** 从客户端「提交为工单」或 ?create=1 预填新建表单 */
-async function openCreateFromRoute() {
+const PREFILL_KEY = 'lemon.sqlWorkOrder.prefill';
+/** 本实例是否已按当前地址打开过新建框。不要 replace 掉 query：布局用 fullPath 做页面 key，改 URL 会拆掉刚打开的弹窗。 */
+const createOpened = ref(false);
+
+type WorkOrderPrefill = {
+  sql?: string;
+  title?: string;
+  dbConfigId?: string;
+  instanceName?: string;
+  nonce?: string;
+};
+
+function readPrefillPayload(): WorkOrderPrefill | null {
+  try {
+    const raw = sessionStorage.getItem(PREFILL_KEY);
+    if (!raw) return null;
+    const data = JSON.parse(raw) as WorkOrderPrefill;
+    return data && typeof data === 'object' ? data : null;
+  } catch {
+    return null;
+  }
+}
+
+function clearPrefillPayload() {
+  try {
+    sessionStorage.removeItem(PREFILL_KEY);
+  } catch {
+    // ignore
+  }
+}
+
+/**
+ * 客户端带 ?create=1 进入时立刻打开新建框并预填 SQL。
+ * 不修改地址，避免 fullPath 变化导致页面实例被拆掉、弹窗消失。
+ */
+function openCreateFromRoute() {
   const q = route.query || {};
   const wantCreate =
     String(q.create || '') === '1' ||
     String(q.create || '').toLowerCase() === 'true';
-  let prefillSql = '';
-  try {
-    prefillSql = sessionStorage.getItem('lemon.sqlWorkOrder.prefillSql') || '';
-    if (prefillSql) sessionStorage.removeItem('lemon.sqlWorkOrder.prefillSql');
-  } catch {
-    prefillSql = '';
-  }
-  if (!wantCreate && !prefillSql && !q.dbConfigId && !q.scriptText) return;
+  if (!wantCreate || createOpened.value) return;
 
+  const prefill = readPrefillPayload();
+  const nonce = typeof q.nonce === 'string' ? q.nonce : '';
+  // 预填包和本次点击的 nonce 对得上才用，避免吃到上一次残留
+  const matched = !nonce || !prefill?.nonce || prefill.nonce === nonce;
+  const scriptText = matched
+    ? (prefill?.sql || '').trim() ||
+      (typeof q.scriptText === 'string' ? q.scriptText : '') ||
+      (typeof q.sql === 'string' ? q.sql : '')
+    : (typeof q.scriptText === 'string' ? q.scriptText : '') ||
+      (typeof q.sql === 'string' ? q.sql : '');
   const title =
+    (matched && prefill?.title?.trim()) ||
     (typeof q.title === 'string' && q.title) ||
     `SQL 变更 ${new Date().toLocaleString()}`;
-  const dbConfigId = q.dbConfigId != null && q.dbConfigId !== '' ? q.dbConfigId : undefined;
+  const dbConfigId =
+    (matched && prefill?.dbConfigId) ||
+    (q.dbConfigId != null && q.dbConfigId !== '' ? String(q.dbConfigId) : undefined);
   const instanceName =
-    typeof q.instance === 'string'
-      ? q.instance
-      : typeof q.instanceName === 'string'
-        ? q.instanceName
-        : '';
-  const scriptText =
-    prefillSql ||
-    (typeof q.scriptText === 'string' ? q.scriptText : '') ||
-    (typeof q.sql === 'string' ? q.sql : '');
+    (matched && prefill?.instanceName?.trim()) ||
+    (typeof q.instance === 'string' ? q.instance : '') ||
+    (typeof q.instanceName === 'string' ? q.instanceName : '');
 
+  createOpened.value = true;
   if (dba.value) scope.value = 'mine';
   createOrder({
     title,
@@ -588,19 +669,17 @@ async function openCreateFromRoute() {
     scriptText,
     changeNote: '由 SQL 客户端提交',
   });
-  const nextQuery = { ...route.query };
-  delete nextQuery.create;
-  delete nextQuery.scriptText;
-  delete nextQuery.sql;
-  router.replace({ path: route.path, query: nextQuery });
+  if (matched) clearPrefillPayload();
 }
 
 onMounted(async () => {
+  // 先弹框，再拉列表，避免接口慢时看起来像没反应
+  openCreateFromRoute();
   await loadCapabilities();
   await loadConnections();
   await load();
   await openOrderFromNotification(route.query.orderId);
-  await openCreateFromRoute();
+  openCreateFromRoute();
   refreshTimer = setInterval(async () => {
     if (!rows.value.some((item) => ['EXECUTING', 'PREPARING'].includes(item.status))) return;
     try {
@@ -613,6 +692,10 @@ onMounted(async () => {
     }
   }, 3000);
 });
+/** keep-alive 再次进入时也要消费 ?create=1 / 预填 */
+onActivated(() => {
+  openCreateFromRoute();
+});
 onBeforeUnmount(() => {
   if (refreshTimer) clearInterval(refreshTimer);
   stopAuditProgressPreview();
@@ -622,6 +705,12 @@ watch(
   () => route.query.orderId,
   (orderId, previousId) => {
     if (orderId !== previousId) openOrderFromNotification(orderId);
+  },
+);
+watch(
+  () => route.query.create,
+  (create, previous) => {
+    if (create && create !== previous) void openCreateFromRoute();
   },
 );
 </script>
@@ -718,16 +807,16 @@ watch(
             </template>
           </ElTableColumn>
         </ElTable>
-        <ElEmpty v-else description="暂无按语句结果（提交或审计后生成）" :image-size="64" />
+        <ElEmpty v-else :description="$tr('暂无按语句结果（提交或审计后生成）')" :image-size="64" />
 
         <template v-if="auditSession">
           <h4>{{ $tr('审计过程') }}</h4>
           <div class="audit-summary">
             <ElTag v-if="auditSession.modelName" type="info" effect="plain">{{ auditSession.modelName }}</ElTag>
-            <ElTag v-if="auditSession.durationMs != null" effect="plain">耗时 {{ formatDuration(auditSession.durationMs) }}</ElTag>
+            <ElTag v-if="auditSession.durationMs != null" effect="plain">{{ $tr('耗时') }} {{ formatDuration(auditSession.durationMs) }}</ElTag>
             <ElTag v-if="auditSession.errorCount != null" :type="auditSession.errorCount > 0 ? 'danger' : 'success'" effect="plain">ERROR {{ auditSession.errorCount }}</ElTag>
             <ElTag v-if="auditSession.warningCount != null" :type="auditSession.warningCount > 0 ? 'warning' : 'success'" effect="plain">WARNING {{ auditSession.warningCount }}</ElTag>
-            <ElTag v-if="auditSession.source" effect="plain">{{ auditSession.source === 'AI_AUDIT' ? '含 AI 建议' : '仅规则引擎' }}</ElTag>
+            <ElTag v-if="auditSession.source" effect="plain">{{ $tr(auditSession.source === 'AI_AUDIT' ? '含 AI 建议' : '仅规则引擎') }}</ElTag>
           </div>
           <ElTimeline v-if="auditSessionSteps.length" class="audit-steps">
             <ElTimelineItem
@@ -747,18 +836,18 @@ watch(
           <div v-if="auditSessionCoverage" class="coverage-box">
             <div class="coverage-title">{{ $tr('规则覆盖') }}</div>
             <div class="coverage-grid">
-              <span>总数 {{ auditSessionCoverage.totalRules ?? 0 }}</span>
-              <span>方言启用 {{ auditSessionCoverage.activeRules ?? 0 }}</span>
-              <span>命中 {{ auditSessionCoverage.hitRules ?? 0 }}</span>
-              <span>未命中 {{ auditSessionCoverage.cleanRules ?? 0 }}</span>
-              <span>方言跳过 {{ auditSessionCoverage.skippedByDialect ?? 0 }}</span>
-              <span>禁用 {{ auditSessionCoverage.disabledRules ?? 0 }}</span>
+              <span>{{ $tr('总数') }} {{ auditSessionCoverage.totalRules ?? 0 }}</span>
+              <span>{{ $tr('方言启用') }} {{ auditSessionCoverage.activeRules ?? 0 }}</span>
+              <span>{{ $tr('命中') }} {{ auditSessionCoverage.hitRules ?? 0 }}</span>
+              <span>{{ $tr('未命中') }} {{ auditSessionCoverage.cleanRules ?? 0 }}</span>
+              <span>{{ $tr('方言跳过') }} {{ auditSessionCoverage.skippedByDialect ?? 0 }}</span>
+              <span>{{ $tr('禁用') }} {{ auditSessionCoverage.disabledRules ?? 0 }}</span>
             </div>
             <div v-if="auditSessionCoverage.hitRuleCodes?.length" class="coverage-codes">
-              命中：{{ auditSessionCoverage.hitRuleCodes.join('、') }}
+              {{ $tr('命中：') }}{{ auditSessionCoverage.hitRuleCodes.join('、') }}
             </div>
             <div v-if="auditSessionCoverage.skippedRuleCodes?.length" class="coverage-codes muted">
-              方言跳过（部分）：{{ auditSessionCoverage.skippedRuleCodes.join('、') }}
+              {{ $tr('方言跳过（部分）：') }}{{ auditSessionCoverage.skippedRuleCodes.join('、') }}
             </div>
           </div>
           <template v-if="auditSession.ruleReportMarkdown">
@@ -774,7 +863,7 @@ watch(
               :title="auditSession.aiError || 'AI 建议生成失败'"
               style="margin-bottom: 8px"
             />
-            <div v-if="auditSession.question" class="audit-question">DBA 问题：{{ auditSession.question }}</div>
+            <div v-if="auditSession.question" class="audit-question">{{ $tr('DBA 问题：') }}{{ auditSession.question }}</div>
             <div v-if="auditSession.aiAdviceMarkdown" class="report ai-report">{{ auditSession.aiAdviceMarkdown }}</div>
           </template>
         </template>
@@ -824,7 +913,7 @@ watch(
       <template v-else>
         <div v-if="auditResult" class="audit-summary" style="margin-bottom: 12px">
           <ElTag v-if="auditResult.modelName" type="info" effect="plain">{{ auditResult.modelName }}</ElTag>
-          <ElTag effect="plain">耗时 {{ formatDuration(auditResult.durationMs) }}</ElTag>
+          <ElTag effect="plain">{{ $tr('耗时') }} {{ formatDuration(auditResult.durationMs) }}</ElTag>
           <ElTag :type="(auditResult.errorCount || 0) > 0 ? 'danger' : 'success'" effect="plain">ERROR {{ auditResult.errorCount || 0 }}</ElTag>
           <ElTag :type="(auditResult.warningCount || 0) > 0 ? 'warning' : 'success'" effect="plain">WARNING {{ auditResult.warningCount || 0 }}</ElTag>
         </div>
@@ -849,12 +938,12 @@ watch(
           <div v-if="auditResult.coverage" class="coverage-box">
             <div class="coverage-title">{{ $tr('规则覆盖') }}</div>
             <div class="coverage-grid">
-              <span>总数 {{ auditResult.coverage.totalRules ?? 0 }}</span>
-              <span>方言启用 {{ auditResult.coverage.activeRules ?? 0 }}</span>
-              <span>命中 {{ auditResult.coverage.hitRules ?? 0 }}</span>
-              <span>未命中 {{ auditResult.coverage.cleanRules ?? 0 }}</span>
-              <span>方言跳过 {{ auditResult.coverage.skippedByDialect ?? 0 }}</span>
-              <span>禁用 {{ auditResult.coverage.disabledRules ?? 0 }}</span>
+              <span>{{ $tr('总数') }} {{ auditResult.coverage.totalRules ?? 0 }}</span>
+              <span>{{ $tr('方言启用') }} {{ auditResult.coverage.activeRules ?? 0 }}</span>
+              <span>{{ $tr('命中') }} {{ auditResult.coverage.hitRules ?? 0 }}</span>
+              <span>{{ $tr('未命中') }} {{ auditResult.coverage.cleanRules ?? 0 }}</span>
+              <span>{{ $tr('方言跳过') }} {{ auditResult.coverage.skippedByDialect ?? 0 }}</span>
+              <span>{{ $tr('禁用') }} {{ auditResult.coverage.disabledRules ?? 0 }}</span>
             </div>
           </div>
           <h4 class="dialog-section-title">{{ $tr('确定性规则结果') }}</h4>
@@ -868,13 +957,13 @@ watch(
             style="margin-bottom: 8px"
           />
           <div v-if="auditResult.aiAdviceMarkdown" class="report ai-report">{{ auditResult.aiAdviceMarkdown }}</div>
-          <div v-else-if="auditResult.aiStatus !== 'failed'" class="report ai-report muted">暂无 AI 建议</div>
+          <div v-else-if="auditResult.aiStatus !== 'failed'" class="report ai-report muted">{{ $tr('暂无 AI 建议') }}</div>
         </template>
         <ElAlert
           v-else-if="auditPhase === 'running'"
           type="info"
           :closable="false"
-          title="规则预审已优先执行；大模型建议生成中。下方步骤为真实进度。"
+          :title="$tr('规则预审已优先执行；大模型建议生成中。下方步骤为真实进度。')"
           style="margin-top: 8px"
         />
       </template>

@@ -15,15 +15,20 @@ export function resolveBackendAssetUrl(url?: null | string): string {
   if (!url) return '';
   const trimmed = String(url).trim();
   if (!trimmed) return '';
-  if (
-    /^https?:\/\//i.test(trimmed) ||
-    trimmed.startsWith('data:') ||
-    trimmed.startsWith('blob:')
-  ) {
+  // 浏览器解析 URL 时会忽略空白/控制字符，判断协议前先去掉，防止 `java\tscript:` 绕过。
+  const compact = trimmed.replaceAll(/[\u0000-\u0020\u007F]+/g, '');
+  if (/^https?:\/\//i.test(compact) || /^blob:/i.test(compact)) {
     return trimmed;
   }
+  // data: 只放行图片，避免 data:text/html 之类被当作资源地址使用。
+  if (/^data:/i.test(compact)) {
+    return /^data:image\/[\w.+-]+[;,]/i.test(compact) ? compact : '';
+  }
+  // 其它协议（javascript:/vbscript:/file: 等）一律丢弃。
+  if (/^[a-z][\d+.a-z-]*:/i.test(compact)) return '';
 
-  const normalizedPath = `/${trimmed.replace(/^\/+/, '')}`;
+  // 同时去掉开头的反斜杠：浏览器会把 `/\\evil.com` 当成协议相对地址 `//evil.com`。
+  const normalizedPath = `/${trimmed.replace(/^[/\\]+/, '')}`;
   const prefix = String(baseURL || '').replace(/\/+$/, '');
   if (!prefix || prefix === '/') return normalizedPath;
 

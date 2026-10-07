@@ -10,6 +10,7 @@ const routes: RouteRecordRaw[] = [
     path: '/visual/client',
     redirect: '/lSql/visualClient',
     meta: {
+      title: 'SQL',
       hideInMenu: true,
       hideInTab: true,
     },
@@ -19,15 +20,7 @@ const routes: RouteRecordRaw[] = [
     path: '/visual/visualClient',
     redirect: '/lSql/visualClient',
     meta: {
-      hideInMenu: true,
-      hideInTab: true,
-    },
-  },
-  {
-    name: 'SqlWorkLegacyRedirect',
-    path: '/SqlWork',
-    redirect: '/lSql/sqlWorkOrder',
-    meta: {
+      title: 'SQL',
       hideInMenu: true,
       hideInTab: true,
     },
@@ -35,6 +28,7 @@ const routes: RouteRecordRaw[] = [
   /**
    * 查看页：无基础布局；大屏 ID 通过 screenId 查询参数传递。
    * 若后台菜单已下发同名路由，框架会去重，此处兜底 noBasicLayout。
+   * SQL 工单（name=SqlWork, path=/SqlWork）由后台菜单下发；旧 path 兼容见 guard LEGACY_PATH_REDIRECTS。
    */
   {
     name: 'VisualDashboardView',

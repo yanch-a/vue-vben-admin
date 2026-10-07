@@ -311,8 +311,8 @@ defineExpose({
             v-model="isMaskedMode"
             size="small"
             inline-prompt
-            active-text="开"
-            inactive-text="关"
+            :active-text="$tr('开')"
+            :inactive-text="$tr('关')"
             :disabled="running"
             :before-change="beforeMaskChange"
             @change="maskCustomized = true"

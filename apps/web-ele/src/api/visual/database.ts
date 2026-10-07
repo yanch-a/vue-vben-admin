@@ -222,6 +222,29 @@ export function executeSqlBatch(data: {
   })
 }
 
+/**
+ * 可视化执行计划：普通 EXPLAIN 只出计划不执行；analyze=true 会真实执行（仅只读 SELECT），
+ * 生产连接需先确认并带 confirmProd=true。requestId 与 cancelSql 配对可中途停止。
+ */
+export function explainPlan(data: {
+  dbConfigId: number | string
+  instanceName?: string
+  sql: string
+  analyze?: boolean
+  confirmProd?: boolean
+  requestId?: string
+  source?: string
+}, opts?: { signal?: AbortSignal }) {
+  return request({
+    url: databaseUrl + 'explainPlan',
+    method: 'post',
+    data,
+    signal: opts?.signal,
+    // 超时由服务端按普通 / ANALYZE / 生产分别控制
+    timeout: 0,
+  })
+}
+
 /** 取消正在执行的自由 SQL（服务端 kill/cancel） */
 export function cancelSql(data: { requestId: string }) {
   return request({

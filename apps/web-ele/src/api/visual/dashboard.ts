@@ -109,6 +109,11 @@ export interface ScreenConfig {
   schemaVersion: number;
   /** editor snap/show grid */
   showGrid?: boolean;
+  /**
+   * 查看页自动刷新间隔（秒）：0 关闭；未设置时实时模式不刷新、快照模式跟随快照间隔。
+   * 发布时随配置冻结，后端夹在 0 或 10~86400。
+   */
+  viewRefreshSeconds?: null | number;
   widgets: ScreenWidget[];
   width: number;
 }
@@ -144,6 +149,16 @@ export function deleteChart(id: number | string) {
 
 export function listScreens() {
   return request({ url: `${screenUrl}list`, method: 'get' });
+}
+
+/** 其他用户已发布、当前用户可查看的大屏（只读，数据仍按查看者的表级权限过滤）。 */
+export function listPublishedScreens() {
+  return request({ url: `${screenUrl}published`, method: 'get' });
+}
+
+/** 大屏媒体策略：内嵌网页域名白名单（后端 lemon.dashboard.iframe-allowed-hosts）。 */
+export function getScreenMediaPolicy() {
+  return request({ url: `${screenUrl}mediaPolicy`, method: 'get' });
 }
 
 export function getScreen(id: number | string) {

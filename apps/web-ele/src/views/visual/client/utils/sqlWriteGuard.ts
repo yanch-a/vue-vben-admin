@@ -34,6 +34,11 @@ const WRITE_PREFIXES = new Set([
   'EXEC',
   'EXECUTE',
   'MERGE',
+  'COPY',
+  'BULK',
+  'BEGIN',
+  'DECLARE',
+  'DO',
   'RENAME',
   'COMMENT',
   'REFRESH',
@@ -73,7 +78,9 @@ export function isFreeDmlSql(sql: string): boolean {
     first === 'UPDATE' ||
     first === 'DELETE' ||
     first === 'REPLACE' ||
-    first === 'MERGE'
+    first === 'MERGE' ||
+    first === 'COPY' ||
+    (first === 'BULK' && /^BULK\s+INSERT\b/.test(upper.trim()))
   ) {
     return true;
   }

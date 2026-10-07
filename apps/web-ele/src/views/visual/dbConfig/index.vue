@@ -28,6 +28,7 @@
   import { setPendingSavedQueryOpen } from '../client/composables/usePendingSavedQuery'
   import { visualClientConfig } from '../client/config'
   import { resolveDbType } from '../client/dialect/dbTypes'
+  import { ENV_OPTIONS, envTagType, resolveConnectionEnv } from '../client/utils/connectionEnv'
 
   export default defineComponent({
     name: 'DbConfig',
@@ -64,6 +65,8 @@
         sshPassword: '',
         sshPrivateKey: '',
         sshPassphrase: '',
+        env: '',
+        envLabel: '',
       })
 
       const sshAuthMode = ref('password')
@@ -216,6 +219,8 @@
           sshPassword: '',
           sshPrivateKey: '',
           sshPassphrase: '',
+          env: '',
+          envLabel: '',
         })
         sshAuthMode.value = 'password'
         dialogVisible.value = true
@@ -231,6 +236,8 @@
           sshPrivateKey: '',
           sshPassphrase: '',
           isPublic: row.isPublic == null ? 0 : row.isPublic,
+          env: row.env || '',
+          envLabel: row.envLabel || '',
         })
         sshAuthMode.value = row.sshPrivateKey ? 'key' : 'password'
         dialogVisible.value = true
@@ -307,6 +314,8 @@
               dbPort: cfg.dbPort,
               username: cfg.username,
               description: cfg.description,
+              env: cfg.env,
+              envLabel: cfg.envLabel,
               connectionStatus: cfg.connectionStatus,
               aiEnabled: cfg.aiEnabled == null ? 1 : Number(cfg.aiEnabled),
               aiAllowSampleData:
@@ -345,6 +354,9 @@
             try {
               dialogVisible.value = false
               const payload = { ...form }
+              // 环境标签：空串表示清除（后端 NOT_NULL 更新策略下 null 不会覆盖）
+              payload.env = form.env || ''
+              payload.envLabel = form.envLabel || ''
               // 编辑且密码为空：不传 password，避免误清空
               if (dialogType.value === 'edit' && !payload.password) {
                 delete payload.password
@@ -681,6 +693,9 @@
       })
 
       return {
+        ENV_OPTIONS,
+        envTagType,
+        resolveConnectionEnv,
         loading,
         dialogVisible,
         dialogType,
@@ -820,6 +835,15 @@
             <span class="db-card__type">{{ typeLabel(row) }}</span>
           </div>
           <div class="db-card__badges">
+            <el-tag
+              v-if="resolveConnectionEnv(row).text"
+              :type="envTagType(resolveConnectionEnv(row).env)"
+              size="small"
+              :effect="resolveConnectionEnv(row).env === 'PROD' ? 'dark' : 'light'"
+              :title="resolveConnectionEnv(row).source === 'LEGACY_NAME' ? $tr('未设置环境标签，按名称关键词识别为生产') : ''"
+            >
+              {{ resolveConnectionEnv(row).text }}
+            </el-tag>
             <span
               class="db-card__status"
               :class="row.connectionStatus === 1 ? 'is-online' : 'is-offline'"
@@ -951,6 +975,28 @@
       <el-form ref="formRef" :model="form" :rules="rules" label-width="150px">
         <el-form-item :label="$tr('数据库中文名称')" prop="dbName">
           <el-input v-model="form.dbName" :placeholder="$tr('请输入数据库中文名称')" />
+        </el-form-item>
+        <el-form-item :label="$tr('环境')" prop="env">
+          <div style="display: flex; gap: 8px; align-items: center">
+            <el-select v-model="form.env" clearable :placeholder="$tr('未标记')" style="width: 180px">
+              <el-option
+                v-for="opt in ENV_OPTIONS"
+                :key="opt.value"
+                :label="`${opt.value} · ${$tr(opt.label)}`"
+                :value="opt.value"
+              />
+            </el-select>
+            <el-input
+              v-model="form.envLabel"
+              maxlength="32"
+              clearable
+              :placeholder="$tr('自定义显示名（可选）')"
+              style="width: 220px"
+            />
+          </div>
+          <div style="width: 100%; font-size: 12px; color: var(--el-text-color-secondary)">
+            {{ $tr('生产连接请标记为 PROD：打开时二次确认，并受变更窗口约束；未标记时按名称关键词识别') }}
+          </div>
         </el-form-item>
         <el-form-item :label="$tr('默认数据库')" prop="schemaName">
           <el-input

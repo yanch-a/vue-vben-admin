@@ -6,6 +6,7 @@
  * 2. 表名补全优先用左侧已加载的表清单；支持 db.table 按库匹配
  * 3. 字段补全仅在识别到表之后按需请求，并写入客户端 LRU 缓存
  * 4. 执行时按分号切分：无选区只发「光标所在语句」；选区含多条时整段交给分步执行
+ * 5. 光标落在 SET @变量 / PREPARE 上时，把前后依赖的语句收成一次执行，保证变量还在同一个连接上
  *
  * @author yanch
  */
@@ -305,9 +306,204 @@ function isCompoundEndWord(text: string, pos: number): boolean {
   );
 }
 
+/** BEGIN 后面是语句、并且有配对的 END 时，整段 BEGIN...END 算一条。没有 END 就按分号拆，避免把后面的语句吞掉。 */
+function opensAnonymousBlock(text: string, pos: number): boolean {
+  if (matchSqlWord(text, pos, 'BEGIN')) {
+    const after = skipSqlTrivia(text, skipSqlWord(text, pos));
+    if (isTxnAfterBegin(text, after) || text[after] === ';') return false;
+    return hasMatchingBlockEnd(text, pos);
+  }
+  if (matchSqlWord(text, pos, 'DECLARE')) {
+    return declareReachesBegin(text, pos);
+  }
+  return false;
+}
+
+/**
+ * 从 BEGIN 往后找配对的 END。END IF 不算，字符串和注释里的 END 也不算。
+ * 中途遇到单独一行的 GO 或 /，说明块没有在这个批次里结束。
+ */
+function hasMatchingBlockEnd(text: string, beginPos: number): boolean {
+  const n = text.length;
+  let i = beginPos;
+  let depth = 0;
+  let atStmtStart = true;
+  while (i < n) {
+    const c = text[i]!;
+    const next = text[i + 1];
+    if (c === ' ' || c === '\t' || c === '\n' || c === '\r') {
+      i++;
+      continue;
+    }
+    if (c === '-' && next === '-') {
+      while (i < n && text[i] !== '\n' && text[i] !== '\r') i++;
+      continue;
+    }
+    if (c === '#') {
+      while (i < n && text[i] !== '\n' && text[i] !== '\r') i++;
+      continue;
+    }
+    if (c === '/' && next === '*') {
+      i += 2;
+      while (i + 1 < n && !(text[i] === '*' && text[i + 1] === '/')) i++;
+      i = i + 1 < n ? i + 2 : n;
+      continue;
+    }
+    if (c === "'" || c === '"' || c === '`') {
+      i = skipQuotedSpan(text, i, c);
+      atStmtStart = false;
+      continue;
+    }
+    if (c === '$') {
+      const dollarEnd = skipDollarQuoteSpan(text, i);
+      if (dollarEnd > i) {
+        i = dollarEnd;
+        atStmtStart = false;
+        continue;
+      }
+    }
+    if (atSqlLineStart(text, i) && (matchSqlWord(text, i, 'GO') || (c === '/' && next !== '*'))) {
+      return false;
+    }
+    if (isSqlIdentStart(c)) {
+      if (matchSqlWord(text, i, 'BEGIN')) {
+        const after = skipSqlWord(text, i);
+        const p = skipSqlTrivia(text, after);
+        if (matchSqlWord(text, p, 'ATOMIC')) {
+          depth++;
+          i = skipSqlWord(text, p);
+          atStmtStart = true;
+          continue;
+        }
+        if (isTxnAfterBegin(text, p) || text[p] === ';') {
+          i = after;
+          atStmtStart = false;
+          continue;
+        }
+        depth++;
+        i = after;
+        atStmtStart = true;
+        continue;
+      }
+      if (matchSqlWord(text, i, 'END')) {
+        const after = skipSqlWord(text, i);
+        const p = skipSqlTrivia(text, after);
+        if (isCompoundEndWord(text, p)) {
+          i = skipSqlWord(text, p);
+          atStmtStart = false;
+          continue;
+        }
+        if (depth > 0 && atStmtStart) {
+          depth--;
+          if (depth === 0) return true;
+        }
+        i = after;
+        atStmtStart = false;
+        continue;
+      }
+      i = skipSqlWord(text, i);
+      atStmtStart = false;
+      continue;
+    }
+    if (c === ';') {
+      atStmtStart = true;
+      i++;
+      continue;
+    }
+    i++;
+    atStmtStart = false;
+  }
+  return false;
+}
+
+/**
+ * Oracle 的 DECLARE ... BEGIN ... END 中间有分号，但仍是一条匿名块。
+ * DECLARE @x; SELECT @x 这种没有 BEGIN 的声明要拆开。
+ */
+function declareReachesBegin(text: string, pos: number): boolean {
+  const n = text.length;
+  let j = pos;
+  let paren = 0;
+  while (j < n) {
+    const c = text[j]!;
+    const next = text[j + 1];
+    if (c === '-' && next === '-') {
+      while (j < n && text[j] !== '\n' && text[j] !== '\r') j++;
+      continue;
+    }
+    if (c === '#') {
+      while (j < n && text[j] !== '\n' && text[j] !== '\r') j++;
+      continue;
+    }
+    if (c === '/' && next === '*') {
+      j += 2;
+      while (j + 1 < n && !(text[j] === '*' && text[j + 1] === '/')) j++;
+      j = j + 1 < n ? j + 2 : n;
+      continue;
+    }
+    if (c === "'" || c === '"' || c === '`') {
+      j = skipQuotedSpan(text, j, c);
+      continue;
+    }
+    if (c === '$') {
+      const dollarEnd = skipDollarQuoteSpan(text, j);
+      if (dollarEnd > j) {
+        j = dollarEnd;
+        continue;
+      }
+    }
+    if (c === '(') {
+      paren++;
+      j++;
+      continue;
+    }
+    if (c === ')') {
+      paren = Math.max(0, paren - 1);
+      j++;
+      continue;
+    }
+    if (paren === 0 && isSqlIdentStart(c)) {
+      if (matchSqlWord(text, j, 'BEGIN')) {
+        const after = skipSqlTrivia(text, skipSqlWord(text, j));
+        if (isTxnAfterBegin(text, after) || text[after] === ';') return false;
+        return hasMatchingBlockEnd(text, j);
+      }
+      if (
+        matchSqlWord(text, j, 'SELECT') ||
+        matchSqlWord(text, j, 'INSERT') ||
+        matchSqlWord(text, j, 'UPDATE') ||
+        matchSqlWord(text, j, 'DELETE') ||
+        matchSqlWord(text, j, 'CREATE') ||
+        matchSqlWord(text, j, 'ALTER') ||
+        matchSqlWord(text, j, 'DROP') ||
+        matchSqlWord(text, j, 'WITH') ||
+        matchSqlWord(text, j, 'SET') ||
+        matchSqlWord(text, j, 'COMMIT') ||
+        matchSqlWord(text, j, 'ROLLBACK') ||
+        matchSqlWord(text, j, 'CALL') ||
+        matchSqlWord(text, j, 'EXEC') ||
+        matchSqlWord(text, j, 'EXECUTE') ||
+        matchSqlWord(text, j, 'MERGE') ||
+        matchSqlWord(text, j, 'USE') ||
+        matchSqlWord(text, j, 'PREPARE')
+      ) {
+        return false;
+      }
+      j = skipSqlWord(text, j);
+      continue;
+    }
+    if (atSqlLineStart(text, j) && (matchSqlWord(text, j, 'GO') || (c === '/' && next !== '*'))) {
+      return false;
+    }
+    j++;
+  }
+  return false;
+}
+
 /**
  * 按分号切分 SQL，忽略字符串、注释、美元引号里的分号。
- * 存储过程 / 函数 / 触发器 / 事件整段算一条：BEGIN...END 内部的分号不切开，
+ * 存储过程 / 函数 / 触发器 / 事件整段算一条：BEGIN...END 内部的分号不切开。
+ * 匿名 BEGIN...END、DECLARE...BEGIN...END 同样保持一条。BEGIN; / BEGIN WORK 仍是单独的事务语句。
  * MySQL 的 DELIMITER 只改变终止符，本身不送给数据库。
  * 返回每条语句在原文中的 [start, end)（不含末尾终止符）。
  */
@@ -366,8 +562,11 @@ export function splitSqlStatements(fullText: string): SqlRange[] {
 
     const start = i;
     const routine = looksLikeSqlRoutine(text, i);
+    const anonymous = !routine && opensAnonymousBlock(text, i);
     let depth = 0;
     let closed = false;
+    // DECLARE 段里的分号先不切开，等到 BEGIN 再按块深度计算
+    let holdingDeclare = anonymous && matchSqlWord(text, i, 'DECLARE');
     // 只有语句开头的 END 才关闭 BEGIN，字段名 end 不能把过程切开
     let atStmtStart = false;
 
@@ -427,11 +626,12 @@ export function splitSqlStatements(fullText: string): SqlRange[] {
         i++;
         continue;
       }
-      if (routine && delimiter === ';' && matchSqlWord(text, i, 'BEGIN')) {
+      if ((routine || anonymous) && delimiter === ';' && matchSqlWord(text, i, 'BEGIN')) {
         const after = skipSqlWord(text, i, delimiter);
         const p = skipSqlTrivia(text, after);
         if (matchSqlWord(text, p, 'ATOMIC')) {
           depth++;
+          holdingDeclare = false;
           i = skipSqlWord(text, p, delimiter);
           atStmtStart = true;
           continue;
@@ -442,11 +642,12 @@ export function splitSqlStatements(fullText: string): SqlRange[] {
           continue;
         }
         depth++;
+        holdingDeclare = false;
         i = after;
         atStmtStart = true;
         continue;
       }
-      if (routine && matchSqlWord(text, i, 'END')) {
+      if ((routine || anonymous) && matchSqlWord(text, i, 'END')) {
         const after = skipSqlWord(text, i, delimiter);
         const p = skipSqlTrivia(text, after);
         if (isCompoundEndWord(text, p)) {
@@ -459,7 +660,7 @@ export function splitSqlStatements(fullText: string): SqlRange[] {
         atStmtStart = false;
         continue;
       }
-      if (c === ';' && delimiter === ';' && (!routine || depth === 0)) {
+      if (c === ';' && delimiter === ';' && depth === 0 && !holdingDeclare) {
         pushRange(start, i);
         i++;
         closed = true;
@@ -568,6 +769,287 @@ export function extractExecutableSql(
   selection?: SqlRange | null,
 ): string {
   return extractExecutableSqlRange(fullText, cursorOffset, selection)?.text?.trim() || '';
+}
+
+/**
+ * 去掉注释和引号后的首关键字，用来判断是不是 SET / PREPARE。
+ */
+function leadingKeyword(sql: string): string {
+  const masked = maskSqlLiterals(sql).trim();
+  const matched = masked.match(/^([A-Za-z]+)/);
+  return (matched?.[1] || '').toUpperCase();
+}
+
+/** 注释和字符串里的内容不参与变量、关键字判断 */
+function maskSqlLiterals(sql: string): string {
+  return String(sql || '')
+    .replace(/\/\*[\s\S]*?\*\//g, ' ')
+    .replace(/--[^\n]*/g, ' ')
+    .replace(/#[^\n]*/g, ' ')
+    .replace(/'(?:\\'|[^'])*'|"(?:\\"|[^"])*"|`[^`]*`/g, ' ');
+}
+
+/** SET、事务、DECLARE、USE、PREPARE。单独发给只读查询接口会被拒绝。 */
+export function isEditorSessionSql(sql: string): boolean {
+  const head = leadingKeyword(sql);
+  return (
+    head === 'SET' ||
+    head === 'PREPARE' ||
+    head === 'EXECUTE' ||
+    head === 'DEALLOCATE' ||
+    head === 'BEGIN' ||
+    head === 'COMMIT' ||
+    head === 'ROLLBACK' ||
+    head === 'SAVEPOINT' ||
+    head === 'RELEASE' ||
+    head === 'DECLARE' ||
+    head === 'USE' ||
+    head === 'START'
+  );
+}
+
+/** PREPARE / EXECUTE 可能改数据，确认框要把它算成写操作 */
+export function isPreparedScriptSql(sql: string): boolean {
+  const head = leadingKeyword(sql);
+  return head === 'PREPARE' || head === 'EXECUTE';
+}
+
+/** SET @变量，不含 SET NAMES / SET GLOBAL */
+function isUserVarAssignment(sql: string): boolean {
+  return leadingKeyword(sql) === 'SET' && /\bSET\s+@(?!@)/i.test(maskSqlLiterals(sql));
+}
+
+function isPrepareFamily(sql: string): boolean {
+  const head = leadingKeyword(sql);
+  return head === 'PREPARE' || head === 'EXECUTE' || head === 'DEALLOCATE';
+}
+
+/** 语句里出现的用户变量，忽略 @@系统变量。传入的文本应已经去掉注释和字符串。 */
+function userVarsIn(masked: string): string[] {
+  const found: string[] = [];
+  const re = /(^|[^@])@([A-Za-z_][A-Za-z0-9_]*)/g;
+  let matched: RegExpExecArray | null;
+  while ((matched = re.exec(masked))) {
+    found.push(matched[2]!.toLowerCase());
+  }
+  return found;
+}
+
+/**
+ * 真正读到的用户变量。
+ * SET @a := 1 只是赋值，不能算成「用了 @a」，否则后面重新 SET @a 会被误收进来。
+ * SET @a := @b 读的是 @b。
+ */
+function readVars(sql: string): string[] {
+  const masked = maskSqlLiterals(sql).replace(/@([A-Za-z_][A-Za-z0-9_]*)\s*(?::=|=)/gi, ' ');
+  return userVarsIn(masked);
+}
+
+/** SET @a := ... / SET @a = ...，以及 SQL Server 的 DECLARE @a */
+function assignedVarsOf(sql: string): string[] {
+  const head = leadingKeyword(sql);
+  const masked = maskSqlLiterals(sql);
+  const found: string[] = [];
+  if (head === 'SET') {
+    const re = /@([A-Za-z_][A-Za-z0-9_]*)\s*(?::=|=)/gi;
+    let matched: RegExpExecArray | null;
+    while ((matched = re.exec(masked))) {
+      found.push(matched[1]!.toLowerCase());
+    }
+    return found;
+  }
+  if (head === 'DECLARE') {
+    const re = /@([A-Za-z_][A-Za-z0-9_]*)/gi;
+    let matched: RegExpExecArray | null;
+    while ((matched = re.exec(masked))) {
+      found.push(matched[1]!.toLowerCase());
+    }
+  }
+  return found;
+}
+
+/** CREATE TEMPORARY / TEMP TABLE 的表名。没有就是空串。 */
+function tempTableName(sql: string): string {
+  const masked = maskSqlLiterals(sql);
+  const matched = masked.match(
+    /\bCREATE\s+(?:OR\s+REPLACE\s+)?(?:GLOBAL\s+|LOCAL\s+)?(?:TEMPORARY|TEMP)\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?(?:(?:`[^`]+`|"[^"]+"|\[[^\]]+\]|[A-Za-z_][\w$]*)\s*\.\s*)?(`[^`]+`|"[^"]+"|\[[^\]]+\]|[A-Za-z_][\w$]*)/i,
+  );
+  if (!matched?.[1]) return '';
+  return matched[1].replace(/^[`"[]|[`"\]]$/g, '').toLowerCase();
+}
+
+function mentionsIdent(sql: string, name: string): boolean {
+  if (!name) return false;
+  const masked = maskSqlLiterals(sql);
+  const re = new RegExp(`(^|[^A-Za-z0-9_])${name}([^A-Za-z0-9_]|$)`, 'i');
+  return re.test(masked);
+}
+
+/** PREPARE / EXECUTE / DEALLOCATE 操作的语句名；对不上就不是同一条预处理链 */
+function preparedName(sql: string): string {
+  const masked = maskSqlLiterals(sql).trim();
+  const prepare = masked.match(/^PREPARE\s+([A-Za-z_][A-Za-z0-9_]*)\s+FROM\b/i);
+  if (prepare) return prepare[1]!.toLowerCase();
+  const execute = masked.match(/^EXECUTE\s+([A-Za-z_][A-Za-z0-9_]*)\b/i);
+  if (execute) return execute[1]!.toLowerCase();
+  const drop = masked.match(/^DEALLOCATE\s+PREPARE\s+([A-Za-z_][A-Za-z0-9_]*)\b/i);
+  if (drop) return drop[1]!.toLowerCase();
+  return '';
+}
+
+/** 链里读到、但链内还没有赋值的用户变量，必须到更前面的 SET 里找 */
+function unresolvedReads(statements: string[], included: Set<number>): Set<string> {
+  const needed = new Set<string>();
+  const defined = new Set<string>();
+  const order = [...included].sort((a, b) => a - b);
+  for (const index of order) {
+    for (const name of readVars(statements[index] || '')) {
+      if (!defined.has(name)) needed.add(name);
+    }
+    for (const name of assignedVarsOf(statements[index] || '')) defined.add(name);
+  }
+  return needed;
+}
+
+/** EXECUTE / DEALLOCATE 用到、但链内还没有 PREPARE 的语句名 */
+function unresolvedPrepares(statements: string[], included: Set<number>): Set<string> {
+  const needed = new Set<string>();
+  const defined = new Set<string>();
+  const order = [...included].sort((a, b) => a - b);
+  for (const index of order) {
+    const sql = statements[index] || '';
+    const head = leadingKeyword(sql);
+    const name = preparedName(sql);
+    if ((head === 'EXECUTE' || head === 'DEALLOCATE') && name && !defined.has(name)) {
+      needed.add(name);
+    }
+    if (head === 'PREPARE' && name) defined.add(name);
+  }
+  return needed;
+}
+
+function isDeclareVar(sql: string): boolean {
+  return leadingKeyword(sql) === 'DECLARE' && assignedVarsOf(sql).length > 0;
+}
+
+/**
+ * 下一条是否还依赖当前这串语句。
+ * 紧挨着的 SET @变量会先收成一组，这样光标放在第一条 SET 上也能带上后面的 INSERT。
+ * 中间夹着的无关 INSERT / DELETE 不会因为前后都是 SET 就被执行。
+ */
+function sessionFeedsNext(statements: string[], included: Set<number>, end: number): boolean {
+  const last = statements[end] || '';
+  const next = statements[end + 1] || '';
+  if (isUserVarAssignment(last) && isUserVarAssignment(next)) return true;
+  if (isDeclareVar(last) && isDeclareVar(next)) return true;
+  const assigned = new Set<string>();
+  const prepared = new Set<string>();
+  for (const index of included) {
+    for (const name of assignedVarsOf(statements[index] || '')) assigned.add(name);
+    if (leadingKeyword(statements[index] || '') === 'PREPARE') {
+      const name = preparedName(statements[index] || '');
+      if (name) prepared.add(name);
+    }
+  }
+  if (readVars(next).some((name) => assigned.has(name))) return true;
+  const temp = tempTableName(last);
+  if (temp && mentionsIdent(next, temp)) return true;
+  const nextName = preparedName(next);
+  const nextHead = leadingKeyword(next);
+  if (nextName && prepared.has(nextName) && (nextHead === 'EXECUTE' || nextHead === 'DEALLOCATE')) {
+    return true;
+  }
+  const lastName = preparedName(last);
+  return isPrepareFamily(last) && isPrepareFamily(next) && !!lastName && lastName === nextName;
+}
+
+/**
+ * 光标没有选区时，把提供变量的 SET、对应的 PREPARE，以及紧跟着使用它们的语句收成一次执行。
+ * 变量只在同一个连接里有效。中间无关的增删语句不会被捎上，避免点一条 INSERT 却把前面的 DELETE 跑掉。
+ * cursorOffset 用来区分全文里两段完全相同的语句，避免总命中第一段。
+ * 调用方在用户自己框选了语句时不要扩展。SET NAMES 不会把后面无关的 CREATE TABLE 带上。
+ */
+export function expandSessionChain(fullText: string, currentSql: string, cursorOffset?: number): string {
+  const current = (currentSql || '').trim();
+  if (!current) return current;
+  const text = fullText || '';
+  const pairs = splitSqlStatements(text)
+    .map((range) => ({ range, sql: text.slice(range.start, range.end).trim() }))
+    .filter((item) => item.sql.length > 0);
+  if (pairs.length <= 1) return current;
+  const statements = pairs.map((item) => item.sql);
+  const flat = (sql: string) => sql.replace(/\s+/g, ' ').trim();
+  const wanted = flat(current);
+  let index = -1;
+  if (typeof cursorOffset === 'number') {
+    index = pairs.findIndex((item) => cursorOffset >= item.range.start && cursorOffset <= item.range.end);
+    if (index < 0) {
+      // 光标停在语句后面的空白或分号上，仍算这一条
+      index = pairs.findIndex((item) => {
+        let pos = item.range.end;
+        while (pos < text.length && /\s/.test(text[pos] || '')) pos += 1;
+        if (pos < text.length && text[pos] === ';') pos += 1;
+        return cursorOffset >= item.range.start && cursorOffset <= pos;
+      });
+    }
+  }
+  if (index < 0) {
+    index = statements.findIndex((sql) => sql === current || flat(sql) === wanted);
+  }
+  if (index < 0) return current;
+
+  const included = new Set<number>([index]);
+  let grew = true;
+  while (grew) {
+    grew = false;
+    const end = Math.max(...included);
+    if (end + 1 < statements.length && sessionFeedsNext(statements, included, end)) {
+      included.add(end + 1);
+      grew = true;
+    }
+    const neededVars = unresolvedReads(statements, included);
+    const neededPrepares = unresolvedPrepares(statements, included);
+    const temps = new Set<string>();
+    for (const item of included) {
+      const name = tempTableName(statements[item] || '');
+      if (name) temps.add(name);
+    }
+    for (let prev = Math.min(...included) - 1; prev >= 0; prev -= 1) {
+      const name = tempTableName(statements[prev] || '');
+      if (!name || temps.has(name)) continue;
+      const used = [...included].some((item) => mentionsIdent(statements[item] || '', name));
+      if (!used) continue;
+      included.add(prev);
+      temps.add(name);
+      grew = true;
+    }
+    if (neededVars.size === 0 && neededPrepares.size === 0) continue;
+    // 从近到远找赋值。找到后就不再要更早的同名 SET，避免把上一节的 @op_id 也带上
+    const start = Math.min(...included);
+    for (let prev = start - 1; prev >= 0 && (neededVars.size > 0 || neededPrepares.size > 0); prev -= 1) {
+      const sql = statements[prev] || '';
+      let provides = false;
+      for (const name of assignedVarsOf(sql)) {
+        if (!neededVars.has(name)) continue;
+        neededVars.delete(name);
+        provides = true;
+      }
+      const prepared = preparedName(sql);
+      if (leadingKeyword(sql) === 'PREPARE' && prepared && neededPrepares.has(prepared)) {
+        neededPrepares.delete(prepared);
+        provides = true;
+      }
+      if (provides && !included.has(prev)) {
+        included.add(prev);
+        grew = true;
+      }
+    }
+  }
+  if (included.size === 1) return current;
+  return [...included]
+    .sort((a, b) => a - b)
+    .map((item) => statements[item] || '')
+    .join(';\n');
 }
 
 // ─────────────────────────── 补全上下文检测 ───────────────────────────

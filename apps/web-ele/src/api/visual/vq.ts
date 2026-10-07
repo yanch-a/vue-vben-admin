@@ -396,6 +396,7 @@ export function previewSqlBySelection(data: {
   configId?: number | string
 }) {
   return request({
+    url: queryExecuteUrl + 'previewSqlBySelection',
     method: 'post',
     data,
     timeout: 0,

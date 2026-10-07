@@ -5,21 +5,26 @@ import { preferences } from '@vben/preferences';
 import { useAccessStore, useUserStore } from '@vben/stores';
 import { startProgress, stopProgress } from '@vben/utils';
 
-import { accessRoutes, coreRouteNames } from '#/router/routes';
+import {
+  accessRoutes,
+  coreRouteNames,
+  externalRouteNames,
+} from '#/router/routes';
 import { useAuthStore } from '#/store';
 import { resolveFirstMenuPath } from '#/utils/first-menu-path';
 
 import { generateAccess } from './access';
 
-/** 旧路径 / 文档误写路径 → 规范入口 */
+/** 旧路径 / 文档误写路径 → 规范入口（与后台菜单 path 对齐） */
 const LEGACY_PATH_REDIRECTS: Record<string, string> = {
   '/visual/client': '/lSql/visualClient',
   '/visual/visualClient': '/lSql/visualClient',
-  '/SqlWork': '/lSql/sqlWorkOrder',
-  '/sqlWork': '/lSql/sqlWorkOrder',
-  '/visual/SqlWork': '/lSql/sqlWorkOrder',
-  '/visual/sqlWorkOrder': '/lSql/sqlWorkOrder',
-  '/lSql/SqlWork': '/lSql/sqlWorkOrder',
+  // SQL 工单规范入口为 /SqlWork（菜单 name=SqlWork），旧 path 统一迁过去
+  '/lSql/sqlWorkOrder': '/SqlWork',
+  '/sqlWork': '/SqlWork',
+  '/visual/SqlWork': '/SqlWork',
+  '/visual/sqlWorkOrder': '/SqlWork',
+  '/lSql/SqlWork': '/SqlWork',
 };
 
 /**
@@ -81,6 +86,11 @@ function setupAccessGuard(router: Router) {
             preferences.app.defaultHomePath,
         );
       }
+      return true;
+    }
+
+    // 公开页（大屏分享 / 嵌入）：不依赖登录态，也不加载菜单，避免外站嵌入时被带去登录页
+    if (to.meta.ignoreAccess && externalRouteNames.includes(to.name as string)) {
       return true;
     }
 

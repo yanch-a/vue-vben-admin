@@ -118,7 +118,7 @@ function mountEditor() {
       navigationBar: true,
       statusBar: true,
       askToFormat: true,
-      onChange: (content) => {
+      onChange: (content: Content) => {
         if (syncingFromProp) return;
         const text = contentToString(content);
         emit('update:modelValue', text);

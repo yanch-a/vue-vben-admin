@@ -157,6 +157,21 @@ export function executeWorkOrder(
   });
 }
 
+/** 变更窗口外强制执行（需要 SqlWorkOrder:windowOverride 权限，原因写入工单审计） */
+export function executeWorkOrderOverride(
+  id: number | string,
+  overrideReason: string,
+  allowIncompleteRollback: boolean,
+  extra?: { ignoreWarnings?: boolean; failFast?: boolean },
+) {
+  return request({
+    url: url + id + '/executeOverride',
+    method: 'post',
+    data: { allowIncompleteRollback, overrideReason, ...(extra || {}) },
+    timeout: 0,
+  });
+}
+
 export function downloadWorkOrderRollback(id: number | string) {
   return request({ url: url + id + '/rollback', method: 'get', responseType: 'blob', timeout: 0 });
 }

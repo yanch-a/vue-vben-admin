@@ -13,6 +13,7 @@
  * @author yanch
  */
 import type { QueryResultState } from '../../composables/useQueryTabs';
+import type { ExplainPlanState } from '../../utils/explainPlan';
 import type { TableRef } from '../../utils/resultRowSql';
 import type { ResultTableMeta } from '../../utils/resultJoinUpdate';
 import type { DirtyRowEdit } from '../../utils/resultSheetValue';
@@ -68,13 +69,22 @@ import {
 } from '../../utils/resultPrimaryKeys';
 import VirtualResultTable from './VirtualResultTable.vue';
 import CellContentDrawer from './CellContentDrawer.vue';
+import ExplainPlanPanel from './ExplainPlanPanel.vue';
 
 defineOptions({ name: 'ResultPanel' });
 
 const props = defineProps<{
   visible: boolean;
-  activeTab: 'result' | 'messages';
+  activeTab: 'messages' | 'plan' | 'result';
   result: QueryResultState | null;
+  /** 执行计划页签状态；为空时不显示「执行计划」页签 */
+  plan?: ExplainPlanState | null;
+  /** 当前库是否支持 EXPLAIN ANALYZE */
+  canAnalyze?: boolean;
+  /** 当前连接是否生产环境 */
+  prod?: boolean;
+  /** AI 助手可用（显示「让 AI 优化」） */
+  aiEnabled?: boolean;
   executing?: boolean;
   exporting?: boolean;
   /** 解析出的目标表；为空时改删仅提示，拷贝仍尽量生成 */
@@ -99,7 +109,11 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   'update:visible': [boolean];
-  'update:activeTab': ['result' | 'messages'];
+  'update:activeTab': ['messages' | 'plan' | 'result'];
+  /** 执行计划页签里「重新分析」 */
+  'explain-rerun': [{ analyze: boolean }];
+  /** 执行计划页签里「让 AI 优化」 */
+  'ask-ai-optimize': [];
   /** 执行 DML 后由父级刷新结果 */
   'run-dml': [sql: string];
   /** 批量保存成功后，按原 SELECT 重查 */
@@ -504,7 +518,7 @@ function closeCtxMenu() {
   ctxMenu.visible = false;
 }
 
-function onCellActivate(rowIndex: number, col: string | null) {
+function onCellActivate(_rowIndex: number, col: string | null) {
   selectedCol.value = col;
   resultFocused.value = true;
 }
@@ -1356,7 +1370,7 @@ async function focusAppendedRow(index: number, startEdit: boolean) {
   selectedCol.value = firstCol;
   await nextTick();
   await nextTick();
-  tableElRef.value?.scrollToRow(index, startEdit);
+  tableElRef.value?.scrollToRow?.(index, startEdit);
   await nextTick();
   if (startEdit && firstCol) await startEditCell(index, firstCol);
 }
@@ -1760,97 +1774,100 @@ watch(
       >
         <ElTabPane :label="resultTabLabel" name="result" />
         <ElTabPane label="Messages" name="messages" />
+        <ElTabPane v-if="plan" :label="$tr('执行计划')" name="plan" />
       </ElTabs>
       <div class="header-right">
-        <span v-if="tableHintText" class="table-hint">
-          {{ tableHintText }}
-        </span>
-        <template v-if="editMode">
-          <ElButton
-            link
-            type="primary"
-            :title="addRowTitle"
-            :disabled="!canAddRow"
-            @click="onAddRow"
-          >
-            {{ $tr('添加行') }}
-          </ElButton>
-          <ElButton
-            link
-            type="primary"
-            :disabled="pendingSaveCount <= 0 || executing || sheetSaving"
-            :loading="sheetSaving"
-            @click="onSaveSheet"
-          >
-            {{ $tr('保存修改') }}{{ pendingSaveCount > 0 ? ` (${pendingSaveCount})` : '' }}
-          </ElButton>
-          <ElButton
-            link
-            :disabled="executing || sheetSaving"
-            @click="onExitSheet"
-          >
-            {{ $tr('退出编辑') }}
-          </ElButton>
-        </template>
-        <template v-else>
-          <ElButton
-            link
-            type="primary"
-            :disabled="!canEnterSheet"
-            @click="onEnterSheet"
-          >
-            {{ $tr('表格编辑') }}
-          </ElButton>
-          <ElButton
-            link
-            type="primary"
-            :title="addRowTitle"
-            :disabled="!canAddRow"
-            @click="onAddRow"
-          >
-            {{ $tr('添加行') }}
-          </ElButton>
-        </template>
-        <ElDropdown
-          trigger="click"
-          :disabled="!canCopyRows || executing"
-          @command="onCopyCommand"
-        >
-          <ElButton link type="primary" :disabled="!canCopyRows || executing">
-            {{ $tr('复制') }}
-          </ElButton>
-          <template #dropdown>
-            <ElDropdownMenu>
-              <ElDropdownItem command="all">{{ $tr('复制所有行到剪切板') }}</ElDropdownItem>
-              <ElDropdownItem command="selected">{{ $tr('复制选定行到剪切板') }}</ElDropdownItem>
-            </ElDropdownMenu>
+        <template v-if="activeTab !== 'plan'">
+          <span v-if="tableHintText" class="table-hint">
+            {{ tableHintText }}
+          </span>
+          <template v-if="editMode">
+            <ElButton
+              link
+              type="primary"
+              :title="addRowTitle"
+              :disabled="!canAddRow"
+              @click="onAddRow"
+            >
+              {{ $tr('添加行') }}
+            </ElButton>
+            <ElButton
+              link
+              type="primary"
+              :disabled="pendingSaveCount <= 0 || executing || sheetSaving"
+              :loading="sheetSaving"
+              @click="onSaveSheet"
+            >
+              {{ $tr('保存修改') }}{{ pendingSaveCount > 0 ? ` (${pendingSaveCount})` : '' }}
+            </ElButton>
+            <ElButton
+              link
+              :disabled="executing || sheetSaving"
+              @click="onExitSheet"
+            >
+              {{ $tr('退出编辑') }}
+            </ElButton>
           </template>
-        </ElDropdown>
-        <ElDropdown
-          trigger="click"
-          :disabled="!canExport || executing"
-          @command="onExportCommand"
-        >
-          <ElButton
-            link
-            type="primary"
-            :loading="exporting"
+          <template v-else>
+            <ElButton
+              link
+              type="primary"
+              :disabled="!canEnterSheet"
+              @click="onEnterSheet"
+            >
+              {{ $tr('表格编辑') }}
+            </ElButton>
+            <ElButton
+              link
+              type="primary"
+              :title="addRowTitle"
+              :disabled="!canAddRow"
+              @click="onAddRow"
+            >
+              {{ $tr('添加行') }}
+            </ElButton>
+          </template>
+          <ElDropdown
+            trigger="click"
+            :disabled="!canCopyRows || executing"
+            @command="onCopyCommand"
+          >
+            <ElButton link type="primary" :disabled="!canCopyRows || executing">
+              {{ $tr('复制') }}
+            </ElButton>
+            <template #dropdown>
+              <ElDropdownMenu>
+                <ElDropdownItem command="all">{{ $tr('复制所有行到剪切板') }}</ElDropdownItem>
+                <ElDropdownItem command="selected">{{ $tr('复制选定行到剪切板') }}</ElDropdownItem>
+              </ElDropdownMenu>
+            </template>
+          </ElDropdown>
+          <ElDropdown
+            trigger="click"
             :disabled="!canExport || executing"
+            @command="onExportCommand"
           >
-            {{ $tr('导出') }}
-          </ElButton>
-          <template #dropdown>
-            <ElDropdownMenu>
-              <ElDropdownItem command="excel">{{ $tr('导出 Excel') }}</ElDropdownItem>
-              <ElDropdownItem command="sql">{{ $tr('导出 SQL') }}</ElDropdownItem>
-            </ElDropdownMenu>
-          </template>
-        </ElDropdown>
+            <ElButton
+              link
+              type="primary"
+              :loading="exporting"
+              :disabled="!canExport || executing"
+            >
+              {{ $tr('导出') }}
+            </ElButton>
+            <template #dropdown>
+              <ElDropdownMenu>
+                <ElDropdownItem command="excel">{{ $tr('导出 Excel') }}</ElDropdownItem>
+                <ElDropdownItem command="sql">{{ $tr('导出 SQL') }}</ElDropdownItem>
+              </ElDropdownMenu>
+            </template>
+          </ElDropdown>
+        </template>
         <ElButton link type="primary" @click="onHidePanel">{{ $tr('隐藏') }}</ElButton>
       </div>
     </div>
     <div
-      v-loading="executing || sheetSaving"
+      v-loading="(executing || sheetSaving) && activeTab !== 'plan'"
       class="result-body"
     >
       <p v-if="activeTab === 'result' && editMode" class="sheet-hint">
@@ -1906,14 +1923,15 @@ watch(
           >
             <header class="result-set-head">
               <span class="result-set-index">#{{ set.index || index + 1 }}</span>
-              <span class="result-set-kind">{{ set.kind === 'dml' ? 'DML' : set.kind === 'ddl' ? 'DDL' : set.kind === 'skip' ? '未执行' : '查询' }}</span>
+              <span class="result-set-kind">{{ $tr(set.kind === 'dml' ? 'DML' : set.kind === 'ddl' ? 'DDL' : set.kind === 'skip' ? '未执行' : set.kind === 'session' ? '会话' : set.kind === 'script' ? '预处理' : set.kind === 'block' ? '程序块' : '查询') }}</span>
               <span class="result-set-sql" :title="set.sql">{{ previewSql(set.sql) }}</span>
-              <span v-if="set.kind === 'skip' || set.error === '未执行'" class="result-set-meta">未执行</span>
+              <span v-if="set.kind === 'skip' || set.error === '未执行'" class="result-set-meta">{{ $tr('未执行') }}</span>
               <span v-else-if="set.success && set.columns.length" class="result-set-meta">
-                {{ set.rowCount ?? set.rows.length }} 行
+                {{ set.rowCount ?? set.rows.length }} {{ $tr('行') }}
               </span>
               <span v-else-if="set.success" class="result-set-meta">OK</span>
-              <span v-else class="result-set-meta is-error">失败</span>
+              <span v-else class="result-set-meta is-error">{{ $tr('失败') }}</span>
+              <span v-if="set.truncated" class="result-set-meta is-error" :title="set.message">{{ $tr('已截断') }}</span>
               <span v-if="set.elapsedMs != null" class="result-set-meta">{{ set.elapsedMs }} ms</span>
             </header>
             <div
@@ -2007,6 +2025,15 @@ watch(
           </ElButton>
         </div>
       </template>
+      <ExplainPlanPanel
+        v-if="activeTab === 'plan'"
+        :state="plan ?? null"
+        :can-analyze="canAnalyze"
+        :prod="prod"
+        :ai-enabled="aiEnabled"
+        @rerun="(o) => emit('explain-rerun', o)"
+        @ask-ai="emit('ask-ai-optimize')"
+      />
     </div>
 
     <div

@@ -1,16 +1,11 @@
+import { isProdEnv } from './connectionEnv';
+
 /**
- * 生产连接识别：名称/描述/主机备注含关键词，或显式 env/tag/isProd 字段。
+ * 生产连接识别：以连接的 env 字段为准（env == PROD）；
+ * env 为空的历史连接才回退到名称/描述关键词（生产 / prod / 正式 / production）。
+ * 规则见 connectionEnv.ts，与后端 DbEnvironment 一致。
  * @author yanch
  */
-const PROD_NAME_RE = /生产|prod|正式|production/i;
-
 export function isProductionConnection(row: any): boolean {
-  if (!row || typeof row !== 'object') return false;
-  if (row.isProd === true || row.isProd === 1 || row.isProd === '1') return true;
-  const env = String(row.env ?? row.envTag ?? row.envType ?? row.environment ?? '').trim();
-  if (env && /^(prod|production|prd|正式|生产)$/i.test(env)) return true;
-  const hay = [row.dbName, row.description, row.remark, row.tag, row.tags]
-    .filter(Boolean)
-    .join(' ');
-  return PROD_NAME_RE.test(hay);
+  return isProdEnv(row);
 }

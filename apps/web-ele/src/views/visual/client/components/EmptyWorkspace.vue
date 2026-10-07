@@ -8,6 +8,7 @@ import { computed, onMounted, ref, watch } from 'vue';
 
 import { getDbConfigList } from '#/api/visual/vq';
 import { resolveDbType } from '../dialect/dbTypes';
+import { envTagType, resolveConnectionEnv } from '../utils/connectionEnv';
 import { isProductionConnection } from '../utils/prodConnection';
 
 defineOptions({ name: 'EmptyWorkspace' });
@@ -138,7 +139,12 @@ defineExpose({ reload: loadList });
         <div class="db-card__top">
           <span class="db-card__name" :title="row.dbName">{{ $tr(row.dbName || '未命名') }}</span>
           <span class="db-card__badges">
-            <span v-if="isProductionConnection(row)" class="db-card__prod">PROD</span>
+            <span
+              v-if="resolveConnectionEnv(row).text"
+              class="db-card__env"
+              :class="`db-card__env--${envTagType(resolveConnectionEnv(row).env)}`"
+              :title="resolveConnectionEnv(row).source === 'LEGACY_NAME' ? $tr('未设置环境标签，按名称关键词识别为生产') : ''"
+            >{{ resolveConnectionEnv(row).text }}</span>
             <span class="db-card__type">{{ typeLabel(row) }}</span>
           </span>
         </div>
@@ -321,7 +327,7 @@ defineExpose({ reload: loadList });
   gap: 4px;
 }
 
-.db-card__prod {
+.db-card__env {
   font-size: calc(var(--vc-ui-font-size, 13px) - 2px);
   font-weight: 700;
   letter-spacing: 0.04em;
@@ -329,6 +335,22 @@ defineExpose({ reload: loadList });
   padding: 1px 6px;
   border-radius: 4px;
   color: #fff;
+  background: var(--el-color-info);
+}
+
+.db-card__env--danger {
   background: var(--el-color-danger);
+}
+
+.db-card__env--warning {
+  background: var(--el-color-warning);
+}
+
+.db-card__env--primary {
+  background: var(--el-color-primary);
+}
+
+.db-card__env--success {
+  background: var(--el-color-success);
 }
 </style>

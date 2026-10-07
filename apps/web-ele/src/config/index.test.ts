@@ -25,4 +25,17 @@ describe('resolveBackendAssetUrl', () => {
       'blob:avatar-preview',
     );
   });
+
+  it('只放行 data:image，丢弃脚本类协议', () => {
+    expect(resolveBackendAssetUrl('data:image/png;base64,AAAA')).toBe(
+      'data:image/png;base64,AAAA',
+    );
+    expect(resolveBackendAssetUrl('data:text/html,<script>1</script>')).toBe('');
+    expect(resolveBackendAssetUrl('javascript:alert(1)')).toBe('');
+    expect(resolveBackendAssetUrl('java\tscript:alert(1)')).toBe('');
+  });
+
+  it('开头的反斜杠不会变成协议相对地址', () => {
+    expect(resolveBackendAssetUrl('/\\evil.example.org/a.png')).not.toMatch(/^\/[/\\]/);
+  });
 });

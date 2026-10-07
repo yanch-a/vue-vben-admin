@@ -318,6 +318,8 @@ async function openInEditor(payload: {
         dbPort: cfg.dbPort,
         username: cfg.username,
         description: cfg.description,
+        env: cfg.env,
+        envLabel: cfg.envLabel,
         connectionStatus: cfg.connectionStatus,
         aiEnabled: cfg.aiEnabled == null ? 1 : Number(cfg.aiEnabled),
         aiAllowSampleData:

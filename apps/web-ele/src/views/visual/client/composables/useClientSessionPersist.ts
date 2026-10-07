@@ -106,6 +106,8 @@ function stripConnection(c: DbConnection): DbConnection {
     aiEnabled: c.aiEnabled == null ? 1 : Number(c.aiEnabled),
     aiAllowSampleData:
       c.aiAllowSampleData == null ? 0 : Number(c.aiAllowSampleData),
+    env: c.env ?? null,
+    envLabel: c.envLabel ?? null,
   };
 }
 

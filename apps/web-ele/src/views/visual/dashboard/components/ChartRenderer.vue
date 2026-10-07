@@ -10,8 +10,10 @@ import { EchartsUI, useEcharts } from '@vben/plugins/echarts';
 import { useDebounceFn, useResizeObserver } from '@vueuse/core';
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 
-import { resolveBackendAssetUrl } from '#/config';
+import type { DashboardMediaPolicy } from '../mediaUrlPolicy';
+
 import { chartSpecToOption } from '../../client/utils/chartSpecToOption';
+import { resolveDashboardMediaUrl } from '../mediaUrlPolicy';
 
 defineOptions({ name: 'DashboardChartRenderer' });
 const emit = defineEmits<{
@@ -20,6 +22,8 @@ const emit = defineEmits<{
 }>();
 
 const props = defineProps<{
+  /** 内嵌网页域名白名单等媒体策略（后端下发）；缺省时仅做协议校验 + sandbox。 */
+  mediaPolicy?: DashboardMediaPolicy | null;
   result?: Partial<QueryResult>;
   spec: ChartSpec;
 }>();
@@ -83,10 +87,16 @@ const textStyle = computed(() => {
   };
 });
 const mediaBroken = ref(false);
-const mediaSrc = computed(() => {
+/** 图片/网页地址统一走安全策略：限制协议、域名白名单，并给 iframe 计算 sandbox。 */
+const media = computed(() => {
   mediaBroken.value = false;
-  return resolveBackendAssetUrl(props.spec.mediaUrl || props.spec.textContent || '');
+  return resolveDashboardMediaUrl(
+    props.spec.mediaUrl || props.spec.textContent || '',
+    isIframe.value ? 'iframe' : 'image',
+    props.mediaPolicy,
+  );
 });
+const mediaSrc = computed(() => media.value.src);
 
 function onMediaError() {
   mediaBroken.value = true;
@@ -170,18 +180,27 @@ watch(
       {{ clockText }}
     </div>
     <div v-else-if="isImage" class="media-widget">
-      <img v-if="mediaSrc && !mediaBroken" :src="mediaSrc" alt="" @error="onMediaError" />
+      <img v-if="mediaSrc && !mediaBroken" :src="mediaSrc" alt="" referrerpolicy="no-referrer" @error="onMediaError" />
       <div v-else class="media-empty">
         <span class="media-empty-icon" aria-hidden="true">IMG</span>
-        <strong>{{ mediaBroken ? $tr('图片加载失败') : $tr('图片组件') }}</strong>
-        <span>{{ mediaBroken ? $tr('请检查地址是否可访问') : $tr('请在右侧填写或上传图片地址') }}</span>
+        <strong>{{ media.blocked ? $tr('图片地址已被拦截') : mediaBroken ? $tr('图片加载失败') : $tr('图片组件') }}</strong>
+        <span>{{ media.blocked ? $tr(media.reason) : mediaBroken ? $tr('请检查地址是否可访问') : $tr('请在右侧填写或上传图片地址') }}</span>
       </div>
     </div>
     <div v-else-if="isIframe" class="media-widget">
-      <iframe v-if="mediaSrc" :src="mediaSrc" title="embed" frameborder="0" />
+      <iframe
+        v-if="mediaSrc"
+        :key="`${mediaSrc}|${media.sandbox}`"
+        :src="mediaSrc"
+        :sandbox="media.sandbox"
+        referrerpolicy="no-referrer"
+        loading="lazy"
+        title="embed"
+        frameborder="0"
+      />
       <div v-else class="media-empty">
-        <strong>{{ $tr('网页组件') }}</strong>
-        <span>{{ $tr('请在右侧填写网页地址') }}</span>
+        <strong>{{ media.blocked ? $tr('网页地址已被拦截') : $tr('网页组件') }}</strong>
+        <span>{{ media.blocked ? $tr(media.reason) : $tr('请在右侧填写网页地址') }}</span>
       </div>
     </div>
     <div v-else-if="isKpi" class="kpi">{{ kpiValue ?? '—' }}</div>
@@ -201,7 +220,7 @@ watch(
     </ElTable>
     <template v-else>
       <EchartsUI ref="chartRef" height="100%" width="100%" />
-      <div v-if="dataError" class="render-error">{{ dataError }}</div>
+      <div v-if="dataError" class="render-error">{{ $tr(dataError) }}</div>
       <div v-else-if="renderError" class="render-error">{{ renderError }}</div>
     </template>
   </div>

@@ -7,6 +7,8 @@
  */
 import { computed, reactive } from 'vue';
 
+import type { ExplainPlanState } from '../utils/explainPlan';
+
 import { visualClientConfig } from '../config';
 import { notifyClientSessionChange } from './clientSessionNotify';
 
@@ -25,6 +27,8 @@ export interface QueryResultSet {
   elapsedMs?: number;
   message?: string;
   error?: string;
+  /** 本条结果因分步执行总量上限（行数/字节）被截断 */
+  truncated?: boolean;
 }
 
 export interface QueryResultState {
@@ -52,9 +56,11 @@ export interface QueryTab {
   title: string;
   sql: string;
   resultVisible: boolean;
-  resultTab: 'result' | 'messages';
+  resultTab: 'messages' | 'plan' | 'result';
   executing: boolean;
   result: QueryResultState | null;
+  /** 最近一次执行计划（不持久化） */
+  plan?: ExplainPlanState | null;
   /** 当前编辑器所属数据库/Schema（因库类型含义不同） */
   instanceName?: string;
   /** PG/Oracle 族当前 Schema/Owner；MySQL 族留空。 */
@@ -79,7 +85,8 @@ export interface PersistedQueryTab {
   title: string;
   sql: string;
   resultVisible: boolean;
-  resultTab: 'result' | 'messages';
+  /** 执行计划不持久化，恢复时 plan 页签回到结果页 */
+  resultTab: 'messages' | 'result';
   instanceName?: string;
   schemaName?: string;
   savedQueryId?: number | string;

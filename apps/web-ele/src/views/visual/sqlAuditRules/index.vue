@@ -135,47 +135,46 @@ onMounted(() => {
         <el-input
           v-model="query.keyword"
           clearable
-          placeholder="搜索规则码 / 名称 / 说明"
+          :placeholder="$tr('搜索规则码 / 名称 / 说明')"
           style="width: 260px"
           :prefix-icon="Search"
         />
         <el-select
           v-model="query.severity"
           clearable
-          placeholder="严重度"
+          :placeholder="$tr('严重度')"
           style="width: 160px"
         >
           <el-option
             v-for="item in severityOptions"
             :key="item.value"
-            :label="item.label"
+            :label="$tr(item.label)"
             :value="item.value"
           />
         </el-select>
         <el-select
           v-model="query.source"
           clearable
-          placeholder="来源"
+          :placeholder="$tr('来源')"
           style="width: 140px"
         >
-          <el-option label="内置默认" value="builtin" />
-          <el-option label="DB覆盖" value="override" />
+          <el-option :label="$tr('内置默认')" value="builtin" />
+          <el-option :label="$tr('DB覆盖')" value="override" />
         </el-select>
         <el-select
           v-model="query.enabled"
           clearable
-          placeholder="启用状态"
+          :placeholder="$tr('启用状态')"
           style="width: 120px"
         >
-          <el-option label="启用" value="1" />
-          <el-option label="停用" value="0" />
+          <el-option :label="$tr('启用')" value="1" />
+          <el-option :label="$tr('停用')" value="0" />
         </el-select>
         <el-button :icon="Refresh" :loading="loading" @click="load">
-          刷新
+          {{ $tr('刷新') }}
         </el-button>
         <span class="text-muted-foreground text-sm">
-          共 {{ filteredRows.length }} 条（合并内置默认 + DB 覆盖）。仅 DBA /
-          管理员可改。
+          {{ $tr('共') }} {{ filteredRows.length }} {{ $tr('条（合并内置默认 + DB 覆盖）。仅 DBA / 管理员可改。') }}
         </span>
       </div>
 
@@ -189,17 +188,17 @@ onMounted(() => {
       >
         <el-table-column
           prop="code"
-          label="规则码"
+          :label="$tr('规则码')"
           min-width="180"
           show-overflow-tooltip
         />
         <el-table-column
           prop="name"
-          label="名称"
+          :label="$tr('名称')"
           min-width="140"
           show-overflow-tooltip
         />
-        <el-table-column label="严重度" width="170">
+        <el-table-column :label="$tr('严重度')" width="170">
           <template #default="{ row }">
             <el-select
               :model-value="row.severity"
@@ -217,7 +216,7 @@ onMounted(() => {
             </el-select>
           </template>
         </el-table-column>
-        <el-table-column label="启用" width="90" align="center">
+        <el-table-column :label="$tr('启用')" width="90" align="center">
           <template #default="{ row }">
             <el-switch
               :model-value="Boolean(row.enabled)"
@@ -226,29 +225,29 @@ onMounted(() => {
             />
           </template>
         </el-table-column>
-        <el-table-column label="方言" min-width="140" show-overflow-tooltip>
+        <el-table-column :label="$tr('方言')" min-width="140" show-overflow-tooltip>
           <template #default="{ row }">
             {{ dialectsText(row) }}
           </template>
         </el-table-column>
-        <el-table-column label="权重" prop="scoreWeight" width="70" align="center" />
-        <el-table-column label="来源" width="100" align="center">
+        <el-table-column :label="$tr('权重')" prop="scoreWeight" width="70" align="center" />
+        <el-table-column :label="$tr('来源')" width="100" align="center">
           <template #default="{ row }">
             <el-tag
               size="small"
               :type="row.source === 'override' ? 'success' : 'info'"
             >
-              {{ sourceLabel(row.source) }}
+              {{ $tr(sourceLabel(row.source)) }}
             </el-tag>
           </template>
         </el-table-column>
         <el-table-column
           prop="description"
-          label="说明"
+          :label="$tr('说明')"
           min-width="220"
           show-overflow-tooltip
         />
-        <el-table-column label="操作" width="120" fixed="right">
+        <el-table-column :label="$tr('操作')" width="120" fixed="right">
           <template #default="{ row }">
             <el-button
               link
@@ -257,7 +256,7 @@ onMounted(() => {
               :disabled="row.source !== 'override' || savingCode === row.code"
               @click="onReset(row)"
             >
-              重置默认
+              {{ $tr('重置默认') }}
             </el-button>
           </template>
         </el-table-column>

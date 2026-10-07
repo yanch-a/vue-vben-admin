@@ -100,10 +100,10 @@ const HINTS: Record<ChartType, FieldMappingHint> = {
     ],
   },
   iframe: {
-    summary: '内嵌网页：用 iframe 加载 mediaUrl，注意目标站是否允许嵌入。',
+    summary: '内嵌网页：用 iframe 加载 mediaUrl（带 sandbox），注意目标站是否允许嵌入。',
     sqlExample: '无需 SQL',
     fields: [
-      { name: '页面地址', required: true, desc: 'mediaUrl，需 https 且允许被嵌入' },
+      { name: '页面地址', required: true, desc: 'mediaUrl，仅支持 http/https，需在管理员配置的域名白名单内且目标站允许被嵌入' },
     ],
   },
 };

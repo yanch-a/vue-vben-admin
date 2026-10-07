@@ -18,7 +18,7 @@ import {
 } from 'vue';
 import { useRouter } from 'vue-router';
 
-import { executeDdl, executeDml, executeDmlBatch, executeSql, executeSqlBatch, cancelSql, exportSqlExcel, exportSqlInsert, exportTableSchemaExcel, getInstances, getObjectScript, getTableColumns, getTableDDL, getTableInfo, getTables } from '#/api/visual/database';
+import { executeDdl, executeDml, executeDmlBatch, executeSql, executeSqlBatch, cancelSql, explainPlan, exportSqlExcel, exportSqlInsert, exportTableSchemaExcel, getInstances, getObjectScript, getTableColumns, getTableDDL, getTableInfo, getTables } from '#/api/visual/database';
 import { feedbackSchemaDoc } from '#/api/ai/agent';
 import {
   addSavedQuery,
@@ -39,6 +39,7 @@ import { Aim } from '@element-plus/icons-vue';
 
 import type { TreeCtxAction } from './components/object-tree/ObjectTreeContextMenu.vue';
 
+import ChangeWindowBadge from './components/ChangeWindowBadge.vue';
 import ClientToolbar from './components/ClientToolbar.vue';
 import ConnectionDialog from './components/ConnectionDialog.vue';
 import ConnectionTabs from './components/ConnectionTabs.vue';
@@ -89,19 +90,27 @@ import {
   type QueryResultSet,
 } from './composables/useQueryTabs';
 import { visualClientConfig } from './config';
+import { resolveConnectionEnv } from './utils/connectionEnv';
 import { isProductionConnection } from './utils/prodConnection';
+import {
+  buildAiOptimizePrompt,
+  type ExplainPlanResult,
+  supportsExplain,
+  supportsExplainAnalyze,
+} from './utils/explainPlan';
 import { humanizeApiError } from './utils/humanizeApiError';
 import { resolveSqlDialect, resolveTableIdent } from './dialect/sqlDialect';
 import { resolveDbType, resolveDialectFamily } from './dialect/dbTypes';
 import type { TableDesignSqlResult } from './dialect/tableDesignerDialect';
 import { isDestructiveDdl, looksLikeControlledDdl } from './utils/controlledDdl';
 import {
+  metadataInstanceName,
   metadataTableName,
   parseQueryTables,
   type QueryTableRef,
   type TableRef,
 } from './utils/resultRowSql';
-import { confirmSqlWrite, isUpdateOrDeleteSql } from './utils/sqlWriteConfirmation';
+import { canMuteSqlWriteConfirm, confirmSqlWrite } from './utils/sqlWriteConfirmation';
 import {
   askAiPrefillForError,
   describeSqlWriteRisk,
@@ -123,7 +132,10 @@ import {
 } from './utils/resultPrimaryKeys';
 import {
   clearColumnCache,
+  expandSessionChain,
   getCachedColumns,
+  isEditorSessionSql,
+  isPreparedScriptSql,
   listSqlStatements,
   rememberInstanceTables,
   setCachedColumns,
@@ -572,7 +584,7 @@ const resultTableRef = computed<TableRef | null>(() => {
   return t ? { schema: t.schema, table: t.table } : null;
 });
 
-/** 结果表主键：查询完成后按当前实例拉元数据，不用 SQL 里的 schema 冒充库名 */
+/** 结果表主键。MySQL 的 `库`.`表` 按 SQL 里的库查，其它方言仍用当前库。 */
 const resultPrimaryKeys = ref<string[]>([]);
 const resultPrimaryKeysReady = ref(false);
 const resultTableMetas = ref<ResultTableMeta[]>([]);
@@ -635,8 +647,8 @@ async function fetchTableMeta(
 async function refreshResultPrimaryKeys() {
   const tables = resultQueryTables.value;
   const conn = activeConnection.value;
-  const inst = activeTab.value?.instanceName || conn?.schemaName || '';
-  if (!tables.length || !conn || !inst) {
+  const currentInstance = activeTab.value?.instanceName || conn?.schemaName || '';
+  if (!tables.length || !conn) {
     resultTableMetas.value = [];
     resultPrimaryKeys.value = [];
     resultPrimaryKeysReady.value = true;
@@ -646,7 +658,17 @@ async function refreshResultPrimaryKeys() {
   try {
     const metas: ResultTableMeta[] = await Promise.all(
       tables.map(async (t) => {
+        // 跨库 SELECT `lemon_cms`.`t` 时，当前选中库不能拿来查这张表的主键。
+        const inst = metadataInstanceName(t, conn.dbType, currentInstance);
         const metaName = metadataTableName(t, conn.dbType);
+        if (!inst) {
+          return {
+            ref: { schema: t.schema, table: t.table },
+            alias: t.alias,
+            columns: [] as string[],
+            primaryKeys: [] as string[],
+          };
+        }
         try {
           const { columns, primaryKeys } = await fetchTableMeta(inst, metaName);
           return {
@@ -719,9 +741,13 @@ function onOpenConnection() {
 
 async function handleOpened(conn: any) {
   if (isProductionConnection(conn)) {
+    // env 显式标记为 PROD 时直接说明；未标记时是按名称关键词推断
+    const explicit = resolveConnectionEnv(conn).source === 'FIELD';
     try {
       await ElMessageBox.confirm(
-        `「${conn?.dbName || '未命名'}」看起来是生产连接（${conn?.dbHost || '未知主机'}）。确认打开吗？`,
+        explicit
+          ? `「${conn?.dbName || '未命名'}」是生产环境连接（${conn?.dbHost || '未知主机'}）。确认打开吗？`
+          : `「${conn?.dbName || '未命名'}」看起来是生产连接（${conn?.dbHost || '未知主机'}）。确认打开吗？`,
         '打开生产连接',
         {
           type: 'warning',
@@ -800,47 +826,59 @@ function goSavedQueryManage() {
   router.push({ name: 'SavedQuerys' });
 }
 
-/** 跳转图表库（后台菜单路由名 Dashboard） */
+/** 提交为工单：有选区用选区，否则带编辑器全文（不用「当前可执行语句」） */
 function submitAsWorkOrder() {
   if (!activeConnection.value) {
     ElMessage.warning('请先打开数据库连接');
     return;
   }
-  const sql =
-    (sqlEditorRef.value?.getSelectedText?.() as string | undefined)?.trim()
-    || (sqlEditorRef.value?.getExecutableSql?.() as string | undefined)?.trim() ||
+  const selected =
+    (sqlEditorRef.value?.getSelectedText?.() as string | undefined)?.trim() || '';
+  const full =
+    (sqlEditorRef.value?.getValue?.() as string | undefined)?.trim() ||
     activeTab.value?.sql?.trim() ||
     '';
+  const sql = selected || full;
   if (!sql) {
     ElMessage.warning('请先在编辑器中填写要提交的 SQL');
     return;
   }
+  const title = `客户端提交 · ${activeConnection.value.dbName || ''}`;
+  const instance =
+    activeTab.value?.instanceName ||
+    activeConnection.value.schemaName ||
+    '';
+  // 每次点击用新 nonce，避免和已打开的工单页 fullPath 相同导致不重新进入
+  const nonce = String(Date.now());
   try {
-    sessionStorage.setItem('lemon.sqlWorkOrder.prefillSql', sql);
+    sessionStorage.setItem(
+      'lemon.sqlWorkOrder.prefill',
+      JSON.stringify({
+        sql,
+        title,
+        dbConfigId: String(activeConnection.value.id),
+        instanceName: instance,
+        nonce,
+      }),
+    );
   } catch {
     // ignore quota
   }
+  // 路由 name 以后台菜单为准（SqlWork），勿写死 path
   router.push({
-    path: '/lSql/sqlWorkOrder',
+    name: 'SqlWork',
     query: {
       create: '1',
+      nonce,
       dbConfigId: String(activeConnection.value.id),
-      instance:
-        activeTab.value?.instanceName ||
-        activeConnection.value.schemaName ||
-        '',
-      title: `客户端提交 · ${activeConnection.value.dbName || ''}`,
+      instance,
+      title,
     },
   });
 }
 
 function goChartLibrary() {
   router.push({ name: 'Dashboard' });
-}
-
-/** 跳转 Redis 工作台（后台菜单路由名 Redis） */
-function goRedisConsole() {
-  router.push({ name: 'Redis' });
 }
 
 function onAddQueryTab() {
@@ -942,6 +980,8 @@ async function refreshBrowseObjects(
         dbPort: cfg.dbPort,
         username: cfg.username,
         description: cfg.description,
+        env: cfg.env,
+        envLabel: cfg.envLabel,
         connectionStatus: cfg.connectionStatus,
       });
     }
@@ -1001,6 +1041,8 @@ async function tryConsumePendingSavedQuery() {
           dbPort: cfg.dbPort,
           username: cfg.username,
           description: cfg.description,
+          env: cfg.env,
+          envLabel: cfg.envLabel,
           connectionStatus: cfg.connectionStatus,
           aiEnabled: cfg.aiEnabled == null ? 1 : Number(cfg.aiEnabled),
           aiAllowSampleData:
@@ -1711,7 +1753,7 @@ function shouldExecuteAsBatch(sql: string): boolean {
   return (commands?.length || 0) > 1;
 }
 
-/** 多条里只要有写操作，就确认一次。结构变更不走 UPDATE/DELETE 的免确认。 */
+/** 多条里只要有写操作，就确认一次。结构变更不走数据写入的 30 天免确认。 */
 async function confirmSqlBatch(sql: string): Promise<boolean> {
   const mongo = isMongoDbType(activeConnection.value?.dbType);
   const parts = mongo ? sql.split(/;|\n/).map((s) => s.trim()).filter(Boolean) : listSqlStatements(sql);
@@ -1720,13 +1762,13 @@ async function confirmSqlBatch(sql: string): Promise<boolean> {
       const kind = mongoCommandKind(part);
       return kind === 'data' || kind === 'schema' || kind === 'manage';
     }
-    return isWriteOrDangerousSql(part) || looksLikeControlledDdl(part);
+    return isWriteOrDangerousSql(part) || looksLikeControlledDdl(part) || isPreparedScriptSql(part);
   });
   if (!writes.length) return true;
-  const sample = writes.find((part) => !isUpdateOrDeleteSql(part)) || writes[0]!;
+  const sample = writes.find((part) => !canMuteSqlWriteConfirm(part)) || writes[0]!;
   return confirmSqlWrite(sample, {
     title: '执行多条 SQL',
-    message: `即将按顺序执行 ${parts.length} 条语句，其中 ${writes.length} 条会修改数据或结构。某一条失败后会停止，此前已成功的语句不会自动回滚。确认继续？`,
+    message: `即将按顺序执行 ${parts.length} 条语句，其中 ${writes.length} 条会修改数据或结构。这些语句共用一个数据库会话，前面 SET 的变量后面仍然能用。某一条失败后会停止，此前已成功的语句不会自动回滚。确认继续？`,
   });
 }
 
@@ -1747,6 +1789,7 @@ function mapBatchResultSet(item: any, index: number): QueryResultSet {
     elapsedMs: item?.elapsedMs,
     message: item?.message,
     error: item?.error,
+    truncated: item?.truncated === true,
   };
 }
 
@@ -1876,7 +1919,7 @@ async function runSql(opts?: { sql?: string; source?: string }) {
     ElMessage.warning(`请先选择${instanceLabel.value}实例`);
     return;
   }
-  const sql =
+  let sql =
     opts?.sql?.trim() ||
     sqlEditorRef.value?.getExecutableSql?.()?.trim() ||
     activeTab.value.sql?.trim() ||
@@ -1886,9 +1929,19 @@ async function runSql(opts?: { sql?: string; source?: string }) {
     return;
   }
   const source = opts?.source || 'manual';
+  // 没框选时，光标落在 SET @变量 或 PREPARE 上要带上前后依赖的语句。
+  // 用户自己选中一段时按选区执行，不把选区外面的 SQL 加进来。
+  if (
+    !opts?.sql?.trim()
+    && !sqlEditorRef.value?.hasUserSelection?.()
+    && !isMongoDbType(activeConnection.value.dbType)
+  ) {
+    const fullText = sqlEditorRef.value?.getValue?.() || activeTab.value.sql || sql;
+    sql = expandSessionChain(fullText, sql, sqlEditorRef.value?.getCursorOffset?.());
+  }
 
-  // 选区里有多条语句时整段交给后台分步执行，结果区把每一条都展示出来
-  if (shouldExecuteAsBatch(sql)) {
+  // 多条语句，或单独的 SET / PREPARE，都走分步执行。分步执行共用一个连接，变量才不会丢。
+  if (shouldExecuteAsBatch(sql) || (!isMongoDbType(activeConnection.value.dbType) && isEditorSessionSql(sql))) {
     await runSqlBatch(sql, source);
     return;
   }
@@ -1900,7 +1953,7 @@ async function runSql(opts?: { sql?: string; source?: string }) {
       return;
     }
     if (kind === 'session') {
-      ElMessage.warning('编辑器执行不支持 use() 切库，请在左侧选择数据库；use() 可放在 MongoDB 脚本中执行');
+      ElMessage.warning('use() 只对同一次选中的脚本生效。请把 use() 和后面的命令一起选中执行；单独执行不会改变左侧当前库');
       return;
     }
     if (kind === 'data') {
@@ -2182,6 +2235,155 @@ async function stopSql() {
     abort?.abort();
   }
   ElMessage.info('已请求停止查询');
+}
+
+/** 当前连接是否支持可视化执行计划 / EXPLAIN ANALYZE */
+const explainSupported = computed(() =>
+  supportsExplain(activeConnection.value?.dbType),
+);
+const explainAnalyzeSupported = computed(() =>
+  supportsExplainAnalyze(activeConnection.value?.dbType),
+);
+const activeConnectionProd = computed(
+  () => !!activeConnection.value && isProductionConnection(activeConnection.value),
+);
+const activeConnectionAiEnabled = computed(
+  () => !!activeConnection.value && Number(activeConnection.value.aiEnabled) !== 0,
+);
+
+/** 生产环境 EXPLAIN ANALYZE 二次确认（会真实执行查询） */
+async function confirmProdAnalyze(message?: string): Promise<boolean> {
+  try {
+    await ElMessageBox.confirm(
+      message ||
+        '当前是生产环境连接，EXPLAIN ANALYZE 会真实执行查询，需要确认后才能继续',
+      '生产环境 ANALYZE 确认',
+      {
+        type: 'warning',
+        confirmButtonText: '确认执行 ANALYZE',
+        cancelButtonText: '取消',
+      },
+    );
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * 查看执行计划（Ctrl+Shift+E / 工具栏「执行计划」）：
+ * - 普通 EXPLAIN 只生成计划、不执行语句；
+ * - ANALYZE 仅限只读 SELECT，生产环境先确认（后端同样校验，可配置为禁止）；
+ * - 复用 requestId / AbortController，执行中可点「停止」取消。
+ */
+async function runExplain(opts?: {
+  analyze?: boolean;
+  confirmProd?: boolean;
+  sql?: string;
+}) {
+  const conn = activeConnection.value;
+  const tab = activeTab.value;
+  if (!conn || !tab) return;
+  if (tab.executing) {
+    ElMessage.warning('当前查询正在执行，请先停止或等待完成');
+    return;
+  }
+  if (!supportsExplain(conn.dbType)) {
+    ElMessage.warning('当前数据库类型不支持可视化执行计划');
+    return;
+  }
+  if (!tab.instanceName) {
+    ElMessage.warning(`请先选择${instanceLabel.value}实例`);
+    return;
+  }
+  const sql =
+    opts?.sql?.trim() ||
+    sqlEditorRef.value?.getExecutableSql?.()?.trim() ||
+    tab.sql?.trim() ||
+    '';
+  if (!sql) {
+    ElMessage.warning('请选中 SELECT 语句，或将光标放到要分析的语句上');
+    return;
+  }
+  if (shouldExecuteAsBatch(sql)) {
+    ElMessage.warning('执行计划一次只能分析一条语句，请只选中一条');
+    return;
+  }
+  const analyze = !!opts?.analyze && supportsExplainAnalyze(conn.dbType);
+  let confirmProd = !!opts?.confirmProd;
+  if (analyze && !confirmProd && isProductionConnection(conn)) {
+    if (!(await confirmProdAnalyze())) return;
+    confirmProd = true;
+  }
+
+  const requestId = newSqlRequestId();
+  const abort = new AbortController();
+  sqlRunAbort = abort;
+  sqlRunRequestId = requestId;
+  tab.executing = true;
+  tab.plan = { sql, loading: true, analyze, result: null };
+  tab.resultVisible = true;
+  tab.resultTab = 'plan';
+  if (resultHeight.value < 280) resultHeight.value = 360;
+  let confirmMessage: null | string = null;
+  try {
+    const res: any = await explainPlan(
+      {
+        dbConfigId: conn.id,
+        instanceName: tab.instanceName,
+        sql,
+        analyze,
+        confirmProd,
+        requestId,
+        source: analyze ? 'explain_analyze' : 'explain',
+      },
+      { signal: abort.signal },
+    );
+    const data = (res?.data ?? res) as ExplainPlanResult | null;
+    if (!data) throw new Error('没有返回执行计划');
+    if (data.requireProdConfirm && !confirmProd) {
+      // 前端未识别为生产，但后端按环境标签判定需要确认
+      confirmMessage = data.message || '';
+      tab.plan = { sql, loading: false, analyze, result: null };
+    } else {
+      tab.plan = { sql, loading: false, analyze, result: data };
+    }
+  } catch (e: any) {
+    const cancelled =
+      abort.signal.aborted ||
+      /查询已取消|canceled|cancelled/i.test(String(e?.msg || e?.message || ''));
+    tab.plan = {
+      sql,
+      loading: false,
+      analyze,
+      result: null,
+      error: cancelled ? '查询已取消' : pickErrorMsg(e, '获取执行计划失败'),
+    };
+  } finally {
+    if (sqlRunRequestId === requestId) {
+      sqlRunAbort = null;
+      sqlRunRequestId = null;
+    }
+    tab.executing = false;
+  }
+  if (confirmMessage != null) {
+    if (await confirmProdAnalyze(confirmMessage || undefined)) {
+      await runExplain({ analyze: true, confirmProd: true, sql });
+    } else if (tab.plan) {
+      tab.plan.error = '已取消生产环境 ANALYZE';
+    }
+  }
+}
+
+/** 执行计划页签「让 AI 优化」：把 SQL + 计划摘要预填到 AI 助手 */
+function onAskAiOptimizePlan() {
+  const plan = activeTab.value?.plan;
+  if (!plan?.result || !ensureAiReady()) return;
+  openAiAssistant({
+    scene: 'sql',
+    prefill: buildAiOptimizePrompt(plan.sql, plan.result),
+    context: { selectedSql: plan.sql, editorSql: activeTab.value?.sql || plan.sql },
+  });
 }
 
 /** 从 axios / 业务 reject 对象中取出可读错误文案 */
@@ -3201,7 +3403,7 @@ onBeforeUnmount(() => {
               v-model="filterText"
               clearable
               size="small"
-              placeholder="Search As Input"
+              :placeholder="$tr('搜索库/表/对象')"
             />
           </div>
           <component
@@ -3328,6 +3530,15 @@ onBeforeUnmount(() => {
               {{ $tr('停止') }}
             </ElButton>
             <ElButton
+              v-if="explainSupported"
+              size="small"
+              :disabled="activeTab?.executing"
+              :title="$tr('查看选中/当前语句的执行计划，普通 EXPLAIN 不会执行语句')"
+              @click="runExplain()"
+            >
+              {{ $tr('执行计划 (Ctrl+Shift+E)') }}
+            </ElButton>
+            <ElButton
               size="small"
               :disabled="activeTab?.executing"
               @click="onFormatSql"
@@ -3363,6 +3574,7 @@ onBeforeUnmount(() => {
               :disabled="!activeTab"
               @click="locateCurrentInTree"
             />
+            <ChangeWindowBadge :connection="activeConnection" />
           </div>
 
           <!-- SQL 编辑区（占满剩余空间） -->
@@ -3381,6 +3593,7 @@ onBeforeUnmount(() => {
               :load-columns="loadEditorColumns"
               :load-tables="loadEditorTables"
               @execute="runSql"
+              @explain="runExplain()"
               @save="onSaveQuery"
               @close-tab="closeActiveQueryTabNow"
               @import-file="onImportSqlFile"
@@ -3425,6 +3638,12 @@ onBeforeUnmount(() => {
               @export-sql="onExportSqlInsert"
               @ask-ai-fix="onAskAiFix"
               @focus-result-set="onFocusResultSet"
+              :plan="activeTab.plan ?? null"
+              :can-analyze="explainAnalyzeSupported"
+              :prod="activeConnectionProd"
+              :ai-enabled="activeConnectionAiEnabled"
+              @explain-rerun="(o) => runExplain({ analyze: o.analyze, sql: activeTab?.plan?.sql })"
+              @ask-ai-optimize="onAskAiOptimizePlan"
             />
           </div>
           </div>

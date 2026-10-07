@@ -310,7 +310,14 @@
     )
   }
 
-  function columnViews(table: any) {
+  /** 画布字段行展示数据 */
+  interface FieldRowView {
+    pk: boolean
+    typeText: string
+    label: string
+  }
+
+  function columnViews(table: any): FieldRowView[] {
     const cols = Array.isArray(table?.columns) ? table.columns : []
     return cols.map((col: any) => {
       const name = String(col.fieldName || col.columnName || '').trim()
@@ -832,7 +839,7 @@
       })
     }
 
-    const rows =
+    const rows: FieldRowView[] =
       fieldCount > 0
         ? columns
         : [{ pk: false, typeText: '', label: '暂无字段' }]

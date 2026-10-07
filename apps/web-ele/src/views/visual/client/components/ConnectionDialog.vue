@@ -28,6 +28,7 @@ import {
   type DbTypeDescriptor,
   resolveDbType,
 } from '../dialect/dbTypes';
+import { ENV_OPTIONS, envTagType, resolveConnectionEnv } from '../utils/connectionEnv';
 
 defineOptions({ name: 'ConnectionDialog' });
 
@@ -97,6 +98,10 @@ const form = reactive({
   aiEnabled: 1,
   /** 是否允许 AI 读取真实样例行（默认关） */
   aiAllowSampleData: 0,
+  /** 环境标签 DEV/TEST/UAT/PROD；空串=未标记（保存时清除） */
+  env: '',
+  /** 环境自定义显示名 */
+  envLabel: '',
 });
 
 /** SSH 认证方式：password | key */
@@ -263,6 +268,8 @@ function resetForm() {
     sshPassphrase: '',
     aiEnabled: 1,
     aiAllowSampleData: 0,
+    env: '',
+    envLabel: '',
   });
   sshAuthMode.value = 'password';
 }
@@ -294,6 +301,8 @@ function fillForm(row: any) {
     aiEnabled: row.aiEnabled == null ? 1 : Number(row.aiEnabled),
     aiAllowSampleData:
       row.aiAllowSampleData == null ? 0 : Number(row.aiAllowSampleData),
+    env: row.env || '',
+    envLabel: row.envLabel || '',
   });
   sshAuthMode.value = row.sshPrivateKey ? 'key' : 'password';
 }
@@ -411,6 +420,9 @@ async function handleSubmit() {
     saving.value = true;
     try {
       const payload: Record<string, unknown> = { ...form };
+      // 环境标签：空串表示清除（后端 NOT_NULL 更新策略下 null 不会覆盖）
+      payload.env = form.env || '';
+      payload.envLabel = form.envLabel || '';
       if (form.id && !form.password) delete payload.password;
       if (form.id && !form.sshPassword) delete payload.sshPassword;
       if (form.id && !form.sshPrivateKey) delete payload.sshPrivateKey;
@@ -564,6 +576,18 @@ watch(
         @row-dblclick="(row: any) => openByRow(row)"
       >
         <ElTableColumn prop="dbName" :label="$tr('名称')" min-width="120" />
+        <ElTableColumn :label="$tr('环境')" width="90">
+          <template #default="{ row }">
+            <ElTag
+              v-if="resolveConnectionEnv(row).text"
+              size="small"
+              :type="envTagType(resolveConnectionEnv(row).env)"
+              :effect="resolveConnectionEnv(row).env === 'PROD' ? 'dark' : 'light'"
+            >
+              {{ resolveConnectionEnv(row).text }}
+            </ElTag>
+          </template>
+        </ElTableColumn>
         <ElTableColumn :label="$tr('类型')" width="150">
           <template #default="{ row }">
             {{ resolveDbType(row.dbType).label }}
@@ -593,6 +617,28 @@ watch(
     >
       <ElFormItem :label="$tr('连接名称')" prop="dbName">
         <ElInput v-model="form.dbName" :placeholder="$tr('显示名称')" />
+      </ElFormItem>
+      <ElFormItem :label="$tr('环境')" prop="env">
+        <div class="env-row">
+          <ElSelect v-model="form.env" clearable :placeholder="$tr('未标记')" style="width: 160px">
+            <ElOption
+              v-for="opt in ENV_OPTIONS"
+              :key="opt.value"
+              :label="`${opt.value} · ${$tr(opt.label)}`"
+              :value="opt.value"
+            />
+          </ElSelect>
+          <ElInput
+            v-model="form.envLabel"
+            maxlength="32"
+            clearable
+            :placeholder="$tr('自定义显示名（可选）')"
+            style="width: 200px"
+          />
+        </div>
+        <div class="tip env-tip">
+          {{ $tr('生产连接请标记为 PROD：打开时二次确认，并受变更窗口约束；未标记时按名称关键词识别') }}
+        </div>
       </ElFormItem>
       <ElFormItem :label="$tr('数据库类型')" prop="dbType">
         <ElSelect v-model="form.dbType" class="w-full" filterable>
@@ -780,5 +826,17 @@ watch(
 
 .w-full {
   width: 100%;
+}
+
+.env-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.env-tip {
+  width: 100%;
+  margin-left: 0;
+  line-height: 1.5;
 }
 </style>

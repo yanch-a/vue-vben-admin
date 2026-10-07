@@ -612,12 +612,12 @@ const keyFields = computed(() => {
       <div class="left">
         <ElInput v-model="tableKeyword" size="small" clearable :placeholder="$tr('搜索表名')" />
         <div class="status-legend" :aria-label="$tr('表文档状态说明')">
-          <span title="AI 或用户已经填写文档">🟢 {{ $tr('已填写') }}</span>
-          <span title="只有数据库结构骨架，尚未由 AI 或用户补充">○ {{ $tr('仅骨架') }}</span>
-          <span title="尚未初始化结构文档骨架">⚪ {{ $tr('未初始化') }}</span>
-          <span title="数据库表结构已变化，需要重新生成">🟡 {{ $tr('结构变化') }}</span>
-          <span title="数据库中的表已经删除">🔴 {{ $tr('表已删除') }}</span>
-          <span title="用户已锁定，AI 不会覆盖正文">🔒 {{ $tr('用户锁定') }}</span>
+          <span :title="$tr('AI 或用户已经填写文档')">🟢 {{ $tr('已填写') }}</span>
+          <span :title="$tr('只有数据库结构骨架，尚未由 AI 或用户补充')">○ {{ $tr('仅骨架') }}</span>
+          <span :title="$tr('尚未初始化结构文档骨架')">⚪ {{ $tr('未初始化') }}</span>
+          <span :title="$tr('数据库表结构已变化，需要重新生成')">🟡 {{ $tr('结构变化') }}</span>
+          <span :title="$tr('数据库中的表已经删除')">🔴 {{ $tr('表已删除') }}</span>
+          <span :title="$tr('用户已锁定，AI 不会覆盖正文')">🔒 {{ $tr('用户锁定') }}</span>
         </div>
         <div v-if="drift && ((drift.newTables?.length || 0) + (drift.changedTables?.length || 0) + (drift.droppedTables?.length || 0) > 0)" class="drift-box">
           <div v-if="drift.newTables?.length" class="drift-row">

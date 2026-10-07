@@ -295,7 +295,7 @@ async function loadTargetSchemas() {
     const res: any = await getTableTree(form.targetDbConfigId, form.targetInstance);
     if (requestId !== targetSchemaRequestId) return;
     const schemas = res?.data || res || [];
-    const names = (schemas || [])
+    const names: string[] = (schemas || [])
       .map((s: any) => s.schemaName || s.displayName)
       .filter(Boolean)
       .map(String);
