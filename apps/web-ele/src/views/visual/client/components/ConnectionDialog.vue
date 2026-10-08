@@ -19,7 +19,11 @@ import {
   testConnection,
   testConnectionDraft,
 } from '#/api/visual/database';
-import { editDbConfig, getDbConfigById, getDbConfigList } from '#/api/visual/vq';
+import {
+  editDbConfig,
+  getDbConfigById,
+  getDbConfigList,
+} from '#/api/visual/vq';
 
 import {
   applyServerProfiles,
@@ -28,13 +32,19 @@ import {
   type DbTypeDescriptor,
   resolveDbType,
 } from '../dialect/dbTypes';
-import { ENV_OPTIONS, envTagType, resolveConnectionEnv } from '../utils/connectionEnv';
+import {
+  ENV_OPTIONS,
+  envTagType,
+  resolveConnectionEnv,
+} from '../utils/connectionEnv';
 
 defineOptions({ name: 'ConnectionDialog' });
 
 const props = defineProps<{
   modelValue: boolean;
   mode?: 'create' | 'open';
+  /** 导入向导可填入无凭据名称/产品/库名提示；未传时原客户端行为不变。 */
+  initialHint?: { dbName: string; dbType: string; schemaName?: string };
 }>();
 
 const emit = defineEmits<{
@@ -559,13 +569,26 @@ watch(
     selectedRow.value = null;
     resetForm();
     await loadProfiles();
+    if (!isOpenMode.value && props.initialHint) {
+      beginFormSync();
+      const profile = resolveDbType(props.initialHint.dbType);
+      form.dbName = props.initialHint.dbName;
+      form.dbType = profile.code;
+      form.schemaName = props.initialHint.schemaName || '';
+      form.dbPort = profile.defaultPort || 0;
+    }
     if (isOpenMode.value) await loadList();
   },
 );
 </script>
 
 <template>
-  <ElDialog v-model="visible" :title="dialogTitle" width="720px" destroy-on-close>
+  <ElDialog
+    v-model="visible"
+    :title="dialogTitle"
+    width="720px"
+    destroy-on-close
+  >
     <!-- 打开连接：列表 -->
     <div v-if="isOpenMode && openView === 'list'" v-loading="loading">
       <ElTable
@@ -582,7 +605,9 @@ watch(
               v-if="resolveConnectionEnv(row).text"
               size="small"
               :type="envTagType(resolveConnectionEnv(row).env)"
-              :effect="resolveConnectionEnv(row).env === 'PROD' ? 'dark' : 'light'"
+              :effect="
+                resolveConnectionEnv(row).env === 'PROD' ? 'dark' : 'light'
+              "
             >
               {{ resolveConnectionEnv(row).text }}
             </ElTag>
@@ -594,7 +619,11 @@ watch(
           </template>
         </ElTableColumn>
         <ElTableColumn prop="dbHost" :label="$tr('主机')" min-width="120" />
-        <ElTableColumn prop="schemaName" :label="$tr('默认库')" min-width="100" />
+        <ElTableColumn
+          prop="schemaName"
+          :label="$tr('默认库')"
+          min-width="100"
+        />
         <ElTableColumn :label="$tr('操作')" width="100" fixed="right">
           <template #default="{ row }">
             <ElButton link type="primary" @click.stop="startEdit(row)">
@@ -603,7 +632,9 @@ watch(
           </template>
         </ElTableColumn>
       </ElTable>
-      <div class="hint">{{ $tr('提示：双击行即可打开连接；编辑请点「编辑」按钮') }}</div>
+      <div class="hint">
+        {{ $tr('提示：双击行即可打开连接；编辑请点「编辑」按钮') }}
+      </div>
     </div>
 
     <!-- 新建 / 编辑表单 -->
@@ -620,7 +651,12 @@ watch(
       </ElFormItem>
       <ElFormItem :label="$tr('环境')" prop="env">
         <div class="env-row">
-          <ElSelect v-model="form.env" clearable :placeholder="$tr('未标记')" style="width: 160px">
+          <ElSelect
+            v-model="form.env"
+            clearable
+            :placeholder="$tr('未标记')"
+            style="width: 160px"
+          >
             <ElOption
               v-for="opt in ENV_OPTIONS"
               :key="opt.value"
@@ -637,7 +673,11 @@ watch(
           />
         </div>
         <div class="tip env-tip">
-          {{ $tr('生产连接请标记为 PROD：打开时二次确认，并受变更窗口约束；未标记时按名称关键词识别') }}
+          {{
+            $tr(
+              '生产连接请标记为 PROD：打开时二次确认，并受变更窗口约束；未标记时按名称关键词识别',
+            )
+          }}
         </div>
       </ElFormItem>
       <ElFormItem :label="$tr('数据库类型')" prop="dbType">
@@ -671,7 +711,9 @@ watch(
             :max="65535"
             controls-position="right"
           />
-          <span class="tip">{{ $tr('默认') }} {{ descriptor.defaultPort }}</span>
+          <span class="tip"
+            >{{ $tr('默认') }} {{ descriptor.defaultPort }}</span
+          >
         </ElFormItem>
       </template>
       <ElFormItem label="JDBC URL" prop="jdbcUrl">
@@ -680,7 +722,9 @@ watch(
             v-model="form.jdbcUrl"
             :placeholder="$tr('留空按类型自动生成，填写后优先使用')"
           />
-          <ElButton @click="fillUrlFromServer">{{ $tr('按当前配置生成') }}</ElButton>
+          <ElButton @click="fillUrlFromServer">{{
+            $tr('按当前配置生成')
+          }}</ElButton>
         </div>
         <div class="tip preview">{{ $tr('实际使用：') }}{{ urlPreview }}</div>
       </ElFormItem>
@@ -700,14 +744,19 @@ watch(
       </ElFormItem>
 
       <template v-if="needsHost">
-        <ElDivider content-position="left">{{ $tr('SSH 隧道（可选）') }}</ElDivider>
+        <ElDivider content-position="left">{{
+          $tr('SSH 隧道（可选）')
+        }}</ElDivider>
         <ElFormItem :label="$tr('启用 SSH')">
           <ElSwitch v-model="sshEnabled" />
           <span class="tip">{{ $tr('经跳板机转发到上方数据库主机') }}</span>
         </ElFormItem>
         <template v-if="sshEnabled">
           <ElFormItem :label="$tr('SSH 主机')" prop="sshHost">
-            <ElInput v-model="form.sshHost" :placeholder="$tr('跳板机 IP 或域名')" />
+            <ElInput
+              v-model="form.sshHost"
+              :placeholder="$tr('跳板机 IP 或域名')"
+            />
           </ElFormItem>
           <ElFormItem :label="$tr('SSH 端口')" prop="sshPort">
             <ElInputNumber
@@ -726,7 +775,10 @@ watch(
               <ElRadio value="key">{{ $tr('私钥') }}</ElRadio>
             </ElRadioGroup>
           </ElFormItem>
-          <ElFormItem v-if="sshAuthMode === 'password'" :label="$tr('SSH 密码')">
+          <ElFormItem
+            v-if="sshAuthMode === 'password'"
+            :label="$tr('SSH 密码')"
+          >
             <ElInput
               v-model="form.sshPassword"
               type="password"
@@ -762,7 +814,9 @@ watch(
       </ElFormItem>
       <ElFormItem :label="$tr('允许样例数据')">
         <ElSwitch v-model="aiAllowSampleData" />
-        <span class="tip">{{ $tr('开启后 Agent 可读取少量真实行（默认关闭）') }}</span>
+        <span class="tip">{{
+          $tr('开启后 Agent 可读取少量真实行（默认关闭）')
+        }}</span>
       </ElFormItem>
 
       <ElFormItem :label="$tr('描述')" prop="description">
@@ -781,9 +835,13 @@ watch(
       >
         {{ $tr('编辑') }}
       </ElButton>
-      <ElButton :loading="testing" @click="handleTest">{{ $tr('测试连接') }}</ElButton>
+      <ElButton :loading="testing" @click="handleTest">{{
+        $tr('测试连接')
+      }}</ElButton>
       <ElButton type="primary" :loading="saving" @click="handleSubmit">
-        <template v-if="isOpenMode && openView === 'list'">{{ $tr('打开') }}</template>
+        <template v-if="isOpenMode && openView === 'list'">{{
+          $tr('打开')
+        }}</template>
         <template v-else-if="form.id">{{ $tr('保存') }}</template>
         <template v-else>{{ $tr('保存并打开') }}</template>
       </ElButton>

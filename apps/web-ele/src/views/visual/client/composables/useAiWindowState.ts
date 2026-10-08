@@ -28,24 +28,28 @@ watch(
   { deep: true },
 );
 
-export function useAiWindowState() {
+/** ETL 使用独立窗口显隐，不触发原客户端 Dock 或改变其已保存状态。 */
+export function useAiWindowState(isolated = false) {
+  const windowState = isolated
+    ? reactive({ visible: false, minimized: false, maximized: false })
+    : state;
   function open() {
-    state.visible = true;
-    state.minimized = false;
+    windowState.visible = true;
+    windowState.minimized = false;
   }
   function minimize() {
-    state.minimized = true;
+    windowState.minimized = true;
   }
   function restore() {
-    state.visible = true;
-    state.minimized = false;
+    windowState.visible = true;
+    windowState.minimized = false;
   }
   function close() {
-    state.visible = false;
-    state.minimized = false;
+    windowState.visible = false;
+    windowState.minimized = false;
   }
   function toggleMax() {
-    state.maximized = !state.maximized;
+    windowState.maximized = !windowState.maximized;
   }
-  return { state, open, minimize, restore, close, toggleMax };
+  return { state: windowState, open, minimize, restore, close, toggleMax };
 }

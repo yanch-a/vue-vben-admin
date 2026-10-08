@@ -14,6 +14,7 @@ const props = defineProps<{
   running: boolean;
   hasSelection?: boolean;
   hasError?: boolean;
+  etlMode?: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -30,16 +31,65 @@ const scene = computed({
   set: (v: AgentScene) => emit('update:scene', v),
 });
 
-const chips = [
-  { label: '生成 SQL', scene: 'sql' as AgentScene, tpl: '请根据需求编写 SQL：' },
-  { label: '优化这段 SQL', scene: 'sql' as AgentScene, tpl: '请优化这段 SQL，并用 explain_sql 对比改写前后的执行计划。' },
-  { label: '解释这段 SQL', scene: 'sql' as AgentScene, tpl: '请解释这段 SQL 在做什么。' },
-  { label: '修复报错', scene: 'sql' as AgentScene, tpl: '请根据报错修复 SQL。' },
-  { label: '生成图表', scene: 'chart' as AgentScene, tpl: '请根据需求生成统计图表：' },
-  { label: '写表说明文档', scene: 'schema_doc' as AgentScene, tpl: '请为相关表补充结构说明文档。' },
-];
+const chips = computed(() =>
+  props.etlMode
+    ? [
+        {
+          label: '创建数据同步',
+          scene: 'etl' as AgentScene,
+          tpl: '请根据工作区的真实表结构创建数据同步：',
+        },
+        {
+          label: '先取条件再同步',
+          scene: 'etl' as AgentScene,
+          tpl: '从 B 获取水位，作为 A 多表关联查询的条件，再更新插入 B，请先检查源和目标字段。',
+        },
+        {
+          label: '解释配置',
+          scene: 'etl' as AgentScene,
+          tpl: '请解释当前 ETL 配置及操作方法，不要修改配置。',
+        },
+        {
+          label: '排查和优化',
+          scene: 'etl' as AgentScene,
+          tpl: '请检查当前 ETL 的依赖、权限、字段映射及性能风险。',
+        },
+      ]
+    : [
+        {
+          label: '生成 SQL',
+          scene: 'sql' as AgentScene,
+          tpl: '请根据需求编写 SQL：',
+        },
+        {
+          label: '优化这段 SQL',
+          scene: 'sql' as AgentScene,
+          tpl: '请优化这段 SQL，并用 explain_sql 对比改写前后的执行计划。',
+        },
+        {
+          label: '解释这段 SQL',
+          scene: 'sql' as AgentScene,
+          tpl: '请解释这段 SQL 在做什么。',
+        },
+        {
+          label: '修复报错',
+          scene: 'sql' as AgentScene,
+          tpl: '请根据报错修复 SQL。',
+        },
+        {
+          label: '生成图表',
+          scene: 'chart' as AgentScene,
+          tpl: '请根据需求生成统计图表：',
+        },
+        {
+          label: '写表说明文档',
+          scene: 'schema_doc' as AgentScene,
+          tpl: '请为相关表补充结构说明文档。',
+        },
+      ],
+);
 
-function applyChip(c: (typeof chips)[number]) {
+function applyChip(c: (typeof chips.value)[number]) {
   scene.value = c.scene;
   text.value = c.tpl;
 }
@@ -79,14 +129,34 @@ defineExpose({ setText });
       </ElTag>
     </div>
     <div class="row">
-      <ElRadioGroup v-model="scene" size="small">
+      <ElTag v-if="etlMode">ETL 配置与问答</ElTag>
+      <ElRadioGroup v-else v-model="scene" size="small">
         <ElRadioButton label="sql" value="sql">SQL</ElRadioButton>
-        <ElRadioButton label="chart" value="chart">{{ $tr('图表') }}</ElRadioButton>
-        <ElRadioButton label="free" value="free">{{ $tr('自由') }}</ElRadioButton>
-        <ElRadioButton label="schema_doc" value="schema_doc">{{ $tr('文档') }}</ElRadioButton>
+        <ElRadioButton label="chart" value="chart">{{
+          $tr('图表')
+        }}</ElRadioButton>
+        <ElRadioButton label="free" value="free">{{
+          $tr('自由')
+        }}</ElRadioButton>
+        <ElRadioButton label="schema_doc" value="schema_doc">{{
+          $tr('文档')
+        }}</ElRadioButton>
       </ElRadioGroup>
-      <ElTag v-if="hasSelection" size="small" closable @close="emit('clearSelection')">{{ $tr('已附带选中 SQL') }}</ElTag>
-      <ElTag v-if="hasError" size="small" type="danger" closable @close="emit('clearError')">{{ $tr('已附带报错') }}</ElTag>
+      <ElTag
+        v-if="hasSelection"
+        size="small"
+        closable
+        @close="emit('clearSelection')"
+        >{{ $tr('已附带选中 SQL') }}</ElTag
+      >
+      <ElTag
+        v-if="hasError"
+        size="small"
+        type="danger"
+        closable
+        @close="emit('clearError')"
+        >{{ $tr('已附带报错') }}</ElTag
+      >
     </div>
     <ElInput
       v-model="text"
@@ -96,9 +166,24 @@ defineExpose({ setText });
       @keydown="onKey"
     />
     <div class="actions">
-      <span v-if="running" class="run-hint">{{ $tr('运行中，可随时停止') }}</span>
-      <ElButton v-if="running" size="small" type="danger" @click="emit('stop')">{{ $tr('停止') }}</ElButton>
-      <ElButton v-else size="small" type="primary" :disabled="!text.trim()" @click="doSend">{{ $tr('发送') }}</ElButton>
+      <span v-if="running" class="run-hint">{{
+        $tr('运行中，可随时停止')
+      }}</span>
+      <ElButton
+        v-if="running"
+        size="small"
+        type="danger"
+        @click="emit('stop')"
+        >{{ $tr('停止') }}</ElButton
+      >
+      <ElButton
+        v-else
+        size="small"
+        type="primary"
+        :disabled="!text.trim()"
+        @click="doSend"
+        >{{ $tr('发送') }}</ElButton
+      >
     </div>
   </div>
 </template>

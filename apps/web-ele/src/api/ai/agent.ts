@@ -15,7 +15,7 @@ const convUrl = adminUrl + '/aiConversation/';
 const schemaUrl = adminUrl + '/aiSchemaDoc/';
 const chartUrl = adminUrl + '/aiChart/';
 
-export type AgentScene = 'sql' | 'chart' | 'schema_doc' | 'free';
+export type AgentScene = 'sql' | 'chart' | 'schema_doc' | 'etl' | 'free';
 
 export interface AgentChatRequest {
   conversationId?: number | string;
@@ -42,7 +42,15 @@ export interface AgentChatRequest {
       displayName?: string;
     }>;
     draftItems?: any[];
+    /** ETL 场景传递当前完整草稿；使用字符串避免客户端 JSON 被请求库再次改写。 */
+    etlWorkspace?: string;
+    skillIds?: string[];
   };
+}
+
+/** 获取服务端允许按需加载的技能目录，不接收任意文件路径。 */
+export function listAgentSkills(scene: string) {
+  return request({ url: url + 'skills', method: 'get', params: { scene } });
 }
 
 /** 流式对话；返回 abort 函数 */
@@ -56,7 +64,10 @@ export function cancelAgentRun(runId: string) {
   return request({ url: url + 'cancel', method: 'post', data: { runId } });
 }
 
-export function listConversations(params: { dbConfigId?: number | string; scene?: string }) {
+export function listConversations(params: {
+  dbConfigId?: number | string;
+  scene?: string;
+}) {
   return request({ url: convUrl + 'list', method: 'get', params });
 }
 

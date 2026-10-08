@@ -19,6 +19,7 @@ const props = defineProps<{
   running: boolean;
   dbConfigId?: number | string;
   instanceName?: string;
+  etlMode?: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -27,6 +28,7 @@ const emit = defineEmits<{
   runSql: [string];
   openSqlInNewTab: [string];
   applyQueryConfig: [NonNullable<AiMsg['queryConfig']>];
+  applyEtlConfig: [NonNullable<AiMsg['etlConfig']>];
 }>();
 
 const box = ref<HTMLElement | null>(null);
@@ -109,8 +111,21 @@ function onSqlAction(
 
 <template>
   <div ref="box" class="msg-list" @scroll.passive="onListScroll">
-    <div v-if="!messages.length" class="empty">{{ $tr('输入需求，让 AI 帮你写 SQL 或出图表') }}</div>
-    <div v-for="item in viewMessages" :key="item.msg.id" class="msg" :class="item.msg.role">
+    <div v-if="!messages.length" class="empty">
+      {{
+        $tr(
+          etlMode
+            ? '描述同步需求或询问配置用法，AI 会生成待确认的候选'
+            : '输入需求，让 AI 帮你写 SQL 或出图表',
+        )
+      }}
+    </div>
+    <div
+      v-for="item in viewMessages"
+      :key="item.msg.id"
+      class="msg"
+      :class="item.msg.role"
+    >
       <template v-if="item.msg.role === 'user'">
         <div class="bubble">{{ item.msg.text }}</div>
       </template>
@@ -160,10 +175,41 @@ function onSqlAction(
           :instance-name="instanceName"
           @open-sql="onSqlAction('openTab', $event)"
         />
+        <el-card v-if="item.msg.etlConfig" class="etl-proposal" shadow="never">
+          <strong
+            >ETL 候选配置 ·
+            {{ item.msg.etlConfig.workspace?.pipelines?.length || 0 }}
+            个任务</strong
+          >
+          <p>{{ item.msg.etlConfig.explanation }}</p>
+          <p
+            v-for="warning in item.msg.etlConfig.warnings || []"
+            :key="warning"
+          >
+            {{ warning }}
+          </p>
+          <details>
+            <summary>查看完整 JSON</summary>
+            <pre>{{
+              JSON.stringify(item.msg.etlConfig.workspace, null, 2)
+            }}</pre>
+          </details>
+          <el-button
+            type="primary"
+            :disabled="running"
+            @click="emit('applyEtlConfig', item.msg.etlConfig)"
+            >检查并应用到草稿</el-button
+          >
+          <small>不会自动保存、发布或执行</small>
+        </el-card>
         <div v-if="item.msg.error" class="err">{{ item.msg.error }}</div>
         <div v-if="item.msg.role === 'assistant'" class="msg-state">
-          <span v-if="!item.msg.done && running" class="st running">{{ $tr('生成中') }}</span>
-          <span v-else-if="item.msg.done && !item.msg.error" class="st done">{{ $tr('已完成') }}</span>
+          <span v-if="!item.msg.done && running" class="st running">{{
+            $tr('生成中')
+          }}</span>
+          <span v-else-if="item.msg.done && !item.msg.error" class="st done">{{
+            $tr('已完成')
+          }}</span>
         </div>
       </template>
     </div>
@@ -175,6 +221,19 @@ function onSqlAction(
 </template>
 
 <style scoped>
+.etl-proposal pre {
+  max-height: 240px;
+  overflow: auto;
+  font-size: 12px;
+}
+.etl-proposal p {
+  margin: 8px 0;
+}
+.etl-proposal small {
+  display: block;
+  margin-top: 6px;
+  color: var(--el-text-color-secondary);
+}
 .msg-list {
   flex: 1;
   overflow: auto;

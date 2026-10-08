@@ -1,0 +1,2 @@
+<!-- 隔离验收：故意缺少闭合标签，不包含连接地址或凭据。作者：yanch。 -->
+<transformation><info><name>malformed-test</name></info>

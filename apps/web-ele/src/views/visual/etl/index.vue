@@ -1,0 +1,2304 @@
+<script setup lang="ts">
+/**
+ * SQL ETL 操作台：工作区预选具体数据源，每个步骤配置查询或写入，结果引用自动形成依赖。
+ * 简洁步骤编辑与完整 JSON 共享同一文档，支持关联查询和跨库条件查询。
+ * @author yanch
+ */
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { onBeforeRouteLeave } from 'vue-router';
+import { Page } from '@vben/common-ui';
+import { ElMessage, ElMessageBox } from 'element-plus';
+import {
+  Fold,
+  Expand,
+  Plus,
+  VideoPlay,
+  Refresh,
+  MagicStick,
+} from '@element-plus/icons-vue';
+import type {
+  EtlConnectionOption,
+  EtlNode,
+  EtlResource,
+  EtlRun,
+  EtlWorkspaceDocument,
+  EtlWorkspaceRow,
+} from '#/api/visual/etl';
+import {
+  cancelEtlRun,
+  createEtlWorkspace,
+  deleteEtlWorkspace,
+  executeEtlWorkflow,
+  getEtlWorkspace,
+  listEtlRuns,
+  listEtlRunLogs,
+  listEtlSources,
+  listEtlTables,
+  listEtlWorkspaces,
+  previewEtlStep,
+  publishEtlWorkspace,
+  saveEtlWorkspace,
+  validateEtlWorkspace,
+} from '#/api/visual/etl';
+import { getTableColumns } from '#/api/visual/database';
+import AiChatWindow from '#/views/visual/client/components/ai/AiChatWindow.vue';
+import JsonEditorPanel from '#/views/visual/client/components/query/JsonEditorPanel.vue';
+import WorkspaceSources from './WorkspaceSources.vue';
+import TaskTabs from './TaskTabs.vue';
+import KettleImportWizard from './KettleImportWizard.vue';
+import {
+  cloneDocument,
+  createSqlPipeline,
+  createWorkspaceDocument,
+  etlId,
+  normalizeSqlDocument,
+  syncStepDependencies,
+} from './etlModel';
+
+defineOptions({ name: 'EtlWorkspace' });
+const loading = ref(false),
+  saving = ref(false),
+  running = ref(false),
+  previewing = ref(false);
+const sidebarOpen = ref(localStorage.getItem('lemon-etl-sidebar') !== 'closed');
+const taskPosition = ref(
+  ['top', 'left', 'right'].includes(
+    localStorage.getItem('lemon-etl-tabs') || '',
+  )
+    ? localStorage.getItem('lemon-etl-tabs')!
+    : 'top',
+);
+/** 用户布局偏好不写进可移植任务 JSON。 */
+function setTaskPosition(position: string) {
+  taskPosition.value = position;
+  localStorage.setItem('lemon-etl-tabs', position);
+}
+const workspaces = ref<EtlWorkspaceRow[]>([]),
+  activeWorkspace = ref<EtlWorkspaceRow>();
+const doc = ref<EtlWorkspaceDocument>(createWorkspaceDocument('new', ''));
+const connections = ref<EtlConnectionOption[]>([]);
+const activePipelineId = ref(''),
+  selectedNodeId = ref('');
+const editorMode = ref<'steps' | 'json'>('steps'),
+  jsonText = ref(''),
+  jsonValid = ref(true),
+  saved = ref('');
+const pipeline = computed(() =>
+  doc.value.pipelines.find((item) => item.id === activePipelineId.value),
+);
+const node = computed(() =>
+  pipeline.value?.nodes.find((item) => item.id === selectedNodeId.value),
+);
+const resources = computed(() => Object.entries(doc.value.resources));
+const queryColumns = ref<Record<string, string[]>>({});
+const sqlInput = ref<{ textarea?: HTMLTextAreaElement }>();
+const nodeResource = computed(
+  () => doc.value.resources[node.value?.resourceRef || ''],
+);
+const usedRefs = computed(() =>
+  doc.value.pipelines.flatMap((item) =>
+    item.nodes.map((step) => step.resourceRef || ''),
+  ),
+);
+const dirty = computed(
+  () => Boolean(activeWorkspace.value) && snapshot() !== saved.value,
+);
+const previousQueries = computed(() => {
+  const steps = pipeline.value?.nodes || [];
+  // 展示顺序不限制 DAG 引用；排除当前节点和它的所有后继，防止交互产生循环。
+  const downstream = new Set([selectedNodeId.value]);
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const edge of pipeline.value?.edges || [])
+      if (
+        edge.enabled !== false &&
+        downstream.has(edge.source) &&
+        !downstream.has(edge.target)
+      ) {
+        downstream.add(edge.target);
+        changed = true;
+      }
+  }
+  return steps.filter(
+    (item) =>
+      ['database.query', 'transform.select'].includes(item.type) &&
+      item.enabled !== false &&
+      !downstream.has(item.id),
+  );
+});
+const validationErrors = ref<string[]>([]),
+  validationWarnings = ref<string[]>([]);
+/** 草稿未完成（空 SQL/目标表）不钉在页面底部，只在运行时拦截提示。 */
+const DRAFT_INCOMPLETE = /尚未填写查询 SQL|尚未选择目标表/;
+const stickyWarnings = computed(() =>
+  validationWarnings.value.filter((item) => !DRAFT_INCOMPLETE.test(item)),
+);
+/** el-select 不能稳定选中空字符串，固定值用哨兵再写回 stepId=''。 */
+const FIXED_PARAM_SOURCE = '__fixed__';
+const catalog = ref<any[]>([]),
+  catalogLoading = ref(false);
+const catalogSearch = ref('');
+const catalogInserting = ref('');
+const filteredCatalog = computed(() => {
+  const keyword = catalogSearch.value.trim().toLowerCase();
+  if (!keyword) return catalog.value;
+  return catalog.value.filter((table) =>
+    String(table.qualifiedName || table.tableName || '')
+      .toLowerCase()
+      .includes(keyword),
+  );
+});
+const previews = ref<
+  Record<
+    string,
+    { columns: string[]; rows: any[]; rowCount: number; sampled: boolean }
+  >
+>({});
+const previewResult = computed(() => previews.value[selectedNodeId.value]);
+const newVisible = ref(false),
+  sourcesVisible = ref(false);
+const newName = ref(''),
+  newDescription = ref(''),
+  newResources = ref<Record<string, EtlResource>>({});
+const sourceDraft = ref<Record<string, EtlResource>>({});
+const createBusy = ref(false);
+const runs = ref<EtlRun[]>([]),
+  runsVisible = ref(false);
+const selectedRun = ref<EtlRun>();
+const runLogs = ref<any[]>([]),
+  logPage = ref(1),
+  logTotal = ref(0),
+  logNode = ref(''),
+  logsBusy = ref(false);
+let logRequest = 0;
+/** 日志过滤与分页独立于步骤最终状态，保留每次查询分页/写入批次事件。 */
+async function refreshLogs() {
+  if (!selectedRun.value || !runsVisible.value) return;
+  const request = ++logRequest;
+  logsBusy.value = true;
+  try {
+    const response: any = unbox(
+      await listEtlRunLogs(
+        selectedRun.value.id,
+        logPage.value,
+        logNode.value || undefined,
+      ),
+    );
+    if (request !== logRequest) return;
+    runLogs.value = response.records || [];
+    logTotal.value = response.total || 0;
+  } catch (error) {
+    if (request === logRequest) ElMessage.error(errorMessage(error));
+  } finally {
+    if (request === logRequest) logsBusy.value = false;
+  }
+}
+watch(
+  () => selectedRun.value?.id,
+  () => {
+    logPage.value = 1;
+    logNode.value = '';
+    runLogs.value = [];
+    logTotal.value = 0;
+    refreshLogs();
+  },
+);
+const runSteps = computed(() => {
+  try {
+    return JSON.parse(selectedRun.value?.stepsJson || '[]');
+  } catch {
+    return [];
+  }
+});
+let pollTimer: ReturnType<typeof setTimeout> | undefined;
+let catalogRequest = 0;
+const jsonInput = ref<HTMLInputElement>(),
+  kettleInput = ref<HTMLInputElement>();
+const kettleWizard = ref<InstanceType<typeof KettleImportWizard>>();
+const aiWindow = ref<InstanceType<typeof AiChatWindow>>();
+const aiResourceRef = ref('');
+const aiSource = computed(
+  () => doc.value.resources[aiResourceRef.value] || resources.value[0]?.[1],
+);
+
+/** request 兼容标准 R 响应和直接业务数据。 */
+function unbox<T>(response: any): T {
+  return (response?.data ?? response) as T;
+}
+function snapshot() {
+  return JSON.stringify({
+    document: editorMode.value === 'json' ? jsonText.value : doc.value,
+    name: activeWorkspace.value?.workspaceName,
+    description: activeWorkspace.value?.description || '',
+  });
+}
+function syncJson() {
+  if (activeWorkspace.value)
+    doc.value.workspace = {
+      id: String(activeWorkspace.value.id),
+      name: activeWorkspace.value.workspaceName,
+      description: activeWorkspace.value.description || '',
+    };
+  jsonText.value = JSON.stringify(doc.value, null, 2);
+}
+function markSaved() {
+  saved.value = snapshot();
+}
+function stepTitle(step: EtlNode) {
+  return step.type === 'database.query'
+    ? 'SQL 查询'
+    : ['database.write', 'database.upsert'].includes(step.type)
+      ? '结果写表'
+      : step.type === 'transform.select'
+        ? '字段选择 / 重命名'
+        : step.type;
+}
+function sourceLabel(ref?: string) {
+  return doc.value.resources[ref || '']?.displayName || '请选择数据源';
+}
+function errorMessage(error: any) {
+  return error?.msg || error?.message || '操作失败';
+}
+function toggleSidebar() {
+  sidebarOpen.value = !sidebarOpen.value;
+  localStorage.setItem(
+    'lemon-etl-sidebar',
+    sidebarOpen.value ? 'open' : 'closed',
+  );
+}
+
+/** 切换或导入前保护草稿；取消确认时保持当前编辑现场。 */
+async function discard(): Promise<boolean> {
+  if (!dirty.value) return true;
+  try {
+    await ElMessageBox.confirm('有未保存修改，确认放弃？', '未保存的修改', {
+      type: 'warning',
+      confirmButtonText: '放弃修改',
+      cancelButtonText: '继续编辑',
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** 创建前先完成数据源选择；直接提交完整文档，不产生配置为空的半成品。 */
+async function createWorkspace() {
+  if (!newName.value.trim()) {
+    ElMessage.warning('请填写工作区名称');
+    return;
+  }
+  if (!Object.keys(newResources.value).length) {
+    ElMessage.warning('请至少加入一个具体数据源');
+    return;
+  }
+  const names = Object.values(newResources.value).map((item) =>
+    item.displayName?.trim(),
+  );
+  if (names.some((name) => !name) || new Set(names).size !== names.length) {
+    ElMessage.warning('请设置不同且非空的数据源别名');
+    return;
+  }
+  if (!(await discard())) return;
+  createBusy.value = true;
+  try {
+    const document = createWorkspaceDocument('new', newName.value.trim());
+    document.resources = cloneDocument({
+      ...document,
+      resources: newResources.value,
+    }).resources;
+    document.pipelines.push(createSqlPipeline(Object.keys(document.resources)));
+    const row = unbox<EtlWorkspaceRow>(
+      await createEtlWorkspace({
+        workspaceName: newName.value.trim(),
+        description: newDescription.value,
+        draftJson: JSON.stringify(document),
+      }),
+    );
+    newVisible.value = false;
+    newName.value = '';
+    newDescription.value = '';
+    newResources.value = {};
+    await refreshWorkspaces();
+    await openWorkspace(row);
+  } catch (error) {
+    ElMessage.error(errorMessage(error));
+  } finally {
+    createBusy.value = false;
+  }
+}
+
+async function refreshWorkspaces() {
+  workspaces.value = unbox<EtlWorkspaceRow[]>(await listEtlWorkspaces()) || [];
+}
+async function openWorkspace(row: EtlWorkspaceRow, protect = false) {
+  if (protect && !(await discard())) return false;
+  loading.value = true;
+  try {
+    const detail = unbox<EtlWorkspaceRow>(await getEtlWorkspace(row.id));
+    activeWorkspace.value = detail;
+    doc.value = normalizeSqlDocument(JSON.parse(detail.draftJson || '{}'));
+    editorMode.value = 'steps';
+    activePipelineId.value = doc.value.pipelines[0]?.id || '';
+    selectedNodeId.value = pipeline.value?.nodes[0]?.id || '';
+    previews.value = {};
+    validationErrors.value = [];
+    validationWarnings.value = [];
+    syncJson();
+    markSaved();
+    await refreshRuns();
+    return true;
+  } catch (error) {
+    ElMessage.error(errorMessage(error));
+    return false;
+  } finally {
+    loading.value = false;
+  }
+}
+
+/** 保存 JSON 时统一服务端校验，步骤和手工 JSON 保持同一协议。 */
+async function prepare(): Promise<boolean> {
+  let candidate = doc.value;
+  if (editorMode.value === 'json') {
+    if (!jsonValid.value) {
+      ElMessage.error('JSON 格式错误');
+      return false;
+    }
+    try {
+      candidate = JSON.parse(jsonText.value);
+    } catch {
+      ElMessage.error('JSON 格式错误');
+      return false;
+    }
+  }
+  const result = unbox<any>(
+    await validateEtlWorkspace(JSON.stringify(candidate)),
+  );
+  validationErrors.value = result.errors || [];
+  validationWarnings.value = result.warnings || [];
+  if (!result.valid) {
+    ElMessage.error(result.errors[0] || '配置无效');
+    return false;
+  }
+  doc.value = candidate;
+  syncJson();
+  return true;
+}
+
+/** 运行前再次读取未完成项（含被面板隐藏的草稿提示）。 */
+function incompleteDraftWarnings() {
+  return validationWarnings.value.filter((item) => DRAFT_INCOMPLETE.test(item));
+}
+async function saveDraft(): Promise<boolean> {
+  if (!activeWorkspace.value || saving.value) return false;
+  saving.value = true;
+  try {
+    if (!(await prepare())) return false;
+    const row = activeWorkspace.value;
+    activeWorkspace.value = unbox<EtlWorkspaceRow>(
+      await saveEtlWorkspace({
+        id: row.id,
+        revision: row.revision,
+        workspaceName: row.workspaceName,
+        description: row.description,
+        draftJson: jsonText.value,
+      }),
+    );
+    markSaved();
+    await refreshWorkspaces();
+    ElMessage.success('已保存');
+    return true;
+  } catch (error) {
+    ElMessage.error(errorMessage(error));
+    return false;
+  } finally {
+    saving.value = false;
+  }
+}
+async function changeMode(mode: 'steps' | 'json') {
+  if (mode === editorMode.value) return;
+  const wasDirty = dirty.value;
+  if (editorMode.value === 'json' && !(await prepare())) return;
+  syncJson();
+  editorMode.value = mode;
+  if (!wasDirty) markSaved();
+  if (!pipeline.value)
+    activePipelineId.value = doc.value.pipelines[0]?.id || '';
+  if (!node.value) selectedNodeId.value = pipeline.value?.nodes[0]?.id || '';
+}
+async function publish() {
+  if (dirty.value && !(await saveDraft())) return;
+  if (!activeWorkspace.value) return;
+  try {
+    await publishEtlWorkspace(activeWorkspace.value.id);
+    ElMessage.success('发布成功');
+    await refreshWorkspaces();
+  } catch (error) {
+    ElMessage.error(errorMessage(error));
+  }
+}
+async function deleteWorkspace() {
+  if (!activeWorkspace.value) return;
+  try {
+    await ElMessageBox.confirm('删除当前工作区？', '删除工作区', {
+      type: 'warning',
+    });
+    await deleteEtlWorkspace(activeWorkspace.value.id);
+    activeWorkspace.value = undefined;
+    await refreshWorkspaces();
+    if (workspaces.value[0]) await openWorkspace(workspaces.value[0]);
+  } catch (error: any) {
+    if (error !== 'cancel' && error !== 'close')
+      ElMessage.error(errorMessage(error));
+  }
+}
+/** 工作区右键菜单：改名/删除；数据源入口在卡片内。 */
+const workspaceMenu = ref<{ id: string | number; x: number; y: number }>();
+function openWorkspaceMenu(event: MouseEvent, workspace: EtlWorkspaceRow) {
+  workspaceMenu.value = {
+    id: workspace.id,
+    x: Math.max(8, Math.min(event.clientX, window.innerWidth - 160)),
+    y: Math.max(8, Math.min(event.clientY, window.innerHeight - 120)),
+  };
+}
+function dismissWorkspaceMenu() {
+  workspaceMenu.value = undefined;
+}
+async function renameWorkspace() {
+  const target = workspaces.value.find(
+    (item) => String(item.id) === String(workspaceMenu.value?.id),
+  );
+  dismissWorkspaceMenu();
+  if (!target) return;
+  try {
+    if (
+      String(target.id) !== String(activeWorkspace.value?.id) &&
+      !(await openWorkspace(target, true))
+    )
+      return;
+    const { value } = await ElMessageBox.prompt('工作区名称', '改名', {
+      inputValue: activeWorkspace.value?.workspaceName || target.workspaceName,
+      inputPattern: /\S+/,
+      inputErrorMessage: '名称不能为空',
+      confirmButtonText: '确定',
+      cancelButtonText: '取消',
+    });
+    if (!activeWorkspace.value) return;
+    activeWorkspace.value.workspaceName = value.trim().slice(0, 100);
+  } catch (error: any) {
+    if (error !== 'cancel' && error !== 'close')
+      ElMessage.error(errorMessage(error));
+  }
+}
+async function deleteWorkspaceFromMenu() {
+  const target = workspaces.value.find(
+    (item) => String(item.id) === String(workspaceMenu.value?.id),
+  );
+  dismissWorkspaceMenu();
+  if (!target) return;
+  if (String(target.id) !== String(activeWorkspace.value?.id)) {
+    if (!(await openWorkspace(target, true))) return;
+  }
+  await deleteWorkspace();
+}
+
+async function addPipeline(conditional = false) {
+  if (editorMode.value === 'json') {
+    await changeMode('steps');
+    if (editorMode.value === 'json') return;
+  }
+  if (!resources.value.length) {
+    openSources();
+    return;
+  }
+  const item = createSqlPipeline(Object.keys(doc.value.resources), conditional);
+  doc.value.pipelines.push(item);
+  activePipelineId.value = item.id;
+  selectedNodeId.value = item.nodes[0]!.id;
+  if (conditional) ElMessage.info('模板中的表名和字段需要改为你的实际数据结构');
+}
+function selectPipeline(id: string) {
+  activePipelineId.value = id;
+  selectedNodeId.value = pipeline.value?.nodes[0]?.id || '';
+}
+async function removePipeline(id = activePipelineId.value) {
+  if (!doc.value.pipelines.some((item) => item.id === id)) return;
+  try {
+    await ElMessageBox.confirm('删除当前同步任务？', '删除任务');
+    doc.value.pipelines = doc.value.pipelines.filter((item) => item.id !== id);
+    if (id === activePipelineId.value)
+      selectPipeline(doc.value.pipelines[0]?.id || '');
+  } catch {
+    /* 取消保留任务。 */
+  }
+}
+function addStep(type: 'database.query' | 'database.write') {
+  if (!pipeline.value) return;
+  const item: EtlNode = {
+    id: etlId(type === 'database.query' ? 'query' : 'write'),
+    name: type === 'database.query' ? '查询步骤' : '写入步骤',
+    type,
+    typeVersion: 1,
+    resourceRef: resources.value[0]?.[0],
+    config:
+      type === 'database.query'
+        ? { sql: '', parameters: [], pageSize: 50000 }
+        : {
+            inputStepId:
+              pipeline.value.nodes
+                .filter((step) => step.type === 'database.query')
+                .at(-1)?.id || '',
+            table: '',
+            mode: 'append',
+            batchSize: 2000,
+            mappings: [],
+            keyColumns: [],
+          },
+  };
+  pipeline.value.nodes.push(item);
+  selectedNodeId.value = item.id;
+  syncStepDependencies(pipeline.value, item);
+}
+async function removeStep() {
+  if (!pipeline.value || !node.value) return;
+  const id = node.value.id;
+  const referenced = pipeline.value.nodes.some(
+    (item) =>
+      item.config.inputStepId === id ||
+      (item.config.parameters || []).some((param: any) => param.stepId === id),
+  );
+  if (referenced) {
+    ElMessage.warning('后续步骤还在引用它，请先修改参数来源或写入输入');
+    return;
+  }
+  try {
+    await ElMessageBox.confirm('删除当前步骤？', '删除步骤');
+    pipeline.value.nodes = pipeline.value.nodes.filter(
+      (item) => item.id !== id,
+    );
+    pipeline.value.edges = pipeline.value.edges.filter(
+      (item) => item.source !== id && item.target !== id,
+    );
+    selectedNodeId.value = pipeline.value.nodes[0]?.id || '';
+  } catch {
+    /* 取消保留。 */
+  }
+}
+function dependencyChanged() {
+  if (pipeline.value && node.value)
+    syncStepDependencies(pipeline.value, node.value);
+}
+function addParameter() {
+  if (!node.value) return;
+  node.value.config.parameters ||= [];
+  node.value.config.parameters.push({
+    name: '',
+    stepId: '',
+    column: '',
+    mode: 'first',
+    value: '',
+  });
+}
+/** 参数来源：固定值 ↔ 上游步骤；切换后重建依赖边。 */
+function onParamSource(param: Record<string, any>, value: string) {
+  if (value === FIXED_PARAM_SOURCE) {
+    param.stepId = '';
+    param.column = '';
+  } else {
+    param.stepId = value;
+    param.mode = param.mode || 'first';
+  }
+  dependencyChanged();
+}
+/** 删除参数时也删除其自动依赖，保留其他参数和手工连线。 */
+function removeParameter(index: number) {
+  if (!node.value) return;
+  node.value.config.parameters.splice(index, 1);
+  dependencyChanged();
+}
+function addMapping() {
+  if (!node.value) return;
+  node.value.config.mappings ||= [];
+  node.value.config.mappings.push({ source: '', target: '' });
+}
+
+/** 查询预览会执行必要的只读上游，直接检验关联 SQL 与跨库参数能否工作。 */
+async function preview() {
+  if (node.value) await previewQuery(node.value.id);
+}
+/** 写入配置可直接预览输入并加载字段，不需要来回切换查询/写入步骤。 */
+async function previewInput() {
+  const id = node.value?.config.inputStepId;
+  if (!id) {
+    ElMessage.warning('先选择输入查询步骤');
+    return;
+  }
+  await previewQuery(id);
+}
+/** 固定配置快照，拒绝把旧请求的结果展示在修改后的 SQL 上。 */
+async function previewQuery(id: string) {
+  if (!pipeline.value) return;
+  previewing.value = true;
+  syncJson();
+  const base = JSON.stringify(doc.value);
+  try {
+    const result = unbox<any>(
+      await previewEtlStep(jsonText.value, pipeline.value.id, id),
+    );
+    if (base !== JSON.stringify(doc.value)) {
+      ElMessage.info('配置已修改，请重新预览');
+      return;
+    }
+    previews.value[id] = result;
+    queryColumns.value = {
+      ...queryColumns.value,
+      ...(result.upstreamColumns || {}),
+      [id]: result.columns,
+    };
+    ElMessage.success('查询执行成功');
+  } catch (error) {
+    ElMessage.error(errorMessage(error));
+  } finally {
+    previewing.value = false;
+  }
+}
+function inputColumns() {
+  return queryColumns.value[node.value?.config.inputStepId || ''] || [];
+}
+function autoMapping() {
+  if (!node.value) return;
+  const columns = inputColumns();
+  if (!columns.length) {
+    ElMessage.info('先预览输入查询，或保持映射为空使用结果同名字段');
+    return;
+  }
+  node.value.config.mappings = columns.map((column) => ({
+    source: column,
+    target: column,
+  }));
+}
+
+/** 修改查询、资源或依赖后清空旧预览，防止用过期结果错误配置后续字段。 */
+watch(
+  () =>
+    JSON.stringify({
+      resources: doc.value.resources,
+      pipelines: doc.value.pipelines.map((item) => ({
+        id: item.id,
+        edges: item.edges,
+        queries: item.nodes.filter((step) => step.type === 'database.query'),
+      })),
+    }),
+  () => {
+    previews.value = {};
+    queryColumns.value = {};
+  },
+);
+
+/** 运行只提交保存后的工作区与任务 ID，完整预检在后端完成。 */
+async function runPipeline() {
+  if (!pipeline.value || !activeWorkspace.value || running.value) return;
+  running.value = true;
+  try {
+    if (dirty.value && !(await saveDraft())) return;
+    // 空 SQL/目标表仅警告不阻断保存，运行前再拦一次并给出可读提示。
+    const result = unbox<any>(
+      await validateEtlWorkspace(JSON.stringify(doc.value)),
+    );
+    validationErrors.value = result.errors || [];
+    validationWarnings.value = result.warnings || [];
+    if (!result.valid) {
+      ElMessage.error(result.errors?.[0] || '配置无效');
+      return;
+    }
+    const incomplete = incompleteDraftWarnings();
+    if (incomplete.length) {
+      ElMessage.warning(incomplete[0]);
+      return;
+    }
+    await ElMessageBox.confirm(
+      '运行当前任务？写入步骤将修改目标表数据。每个写入步骤单独提交事务。',
+      '运行同步任务',
+      { type: 'warning', confirmButtonText: '运行' },
+    );
+    selectedRun.value = unbox<EtlRun>(
+      await executeEtlWorkflow(
+        activeWorkspace.value.id,
+        pipeline.value.id,
+        activeWorkspace.value.revision,
+      ),
+    );
+    runsVisible.value = true;
+    await refreshRuns();
+  } catch (error: any) {
+    if (error !== 'cancel' && error !== 'close')
+      ElMessage.error(errorMessage(error));
+  } finally {
+    running.value = false;
+  }
+}
+async function refreshRuns() {
+  if (pollTimer) clearTimeout(pollTimer);
+  if (!activeWorkspace.value) return;
+  const workspaceId = activeWorkspace.value.id;
+  try {
+    const items = unbox<EtlRun[]>(await listEtlRuns(workspaceId)) || [];
+    if (workspaceId !== activeWorkspace.value?.id) return;
+    runs.value = items;
+    if (selectedRun.value)
+      selectedRun.value =
+        items.find((item) => item.id === selectedRun.value?.id) ||
+        selectedRun.value;
+    if (runsVisible.value && selectedRun.value) await refreshLogs();
+    if (items.some((item) => ['PENDING', 'RUNNING'].includes(item.status)))
+      pollTimer = setTimeout(refreshRuns, 1500);
+  } catch {
+    /* 历史暂不可用不影响编辑；用户可手动重试。 */
+  }
+}
+async function cancelRun() {
+  if (!selectedRun.value) return;
+  try {
+    await cancelEtlRun(selectedRun.value.id);
+    await refreshRuns();
+  } catch (error) {
+    ElMessage.error(errorMessage(error));
+  }
+}
+function statusLabel(status: string) {
+  return (
+    (
+      {
+        PENDING: '等待',
+        VALIDATING: '预检中',
+        SKIPPED: '已跳过',
+        DISABLED: '已停用',
+        RUNNING: '运行中',
+        SUCCESS: '成功',
+        FAILED: '失败',
+        CANCELLED: '已取消',
+      } as Record<string, string>
+    )[status] || status
+  );
+}
+async function openSources() {
+  if (editorMode.value === 'json') {
+    await changeMode('steps');
+    if (editorMode.value === 'json') return;
+  }
+  sourceDraft.value = JSON.parse(JSON.stringify(doc.value.resources));
+  sourcesVisible.value = true;
+}
+function applySources() {
+  const labels = Object.values(sourceDraft.value).map((item) =>
+    item.displayName?.trim(),
+  );
+  if (
+    labels.some((label) => !label) ||
+    new Set(labels).size !== labels.length
+  ) {
+    ElMessage.warning('数据源别名必须非空且不重复');
+    return;
+  }
+  doc.value.resources = sourceDraft.value;
+  sourcesVisible.value = false;
+}
+
+/** 异步对象目录绑定请求代次，避免快速切换步骤时旧请求覆盖新数据源的表。 */
+watch(
+  () => [
+    node.value?.id,
+    nodeResource.value?.dbConfigId,
+    nodeResource.value?.instance,
+    nodeResource.value?.schema,
+  ],
+  async () => {
+    const request = ++catalogRequest;
+    catalog.value = [];
+    catalogSearch.value = '';
+    const source = nodeResource.value;
+    if (!source?.dbConfigId || !source.instance) return;
+    catalogLoading.value = true;
+    try {
+      const tables = unbox<any[]>(
+        await listEtlTables(source.dbConfigId, source.instance),
+      );
+      if (request === catalogRequest)
+        catalog.value = source.schema
+          ? tables.filter((item) => item.schemaName === source.schema)
+          : tables;
+    } catch (error) {
+      if (request === catalogRequest) ElMessage.error(errorMessage(error));
+    } finally {
+      if (request === catalogRequest) catalogLoading.value = false;
+    }
+  },
+);
+/** 按数据库族给标识符加引号，避免保留字与大小写问题。 */
+function quoteIdent(part: string) {
+  const family = nodeResource.value?.family;
+  if (family === 'MYSQL_LIKE') return `\`${part.replaceAll('`', '``')}\``;
+  if (family === 'SQLSERVER_LIKE') return `[${part.replaceAll(']', ']]')}]`;
+  return `"${part.replaceAll('"', '""')}"`;
+}
+
+/** 目录表名：优先 schema + 原始表名，再回退限定名。 */
+function catalogTableRef(item: any) {
+  const parts = item.rawTableName
+    ? [item.schemaName, item.rawTableName].filter(Boolean)
+    : String(item.qualifiedName || item.tableName || '')
+        .split('.')
+        .filter(Boolean);
+  return parts.map(quoteIdent).join('.');
+}
+
+/** 拉字段清单的表名：有 schema 时拼成 schema.table，兼容 PG/Oracle 等。 */
+function catalogMetaTableName(item: any) {
+  const raw = String(item.rawTableName || item.tableName || '').trim();
+  if (item.schemaName && raw && !raw.includes('.')) {
+    return `${item.schemaName}.${raw}`;
+  }
+  return raw || String(item.qualifiedName || '');
+}
+
+/** 空 SQL 生成带全部字段的 SELECT；已有 SQL 时在光标处插入表名。 */
+async function insertTable(item: any) {
+  if (!node.value) return;
+  const name = catalogTableRef(item);
+  if (!name) return;
+  const sql = String(node.value.config.sql || '');
+  if (sql.trim()) {
+    const input = sqlInput.value?.textarea;
+    const start = input?.selectionStart ?? sql.length;
+    const end = input?.selectionEnd ?? sql.length;
+    node.value.config.sql = sql.slice(0, start) + name + sql.slice(end);
+    return;
+  }
+  const source = nodeResource.value;
+  const metaKey = catalogMetaTableName(item);
+  const insertKey = String(item.qualifiedName || item.tableName || metaKey);
+  catalogInserting.value = insertKey;
+  try {
+    let columns: string[] = [];
+    if (source?.dbConfigId && source.instance && metaKey) {
+      const response: any = await getTableColumns(
+        source.dbConfigId,
+        source.instance,
+        metaKey,
+      );
+      const list = unbox<any[]>(response) || response?.data || response || [];
+      columns = (Array.isArray(list) ? list : [])
+        .map((column: any) =>
+          String(
+            column?.fieldName || column?.columnName || column?.name || '',
+          ).trim(),
+        )
+        .filter(Boolean);
+    }
+    if (columns.length) {
+      const selectList = columns
+        .map((column) => quoteIdent(column))
+        .join(',\n  ');
+      node.value.config.sql = `SELECT\n  ${selectList}\nFROM ${name}`;
+    } else {
+      node.value.config.sql = `SELECT * FROM ${name}`;
+      ElMessage.warning('未能读取字段列表，已插入 SELECT *，请手工补全列');
+    }
+  } catch (error) {
+    node.value.config.sql = `SELECT * FROM ${name}`;
+    ElMessage.warning(`读取字段失败，已插入 SELECT *：${errorMessage(error)}`);
+  } finally {
+    catalogInserting.value = '';
+  }
+}
+
+/** 运行历史里把节点 id 解析成步骤名称，方便对照配置。 */
+function runNodeName(nodeId?: string) {
+  if (!nodeId) return '';
+  const pipe = doc.value.pipelines.find(
+    (item) => item.id === selectedRun.value?.pipelineId,
+  );
+  return pipe?.nodes.find((step) => step.id === nodeId)?.name || nodeId;
+}
+
+async function exportJson() {
+  if (!(await prepare())) return;
+  const url = URL.createObjectURL(
+    new Blob([jsonText.value], { type: 'application/json;charset=utf-8' }),
+  );
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = `${activeWorkspace.value?.workspaceName || 'etl'}.json`;
+  link.click();
+  URL.revokeObjectURL(url);
+}
+async function importFile(event: Event, kettle = false) {
+  const input = event.target as HTMLInputElement,
+    file = input.files?.[0];
+  const selectedFiles = Array.from(input.files || []);
+  input.value = '';
+  if (!file) return;
+  try {
+    if (kettle) {
+      if (!(await prepare())) return;
+      kettleWizard.value?.open(selectedFiles);
+      return;
+    }
+    if (file.size > 2 * 1024 * 1024) throw new Error('JSON 文件不能超过 2MB');
+    const text = await file.text(),
+      result = unbox<any>(await validateEtlWorkspace(text));
+    if (!result.valid) throw new Error(result.errors[0]);
+    await ElMessageBox.confirm(
+      '导入整个 JSON 将替换当前工作区的任务和数据源配置；原保存版本在保存前不会改变。确认替换？',
+      '导入完整工作区',
+      { type: 'warning' },
+    );
+    applyDocument(JSON.parse(text));
+  } catch (error) {
+    if (error !== 'cancel' && error !== 'close')
+      ElMessage.error(errorMessage(error));
+  }
+}
+function applyDocument(document: EtlWorkspaceDocument) {
+  doc.value = normalizeSqlDocument(document);
+  selectPipeline(doc.value.pipelines[0]?.id || '');
+  editorMode.value = 'steps';
+  previews.value = {};
+  syncJson();
+}
+/** 向导最终确认后只追加到草稿；基准冲突时保留向导，绝不覆盖用户的新修改。 */
+async function applyKettleDocument(
+  document: EtlWorkspaceDocument,
+  baseJson: string,
+) {
+  if (!(await prepare())) return;
+  if (JSON.stringify(doc.value) !== baseJson) {
+    ElMessage.warning('工作区草稿已变化，请重新开始导入，避免覆盖修改');
+    return;
+  }
+  applyDocument(document);
+  selectPipeline(document.pipelines.at(-1)?.id || '');
+  kettleWizard.value?.complete();
+  ElMessage.success('已追加到草稿，请预检后保存并运行');
+  try {
+    connections.value = unbox<EtlConnectionOption[]>(await listEtlSources());
+  } catch {
+    /* 已应用草稿不因目录刷新失败丢失。 */
+  }
+}
+
+async function openAi() {
+  if (!aiResourceRef.value)
+    aiResourceRef.value =
+      node.value?.resourceRef || resources.value[0]?.[0] || '';
+  if (!(await prepareAi())) return;
+  aiWindow.value?.open({ scene: 'etl' });
+}
+/** 每次提问都读取最新完整草稿，并保护无效 JSON 与未授权的数据源。 */
+async function prepareAi(): Promise<boolean> {
+  if (!(await prepare())) return false;
+  const aiJson = JSON.stringify(doc.value);
+  if (aiJson.length > 64000) {
+    ElMessage.warning(
+      '工作区配置超过 AI 编辑上限，请拆分工作区；完整 JSON 仍可手工编辑',
+    );
+    return false;
+  }
+  const source = aiSource.value;
+  if (!source?.dbConfigId || !source.instance) {
+    ElMessage.warning('请先配置工作区数据源');
+    return false;
+  }
+  return true;
+}
+function aiContext() {
+  return { etlWorkspace: JSON.stringify(doc.value), workMode: 'etl' };
+}
+/** 候选只应用到草稿，需明确确认；历史候选或已变化的草稿不会被静默覆盖。 */
+async function applyAi(candidate: {
+  workspace: EtlWorkspaceDocument;
+  baseJson?: string;
+}) {
+  if (!candidate?.workspace) return;
+  if (!(await prepare())) return;
+  try {
+    const result: any = unbox(
+      await validateEtlWorkspace(JSON.stringify(candidate.workspace)),
+    );
+    if (!result.valid) throw new Error((result.errors || []).join('；'));
+    if (
+      JSON.stringify(candidate.workspace.resources) !==
+      JSON.stringify(doc.value.resources)
+    )
+      throw new Error('数据源绑定已经变化，请重新生成候选');
+    await ElMessageBox.confirm(
+      candidate.baseJson === JSON.stringify(doc.value)
+        ? '应用 AI 候选到当前草稿？不会自动保存或执行。'
+        : '草稿已变化或此候选来自历史会话。应用将替换当前任务配置，请先查看候选 JSON。确认替换？',
+      '应用候选配置',
+      { type: 'warning', modalClass: 'ai-mask-confirm-overlay' },
+    );
+    applyDocument(candidate.workspace);
+  } catch (error) {
+    if (error !== 'cancel' && error !== 'close')
+      ElMessage.error(errorMessage(error));
+  }
+}
+
+function beforeUnload(event: BeforeUnloadEvent) {
+  if (dirty.value) {
+    event.preventDefault();
+    event.returnValue = '';
+  }
+}
+onBeforeRouteLeave(discard);
+onMounted(async () => {
+  window.addEventListener('beforeunload', beforeUnload);
+  document.addEventListener('click', dismissWorkspaceMenu);
+  loading.value = true;
+  try {
+    const [sourceResponse] = await Promise.all([
+      listEtlSources(),
+      refreshWorkspaces(),
+    ]);
+    connections.value = unbox<EtlConnectionOption[]>(sourceResponse) || [];
+    if (workspaces.value[0]) await openWorkspace(workspaces.value[0]);
+  } catch (error) {
+    ElMessage.error(errorMessage(error));
+  } finally {
+    loading.value = false;
+  }
+});
+onBeforeUnmount(() => {
+  window.removeEventListener('beforeunload', beforeUnload);
+  document.removeEventListener('click', dismissWorkspaceMenu);
+  if (pollTimer) clearTimeout(pollTimer);
+});
+</script>
+
+<template>
+  <Page auto-content-height class="etl-page">
+    <div v-loading="loading" class="etl-shell">
+      <header class="toolbar">
+        <div class="toolbar-title">
+          <el-button
+            :icon="sidebarOpen ? Fold : Expand"
+            :title="sidebarOpen ? '隐藏任务区' : '展开任务区'"
+            @click="toggleSidebar"
+          /><strong>数据同步</strong
+          ><el-tag v-if="dirty" type="warning">未保存</el-tag>
+        </div>
+        <div class="toolbar-actions">
+          <el-dropdown
+            @command="
+              $event === 'json' ? jsonInput?.click() : kettleInput?.click()
+            "
+            ><el-button :disabled="!activeWorkspace">导入配置</el-button
+            ><template #dropdown
+              ><el-dropdown-menu
+                ><el-dropdown-item command="json">Lemon JSON</el-dropdown-item
+                ><el-dropdown-item command="kettle"
+                  >Kettle 配置</el-dropdown-item
+                ></el-dropdown-menu
+              ></template
+            ></el-dropdown
+          >
+          <el-segmented
+            class="editor-mode-switch"
+            :model-value="editorMode"
+            :disabled="!activeWorkspace"
+            :options="[
+              { label: '步骤配置', value: 'steps' },
+              { label: 'JSON', value: 'json' },
+            ]"
+            @change="changeMode($event as 'steps' | 'json')"
+          />
+          <el-button :disabled="!activeWorkspace" @click="exportJson"
+            >导出 JSON</el-button
+          >
+          <el-button
+            :icon="MagicStick"
+            :disabled="!activeWorkspace"
+            @click="openAi"
+            >AI 配置</el-button
+          >
+          <el-button
+            :disabled="!activeWorkspace"
+            @click="
+              runsVisible = true;
+              refreshRuns();
+            "
+            >运行记录</el-button
+          >
+          <el-button
+            :disabled="!activeWorkspace"
+            :loading="saving"
+            @click="saveDraft"
+            >保存</el-button
+          >
+          <el-button :disabled="!activeWorkspace" @click="publish"
+            >发布</el-button
+          >
+          <el-button
+            :icon="VideoPlay"
+            type="primary"
+            :disabled="!pipeline || editorMode === 'json'"
+            :loading="running"
+            @click="runPipeline"
+            >运行任务</el-button
+          >
+        </div>
+        <input
+          ref="jsonInput"
+          type="file"
+          accept=".json"
+          hidden
+          @change="importFile($event)"
+        /><input
+          ref="kettleInput"
+          multiple
+          type="file"
+          accept=".ktr,.kjb"
+          hidden
+          @change="importFile($event, true)"
+        />
+      </header>
+      <div class="etl-body">
+        <aside v-if="sidebarOpen" class="workspace-sidebar">
+          <div class="sidebar-title">
+            <span>工作区</span
+            ><el-button
+              :icon="Plus"
+              circle
+              link
+              title="新建工作区"
+              @click="newVisible = true"
+            />
+          </div>
+          <div
+            v-for="workspace in workspaces"
+            :key="String(workspace.id)"
+            class="workspace-item"
+            :class="{
+              active: String(workspace.id) === String(activeWorkspace?.id),
+            }"
+            role="button"
+            tabindex="0"
+            @click="openWorkspace(workspace, true)"
+            @keydown.enter="openWorkspace(workspace, true)"
+            @contextmenu.prevent="openWorkspaceMenu($event, workspace)"
+          >
+            <strong>{{ workspace.workspaceName }}</strong>
+            <small>版本 {{ workspace.publishedVersion || 0 }}</small>
+            <el-button
+              v-if="String(workspace.id) === String(activeWorkspace?.id)"
+              size="small"
+              class="workspace-source-btn"
+              @click.stop="openSources"
+              >数据源 ({{ resources.length }})</el-button
+            >
+          </div>
+          <el-empty
+            v-if="!workspaces.length"
+            :image-size="60"
+            description="还没有工作区"
+          />
+          <Teleport to="body">
+            <div
+              v-if="workspaceMenu"
+              class="workspace-context-menu"
+              :style="{
+                left: `${workspaceMenu.x}px`,
+                top: `${workspaceMenu.y}px`,
+              }"
+              @click.stop
+            >
+              <button @click="renameWorkspace">改名</button>
+              <button class="danger" @click="deleteWorkspaceFromMenu">
+                删除工作区
+              </button>
+            </div>
+          </Teleport>
+        </aside>
+        <main
+          v-if="activeWorkspace"
+          class="workspace-main"
+          :class="`tasks-${taskPosition}`"
+        >
+          <TaskTabs
+            :key="String(activeWorkspace.id)"
+            class="workspace-tabs"
+            :tasks="doc.pipelines"
+            :active="activePipelineId"
+            :position="taskPosition"
+            @select="selectPipeline"
+            @add="addPipeline"
+            @delete="removePipeline"
+            @position="setTaskPosition"
+          />
+          <section class="task-content">
+            <div v-if="editorMode === 'json'" class="json-panel">
+              <JsonEditorPanel
+                v-model="jsonText"
+                v-model:valid="jsonValid"
+                mode="text"
+                height="calc(100vh - 290px)"
+              />
+            </div>
+            <template v-else-if="pipeline">
+              <div class="pipeline-header">
+                <el-input
+                  v-model="pipeline.name"
+                  placeholder="同步任务名称"
+                /><el-switch
+                  v-model="pipeline.enabled"
+                  inline-prompt
+                  active-text="启用"
+                  inactive-text="停用"
+                /><el-button link type="danger" @click="removePipeline()"
+                  >删除任务</el-button
+                >
+              </div>
+              <div class="step-layout">
+                <aside class="steps-sidebar">
+                  <button
+                    v-for="(step, index) in pipeline.nodes"
+                    :key="step.id"
+                    class="step-item"
+                    :class="{
+                      active: selectedNodeId === step.id,
+                      disabled: step.enabled === false,
+                    }"
+                    @click="selectedNodeId = step.id"
+                  >
+                    <span class="step-number">{{ index + 1 }}</span>
+                    <div>
+                      <strong>{{ step.name || stepTitle(step) }}</strong
+                      ><small
+                        >{{ stepTitle(step)
+                        }}<template v-if="step.type !== 'transform.select'">
+                          · {{ sourceLabel(step.resourceRef) }}</template
+                        ></small
+                      >
+                    </div>
+                  </button>
+                  <el-button
+                    class="add-step"
+                    :icon="Plus"
+                    @click="addStep('database.query')"
+                    >查询步骤</el-button
+                  ><el-button
+                    class="add-step"
+                    :icon="Plus"
+                    @click="addStep('database.write')"
+                    >写入步骤</el-button
+                  >
+                </aside>
+                <section v-if="node" class="step-editor">
+                  <div class="step-header">
+                    <el-input
+                      v-model="node.name"
+                      placeholder="步骤名称"
+                    /><el-tag>{{ stepTitle(node) }}</el-tag
+                    ><el-button link type="danger" @click="removeStep"
+                      >删除</el-button
+                    >
+                  </div>
+                  <el-form label-position="top">
+                    <el-form-item
+                      v-if="node.type !== 'transform.select'"
+                      label="数据源"
+                      ><el-select
+                        v-model="node.resourceRef"
+                        filterable
+                        placeholder="选择工作区数据源别名"
+                        ><el-option
+                          v-for="[key, source] in resources"
+                          :key="key"
+                          :label="`${source.displayName} · ${source.instance || '待绑定'}`"
+                          :value="key" /></el-select
+                      ><el-button
+                        link
+                        class="source-settings"
+                        @click="openSources"
+                        >管理数据源</el-button
+                      ></el-form-item
+                    >
+                    <el-alert
+                      v-if="
+                        nodeResource?.family === 'SQLSERVER_LIKE' &&
+                        nodeResource.schema
+                      "
+                      title="SQL Server 查询请使用 schema.table 限定表名；写入会按所选 Schema 自动限定目标表。"
+                      type="info"
+                      :closable="false"
+                    />
+                    <div v-if="node.config.migrationWarnings?.length">
+                      <el-alert
+                        v-for="warning in node.config.migrationWarnings"
+                        :key="warning"
+                        :title="warning"
+                        type="warning"
+                        :closable="false"
+                      /><el-button
+                        type="warning"
+                        plain
+                        @click="node.config.migrationWarnings = []"
+                        >我已核对差异，按当前配置执行</el-button
+                      >
+                    </div>
+                    <template v-if="node.type === 'database.query'">
+                      <div class="sql-label">
+                        <span>查询 SQL · 可 JOIN 多张表</span
+                        ><el-popover
+                          placement="bottom"
+                          :width="360"
+                          trigger="click"
+                          ><template #reference
+                            ><el-button link :loading="catalogLoading"
+                              >可用表目录</el-button
+                            ></template
+                          >
+                          <div class="table-catalog">
+                            <el-input
+                              v-model="catalogSearch"
+                              clearable
+                              size="small"
+                              placeholder="筛选表名"
+                            />
+                            <p class="help catalog-hint">
+                              点击表名：空编辑器生成含全部字段的 SELECT；已有
+                              SQL 则在光标处插入表名
+                            </p>
+                            <el-button
+                              v-for="table in filteredCatalog"
+                              :key="table.qualifiedName || table.tableName"
+                              link
+                              class="catalog-item"
+                              :loading="
+                                catalogInserting ===
+                                (table.qualifiedName || table.tableName)
+                              "
+                              @click="insertTable(table)"
+                              >{{
+                                table.qualifiedName || table.tableName
+                              }}</el-button
+                            ><span v-if="!filteredCatalog.length">{{
+                              catalogLoading
+                                ? '加载中…'
+                                : catalogSearch.trim()
+                                  ? '无匹配表'
+                                  : '暂无可读表'
+                            }}</span>
+                          </div></el-popover
+                        >
+                      </div>
+                      <el-input
+                        ref="sqlInput"
+                        v-model="node.config.sql"
+                        type="textarea"
+                        :rows="9"
+                        placeholder="SELECT o.id AS order_id, c.name AS customer_name FROM orders o JOIN customers c ON c.id = o.customer_id"
+                        class="sql-editor"
+                      />
+                      <div class="section-title">
+                        <strong>查询参数</strong
+                        ><el-button link :icon="Plus" @click="addParameter"
+                          >添加参数</el-button
+                        >
+                      </div>
+                      <p class="help">
+                        SQL 使用 :参数名；可取上游第一行字段，或整列用于 IN
+                        (:参数名)。不需要手写引号。
+                      </p>
+                      <div
+                        v-for="(param, index) in node.config.parameters || []"
+                        :key="index"
+                        class="parameter-row"
+                      >
+                        <el-input v-model="param.name" placeholder="参数名" />
+                        <el-select
+                          :model-value="param.stepId || FIXED_PARAM_SOURCE"
+                          placeholder="参数来源"
+                          @update:model-value="onParamSource(param, $event)"
+                          ><el-option
+                            label="固定值"
+                            :value="FIXED_PARAM_SOURCE" /><el-option
+                            v-for="upstream in previousQueries"
+                            :key="upstream.id"
+                            :value="upstream.id"
+                            :label="upstream.name || upstream.id"
+                        /></el-select>
+                        <el-select
+                          v-if="param.stepId"
+                          v-model="param.column"
+                          filterable
+                          allow-create
+                          default-first-option
+                          placeholder="上游字段"
+                          ><el-option
+                            v-for="column in queryColumns[param.stepId] || []"
+                            :key="column"
+                            :label="column"
+                            :value="column" /></el-select
+                        ><el-input
+                          v-else
+                          v-model="param.value"
+                          placeholder="固定参数值"
+                        />
+                        <el-select v-if="param.stepId" v-model="param.mode"
+                          ><el-option label="第一行" value="first" /><el-option
+                            label="整列列表"
+                            value="list"
+                        /></el-select>
+                        <el-button
+                          link
+                          type="danger"
+                          @click="removeParameter(Number(index))"
+                          >删除</el-button
+                        >
+                      </div>
+                      <div class="preview-actions">
+                        <el-input-number
+                          v-model="node.config.pageSize"
+                          :min="1"
+                          :max="50000"
+                          :step="1000"
+                        /><span class="help"
+                          >每页读取行数；总量不截断，预览仅展示 100 行</span
+                        ><el-button
+                          type="primary"
+                          plain
+                          :icon="VideoPlay"
+                          :loading="previewing"
+                          @click="preview"
+                          >预览查询</el-button
+                        >
+                      </div>
+                      <section v-if="previewResult" class="preview-panel">
+                        <div class="section-title">
+                          <strong
+                            >查询返回 {{ previewResult.rowCount }} 行</strong
+                          ><small>{{
+                            previewResult.sampled ? '展示前 100 行' : '结果预览'
+                          }}</small>
+                        </div>
+                        <el-table
+                          :data="previewResult.rows"
+                          max-height="280"
+                          border
+                          ><el-table-column
+                            v-for="column in previewResult.columns"
+                            :key="column"
+                            :prop="column"
+                            :label="column"
+                            min-width="130"
+                            show-overflow-tooltip
+                        /></el-table>
+                      </section>
+                    </template>
+                    <template v-else-if="node.type === 'transform.select'">
+                      <el-form-item label="输入步骤"
+                        ><el-select
+                          v-model="node.config.inputStepId"
+                          @change="dependencyChanged"
+                          ><el-option
+                            v-for="upstream in previousQueries"
+                            :key="upstream.id"
+                            :value="upstream.id"
+                            :label="upstream.name || upstream.id" /></el-select
+                      ></el-form-item>
+                      <el-switch
+                        v-model="node.config.keepUnspecified"
+                        active-text="保留未选择字段"
+                      />
+                      <div
+                        v-for="(field, index) in node.config.fields || []"
+                        :key="index"
+                        class="mapping-row"
+                      >
+                        <el-input
+                          v-model="field.source"
+                          placeholder="原字段"
+                        /><span>→</span
+                        ><el-input
+                          v-model="field.target"
+                          placeholder="输出字段"
+                        /><el-button
+                          link
+                          type="danger"
+                          @click="node.config.fields.splice(index, 1)"
+                          >删除</el-button
+                        >
+                      </div>
+                      <el-button
+                        @click="
+                          node.config.fields.push({ source: '', target: '' })
+                        "
+                        >添加字段</el-button
+                      >
+                      <el-form-item label="移除字段"
+                        ><el-select
+                          v-model="node.config.removeFields"
+                          multiple
+                          filterable
+                          allow-create
+                          default-first-option
+                      /></el-form-item>
+                      <el-button :loading="previewing" @click="preview"
+                        >预览字段选择结果</el-button
+                      >
+                    </template>
+                    <template
+                      v-else-if="
+                        ['database.write', 'database.upsert'].includes(
+                          node.type,
+                        )
+                      "
+                    >
+                      <div class="write-grid">
+                        <el-form-item label="输入查询结果"
+                          ><el-select
+                            v-model="node.config.inputStepId"
+                            placeholder="选择上游查询步骤"
+                            @change="dependencyChanged"
+                            ><el-option
+                              v-for="upstream in previousQueries"
+                              :key="upstream.id"
+                              :value="upstream.id"
+                              :label="
+                                upstream.name || upstream.id
+                              " /></el-select></el-form-item
+                        ><el-form-item label="目标表（已有表）"
+                          ><el-select
+                            v-model="node.config.table"
+                            filterable
+                            allow-create
+                            default-first-option
+                            :loading="catalogLoading"
+                            placeholder="选择或输入目标表"
+                            ><el-option
+                              v-for="table in catalog"
+                              :key="table.qualifiedName || table.tableName"
+                              :value="table.qualifiedName || table.tableName"
+                              :label="
+                                table.qualifiedName || table.tableName
+                              " /></el-select
+                        ></el-form-item>
+                      </div>
+                      <el-form-item label="写入方式"
+                        ><el-radio-group v-model="node.config.mode"
+                          ><el-radio-button value="append"
+                            >追加数据</el-radio-button
+                          ><el-radio-button value="upsert"
+                            >按键更新 / 插入</el-radio-button
+                          ></el-radio-group
+                        ></el-form-item
+                      >
+                      <el-form-item
+                        v-if="
+                          node.config.mode === 'upsert' ||
+                          node.type === 'database.upsert'
+                        "
+                        label="目标键字段（应有唯一约束）"
+                        ><el-select
+                          v-model="node.config.keyColumns"
+                          multiple
+                          filterable
+                          allow-create
+                          default-first-option
+                          placeholder="例如：order_id"
+                          ><el-option
+                            v-for="mapping in node.config.mappings || []"
+                            :key="mapping.target"
+                            :value="mapping.target"
+                            :label="mapping.target" /></el-select
+                      ></el-form-item>
+                      <el-form-item
+                        v-if="
+                          node.config.mode === 'upsert' ||
+                          node.type === 'database.upsert'
+                        "
+                        label="允许更新的字段（未设置时更新全部非键字段）"
+                      >
+                        <el-select
+                          v-model="node.config.updateColumns"
+                          multiple
+                          filterable
+                          placeholder="Kettle 仅插入字段不会在更新时改动"
+                          ><el-option
+                            v-for="mapping in node.config.mappings || []"
+                            :key="mapping.target"
+                            :value="mapping.target"
+                            :label="mapping.target"
+                        /></el-select>
+                        <el-button
+                          v-if="node.config.updateColumns !== undefined"
+                          link
+                          @click="delete node.config.updateColumns"
+                          >恢复更新全部</el-button
+                        >
+                        <small v-if="node.config.updateColumns?.length === 0"
+                          >当前为空：已有行不更新，只插入缺失行。</small
+                        >
+                      </el-form-item>
+                      <div class="section-title">
+                        <strong>字段映射</strong>
+                        <div>
+                          <el-button
+                            link
+                            :loading="previewing"
+                            @click="previewInput"
+                            >预览输入并加载字段</el-button
+                          ><el-button link @click="autoMapping"
+                            >同名映射</el-button
+                          ><el-button link :icon="Plus" @click="addMapping"
+                            >添加字段</el-button
+                          >
+                        </div>
+                      </div>
+                      <p class="help">
+                        留空时按查询结果同名写入。SQL
+                        字段别名可以直接对应目标字段。
+                      </p>
+                      <div
+                        v-for="(mapping, index) in node.config.mappings || []"
+                        :key="index"
+                        class="mapping-row"
+                      >
+                        <el-select
+                          v-model="mapping.source"
+                          filterable
+                          allow-create
+                          default-first-option
+                          placeholder="查询结果字段"
+                          ><el-option
+                            v-for="column in inputColumns()"
+                            :key="column"
+                            :value="column"
+                            :label="column" /></el-select
+                        ><span>→</span
+                        ><el-input
+                          v-model="mapping.target"
+                          placeholder="目标字段"
+                        /><el-button
+                          link
+                          type="danger"
+                          @click="node.config.mappings.splice(index, 1)"
+                          >删除</el-button
+                        >
+                      </div>
+                      <el-form-item label="每批写入行数" class="batch-field"
+                        ><el-input-number
+                          v-model="node.config.batchSize"
+                          :min="1"
+                          :max="2000"
+                          :step="50" /></el-form-item
+                      ><el-alert
+                        title="写入步骤使用独立事务；失败会回滚当前步骤，已成功提交的前序步骤会保留。"
+                        type="info"
+                        :closable="false"
+                      />
+                    </template>
+                    <el-alert
+                      v-else
+                      title="此节点需要迁移为 SQL 查询或结果写入，请在 JSON 中检查原配置；执行器会明确提示未支持步骤。"
+                      type="warning"
+                      :closable="false"
+                    />
+                  </el-form>
+                  <div class="dependency-strip">
+                    <span>执行依赖</span
+                    ><el-tag
+                      v-for="edge in pipeline.edges.filter(
+                        (item) =>
+                          item.target === node?.id && item.enabled !== false,
+                      )"
+                      :key="edge.source"
+                      >{{
+                        pipeline.nodes.find((item) => item.id === edge.source)
+                          ?.name || edge.source
+                      }}</el-tag
+                    ><small
+                      v-if="
+                        !pipeline.edges.some(
+                          (item) =>
+                            item.target === node?.id && item.enabled !== false,
+                        )
+                      "
+                      >无上游，可独立查询</small
+                    >
+                  </div>
+                </section>
+                <el-empty v-else description="添加一个查询步骤开始配置" />
+              </div>
+            </template>
+            <el-empty v-else description="添加同步任务开始配置"
+              ><el-button type="primary" @click="addPipeline()"
+                >新增任务</el-button
+              ></el-empty
+            >
+            <div
+              v-if="validationErrors.length || stickyWarnings.length"
+              class="validation-panel"
+            >
+              <el-alert
+                v-for="error in validationErrors"
+                :key="error"
+                :title="error"
+                type="error"
+                :closable="false"
+              /><el-alert
+                v-for="warning in stickyWarnings"
+                :key="warning"
+                :title="warning"
+                type="warning"
+                :closable="false"
+              />
+            </div>
+          </section>
+        </main>
+        <main v-else class="empty-workspace">
+          <el-empty description="创建工作区，选好数据源后开始同步"
+            ><el-button type="primary" @click="newVisible = true"
+              >新建工作区</el-button
+            ></el-empty
+          >
+        </main>
+      </div>
+    </div>
+    <el-dialog
+      v-model="newVisible"
+      title="新建工作区"
+      width="min(960px, 94vw)"
+      :close-on-click-modal="false"
+      ><el-form label-position="top"
+        ><div class="write-grid">
+          <el-form-item label="工作区名称"
+            ><el-input
+              v-model="newName"
+              maxlength="100"
+              placeholder="例如：订单数仓同步" /></el-form-item
+          ><el-form-item label="说明（可选）"
+            ><el-input v-model="newDescription" maxlength="500"
+          /></el-form-item>
+        </div>
+        <el-form-item label="工作区数据源"
+          ><WorkspaceSources
+            v-model="newResources"
+            :connections="connections"
+            class="full-width" /></el-form-item></el-form
+      ><template #footer
+        ><el-button @click="newVisible = false">取消</el-button
+        ><el-button
+          type="primary"
+          :loading="createBusy"
+          @click="createWorkspace"
+          >创建并配置步骤</el-button
+        ></template
+      ></el-dialog
+    >
+    <el-dialog
+      v-model="sourcesVisible"
+      title="工作区数据源"
+      width="min(960px, 94vw)"
+      ><WorkspaceSources
+        v-model="sourceDraft"
+        :connections="connections"
+        :used-refs="usedRefs"
+      /><template #footer
+        ><el-button @click="sourcesVisible = false">取消</el-button
+        ><el-button type="primary" @click="applySources"
+          >应用</el-button
+        ></template
+      ></el-dialog
+    >
+    <KettleImportWizard
+      ref="kettleWizard"
+      :document="doc"
+      :connections="connections"
+      @apply="applyKettleDocument"
+    />
+    <el-drawer
+      v-model="runsVisible"
+      title="运行记录与步骤进度"
+      class="etl-runs-drawer"
+      size="min(800px, 96vw)"
+      ><el-button :icon="Refresh" @click="refreshRuns">刷新</el-button
+      ><el-table
+        :data="runs"
+        highlight-current-row
+        @current-change="selectedRun = $event || selectedRun"
+        ><el-table-column prop="pipelineName" label="任务" /><el-table-column
+          label="状态"
+          width="90"
+          ><template #default="scope">{{
+            statusLabel(scope.row.status)
+          }}</template></el-table-column
+        ><el-table-column label="时间" width="180"
+          ><template #default="scope">{{
+            new Date(scope.row.startedAt).toLocaleString()
+          }}</template></el-table-column
+        ><el-table-column prop="revision" label="版本" width="65" /></el-table
+      ><template v-if="selectedRun"
+        ><div class="section-title">
+          <strong>{{ selectedRun.message }}</strong
+          ><el-button
+            v-if="['PENDING', 'RUNNING'].includes(selectedRun.status)"
+            type="danger"
+            plain
+            @click="cancelRun"
+            >取消任务</el-button
+          >
+        </div>
+        <el-table :data="runSteps"
+          ><el-table-column label="步骤" min-width="140"
+            ><template #default="scope">{{
+              runNodeName(scope.row.nodeId)
+            }}</template></el-table-column
+          ><el-table-column label="状态" width="90"
+            ><template #default="scope">{{
+              statusLabel(scope.row.status)
+            }}</template></el-table-column
+          ><el-table-column
+            prop="rows"
+            label="行数"
+            width="90" /><el-table-column prop="message" label="信息"
+        /></el-table>
+        <div class="section-title">
+          <strong>执行日志</strong
+          ><el-select
+            v-model="logNode"
+            clearable
+            placeholder="全部任务与节点日志"
+            @change="
+              logPage = 1;
+              refreshLogs();
+            "
+            ><el-option
+              v-for="step in runSteps"
+              :key="step.nodeId"
+              :label="runNodeName(step.nodeId)"
+              :value="step.nodeId"
+          /></el-select>
+        </div>
+        <el-table v-loading="logsBusy" :data="runLogs" max-height="360">
+          <el-table-column label="时间" width="180"
+            ><template #default="scope">{{
+              new Date(scope.row.createdAt).toLocaleString()
+            }}</template></el-table-column
+          >
+          <el-table-column
+            prop="level"
+            label="级别"
+            width="65"
+          /><el-table-column label="节点" min-width="120"
+            ><template #default="scope">{{
+              runNodeName(scope.row.nodeId)
+            }}</template></el-table-column
+          ><el-table-column
+            prop="rowCount"
+            label="累计行数"
+            width="100"
+          /><el-table-column prop="message" label="事件" />
+        </el-table>
+        <el-pagination
+          v-model:current-page="logPage"
+          :page-size="50"
+          :total="logTotal"
+          layout="total, prev, pager, next"
+          @current-change="refreshLogs"
+        /> </template
+    ></el-drawer>
+    <AiChatWindow
+      v-if="activeWorkspace"
+      :key="String(activeWorkspace.id)"
+      ref="aiWindow"
+      etl-mode
+      :db-config-id="aiSource?.dbConfigId"
+      :instance-name="aiSource?.instance"
+      :conn-label="aiSource?.displayName"
+      :before-send="prepareAi"
+      :get-extra-context="aiContext"
+      @apply-etl-config="applyAi"
+    />
+  </Page>
+</template>
+
+<style scoped>
+:global(.etl-runs-drawer) {
+  color: var(--el-text-color-primary);
+}
+.etl-shell {
+  color: var(--el-text-color-primary);
+  border: 1px solid var(--el-border-color-light);
+  border-radius: 10px;
+  overflow: hidden;
+  background: var(--el-bg-color);
+  min-height: calc(100vh - 130px);
+}
+.toolbar,
+.toolbar-title,
+.toolbar-actions,
+.workspace-head,
+.task-bar,
+.pipeline-header,
+.step-header,
+.section-title,
+.preview-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.toolbar {
+  justify-content: space-between;
+  padding: 12px;
+  border-bottom: 1px solid var(--el-border-color-light);
+  flex-wrap: wrap;
+}
+.toolbar-actions {
+  flex-wrap: wrap;
+}
+.editor-mode-switch {
+  flex-shrink: 0;
+}
+.etl-body {
+  display: flex;
+  min-height: calc(100vh - 190px);
+}
+.workspace-sidebar {
+  flex: 0 0 210px;
+  padding: 12px;
+  border-right: 1px solid var(--el-border-color-light);
+  background: var(--el-fill-color-lighter);
+}
+.sidebar-title {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12px;
+}
+.workspace-item {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  width: 100%;
+  padding: 12px;
+  margin-bottom: 6px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--el-text-color-primary);
+  text-align: left;
+  cursor: pointer;
+}
+.workspace-item strong {
+  max-width: 170px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.workspace-item small,
+.help,
+.head-help {
+  color: var(--el-text-color-secondary);
+  font-size: 12px;
+}
+.workspace-item.active {
+  border-color: var(--el-color-primary-light-5);
+  background: var(--el-color-primary-light-9);
+}
+.workspace-source-btn {
+  margin-top: 2px;
+  width: 100%;
+}
+.workspace-context-menu {
+  position: fixed;
+  z-index: 4000;
+  min-width: 140px;
+  padding: 4px;
+  border: 1px solid var(--el-border-color);
+  border-radius: 6px;
+  background: var(--el-bg-color-overlay);
+  box-shadow: var(--el-box-shadow-light);
+  color: var(--el-text-color-primary);
+}
+.workspace-context-menu button {
+  display: block;
+  width: 100%;
+  padding: 8px 12px;
+  text-align: left;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  border-radius: 4px;
+}
+.workspace-context-menu button:hover {
+  background: var(--el-fill-color-light);
+}
+.workspace-context-menu .danger {
+  color: var(--el-color-danger);
+}
+.workspace-main {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: grid;
+  grid-template-areas: 'tabs' 'editor';
+  grid-template-rows: auto minmax(0, 1fr);
+}
+.workspace-tabs {
+  grid-area: tabs;
+  min-width: 0;
+  min-height: 0;
+}
+.task-content {
+  grid-area: editor;
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+}
+.workspace-main.tasks-left {
+  grid-template-areas: 'tabs editor';
+  grid-template-columns: 200px minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
+}
+.workspace-main.tasks-right {
+  grid-template-areas: 'editor tabs';
+  grid-template-columns: minmax(0, 1fr) 200px;
+  grid-template-rows: minmax(0, 1fr);
+}
+.workspace-main.tasks-left .workspace-tabs,
+.workspace-main.tasks-right .workspace-tabs {
+  height: 100%;
+  overflow: hidden;
+}
+.workspace-head,
+.task-bar,
+.pipeline-header {
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--el-border-color-light);
+}
+.workspace-name {
+  width: 220px;
+}
+.head-help {
+  flex: 1;
+}
+.task-bar > .el-select {
+  width: 250px;
+}
+.task-bar-spacer {
+  flex: 1;
+}
+.pipeline-header > .el-input {
+  width: 300px;
+}
+.step-layout {
+  display: flex;
+  min-height: 560px;
+}
+.steps-sidebar {
+  padding: 16px 10px;
+  flex: 0 0 210px;
+  border-right: 1px solid var(--el-border-color-light);
+}
+.step-item {
+  display: flex;
+  gap: 9px;
+  width: 100%;
+  text-align: left;
+  align-items: flex-start;
+  padding: 12px 8px;
+  margin-bottom: 8px;
+  border: 1px solid var(--el-border-color-light);
+  border-radius: 7px;
+  color: var(--el-text-color-primary);
+  background: var(--el-bg-color);
+  cursor: pointer;
+}
+.step-item.active {
+  border-color: var(--el-color-primary);
+  background: var(--el-color-primary-light-9);
+}
+.step-item.disabled {
+  opacity: 0.5;
+}
+.step-item div {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+.step-item strong,
+.step-item small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.step-item strong {
+  font-size: 13px;
+}
+.step-item small {
+  font-size: 11px;
+  color: var(--el-text-color-secondary);
+}
+.step-number {
+  border-radius: 50%;
+  background: var(--el-color-primary-light-8);
+  color: var(--el-color-primary);
+  width: 22px;
+  height: 22px;
+  flex: 0 0 22px;
+  text-align: center;
+  line-height: 22px;
+}
+.add-step {
+  width: 100%;
+  margin: 8px 0 0 !important;
+}
+.step-editor {
+  flex: 1;
+  min-width: 0;
+  padding: 20px;
+}
+.step-header {
+  margin-bottom: 20px;
+}
+.step-header > .el-input {
+  max-width: 320px;
+}
+.step-editor .el-form-item .el-select {
+  width: min(560px, 85%);
+}
+.source-settings {
+  margin-left: 10px;
+}
+.sql-label,
+.section-title {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin: 16px 0 10px;
+  font-size: 14px;
+}
+.sql-editor :deep(textarea) {
+  font-family: Consolas, monospace;
+  font-size: 14px;
+  line-height: 1.65;
+}
+.help {
+  line-height: 1.65;
+  margin: 8px 0 12px;
+}
+.parameter-row {
+  display: flex;
+  gap: 8px;
+  margin: 8px 0;
+}
+.parameter-row > .el-input {
+  flex: 1;
+  min-width: 90px;
+}
+.parameter-row > .el-select {
+  flex: 1.2;
+  min-width: 100px;
+}
+.preview-actions {
+  margin-top: 16px;
+  flex-wrap: wrap;
+}
+.preview-actions > .el-button {
+  margin-left: auto;
+}
+.preview-panel {
+  margin-top: 20px;
+}
+.write-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 18px;
+}
+.write-grid .el-select {
+  width: 100% !important;
+}
+.mapping-row {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  margin-bottom: 10px;
+}
+.mapping-row > .el-select,
+.mapping-row > .el-input {
+  flex: 1;
+}
+.batch-field {
+  margin-top: 22px;
+}
+.dependency-strip {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding-top: 20px;
+  margin-top: 20px;
+  border-top: 1px solid var(--el-border-color-light);
+  color: var(--el-text-color-secondary);
+  font-size: 12px;
+}
+.json-panel {
+  padding: 16px;
+}
+.empty-workspace {
+  display: grid;
+  place-items: center;
+  flex: 1;
+}
+.full-width {
+  width: 100%;
+}
+.table-catalog {
+  display: grid;
+  gap: 7px;
+  max-height: 320px;
+  overflow: auto;
+}
+.catalog-hint {
+  margin: 0;
+}
+.catalog-item {
+  justify-content: flex-start;
+  height: auto;
+  padding: 2px 0;
+  white-space: normal;
+  text-align: left;
+}
+.validation-panel {
+  display: grid;
+  gap: 8px;
+  padding: 16px;
+}
+.ai-answer {
+  white-space: pre-wrap;
+  margin-top: 20px;
+}
+@media (max-width: 1100px) {
+  .workspace-sidebar {
+    flex-basis: 170px;
+  }
+  .steps-sidebar {
+    flex-basis: 175px;
+  }
+  .step-editor {
+    padding: 14px;
+  }
+  .head-help {
+    display: none;
+  }
+  .parameter-row {
+    flex-wrap: wrap;
+  }
+}
+</style>

@@ -6,12 +6,24 @@
  * 发送走 useAiChat → POST /admin/aiAgent/chat/stream。
  * @author yanch
  */
-import { computed, nextTick, onMounted, ref, watch } from 'vue';
+import {
+  computed,
+  nextTick,
+  onMounted,
+  onBeforeUnmount,
+  ref,
+  watch,
+} from 'vue';
 
 import { Document, Plus } from '@element-plus/icons-vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 
-import { listConversations, deleteConversation, type AgentScene } from '#/api/ai/agent';
+import {
+  listConversations,
+  deleteConversation,
+  listAgentSkills,
+  type AgentScene,
+} from '#/api/ai/agent';
 import { listSelectableModels } from '#/api/ai/model';
 import { getDesktopScopedStorageKey } from '#/desktop/runtime';
 
@@ -31,6 +43,9 @@ const props = defineProps<{
   aiAllowSampleData?: number | null;
   /** 每次发送前取最新上下文（查询视图勾选会变） */
   getExtraContext?: () => Record<string, any>;
+  /** ETL 复用相同窗口与工具协议，但独立会话，不改变数据库客户端会话。 */
+  etlMode?: boolean;
+  beforeSend?: () => Promise<boolean>;
 }>();
 
 const emit = defineEmits<{
@@ -41,6 +56,7 @@ const emit = defineEmits<{
   applyQueryConfig: [any];
   /** 打开当前连接的 AI 结构文档 */
   openSchemaDoc: [];
+  applyEtlConfig: [any];
 }>();
 
 /** 读取数据库连接的默认脱敏配置，新会话会重新继承该值。 */
@@ -54,19 +70,30 @@ const isMaskedMode = ref(defaultMaskedMode());
 const maskCustomized = ref(false);
 
 // 模型 ID 来自当前服务端，桌面端按服务端地址隔离。
-const MODEL_KEY = getDesktopScopedStorageKey('visual-client-ai-model-id');
+const MODEL_KEY = getDesktopScopedStorageKey(
+  props.etlMode ? 'visual-etl-ai-model-id' : 'visual-client-ai-model-id',
+);
 const dirs = ['n', 's', 'e', 'w', 'ne', 'nw', 'se', 'sw'] as const;
-const { rect, onDragStart, onResizeStart } = useFloatingWindow('visual-client-ai-win-rect', {
-  x: 80,
-  y: 80,
-  w: 600,
-  h: 620,
-});
-const { state, open, minimize, restore, close, toggleMax } = useAiWindowState();
+const { rect, onDragStart, onResizeStart } = useFloatingWindow(
+  props.etlMode ? 'visual-etl-ai-win-rect' : 'visual-client-ai-win-rect',
+  {
+    x: 80,
+    y: 80,
+    w: 600,
+    h: 620,
+  },
+);
+const { state, open, minimize, restore, close, toggleMax } = useAiWindowState(
+  Boolean(props.etlMode),
+);
 
 const modelId = ref<string | number>(localStorage.getItem(MODEL_KEY) || '');
 const selectable = ref<any[]>([]);
-const scene = ref<AgentScene>('sql');
+const scene = ref<AgentScene>(props.etlMode ? 'etl' : 'sql');
+const skills = ref<Array<{ id: string; name: string; description: string }>>(
+  [],
+);
+const skillIds = ref<string[]>([]);
 const convDrawer = ref(false);
 const convs = ref<any[]>([]);
 const pendingContext = ref<Record<string, any>>({});
@@ -80,12 +107,15 @@ const {
   stop,
   newConversation,
   loadConversation,
-} = useAiChat(() => ({
-  dbConfigId: props.dbConfigId,
-  instanceName: props.instanceName || '',
-  modelId: modelId.value,
-  allowSampleData: !isMaskedMode.value,
-}));
+} = useAiChat(
+  () => ({
+    dbConfigId: props.dbConfigId,
+    instanceName: props.instanceName || '',
+    modelId: modelId.value,
+    allowSampleData: !isMaskedMode.value,
+  }),
+  Boolean(props.etlMode),
+);
 
 /** 最近一条助手消息已收尾，用来在标题栏标「已完成」 */
 const lastAssistantDone = computed(() => {
@@ -114,27 +144,34 @@ const winStyle = computed(() => {
 onMounted(async () => {
   try {
     const res: any = await listSelectableModels();
-    selectable.value = res?.data || [];
-    if (!modelId.value) {
-      for (const g of selectable.value) {
-        const d = (g.models || []).find((m: any) => m.isDefault === 1);
-        if (d) {
-          modelId.value = d.id;
-          break;
-        }
-        if (g.models?.[0]) modelId.value = g.models[0].id;
-      }
+    selectable.value = res?.data ?? res ?? [];
+    const models = selectable.value.flatMap((group) => group.models || []);
+    if (!models.some((model) => String(model.id) === String(modelId.value))) {
+      modelId.value =
+        models.find((model) => Number(model.isDefault) === 1)?.id ||
+        models[0]?.id ||
+        '';
     }
-  } catch {
-    /* ignore */
+    if (props.etlMode) {
+      const response: any = await listAgentSkills('etl');
+      skills.value = response?.data ?? response ?? [];
+    }
+  } catch (error: any) {
+    ElMessage.warning(
+      error?.message || 'AI 模型或技能加载失败，请检查 AI 配置与权限',
+    );
   }
 });
 
 async function openConvList() {
   convDrawer.value = true;
-  const res: any = await listConversations({ dbConfigId: props.dbConfigId as any });
+  const res: any = await listConversations({
+    dbConfigId: props.dbConfigId as any,
+    ...(props.etlMode ? { scene: 'etl' } : {}),
+  });
   convs.value = (res?.data || []).filter(
-    (item: any) => String(item.instanceName || '') === String(props.instanceName || ''),
+    (item: any) =>
+      String(item.instanceName || '') === String(props.instanceName || ''),
   );
 }
 
@@ -185,8 +222,11 @@ async function beforeMaskChange() {
 watch(
   () => [props.dbConfigId, props.instanceName],
   (next, previous) => {
-    if (String(next?.[0] ?? '') === String(previous?.[0] ?? '')
-      && String(next?.[1] ?? '') === String(previous?.[1] ?? '')) return;
+    if (
+      String(next?.[0] ?? '') === String(previous?.[0] ?? '') &&
+      String(next?.[1] ?? '') === String(previous?.[1] ?? '')
+    )
+      return;
     if (running.value) stop();
     newConversation();
     pendingContext.value = {};
@@ -199,7 +239,11 @@ watch(
 watch(
   () => props.aiAllowSampleData,
   () => {
-    if (!maskCustomized.value && !conversationId.value && messages.value.length === 0) {
+    if (
+      !maskCustomized.value &&
+      !conversationId.value &&
+      messages.value.length === 0
+    ) {
       isMaskedMode.value = defaultMaskedMode();
     }
   },
@@ -209,19 +253,40 @@ function onModelChange(v: any) {
   localStorage.setItem(MODEL_KEY, String(v));
 }
 
-function send(text: string) {
+async function send(text: string) {
   try {
-    const extra = typeof props.getExtraContext === 'function' ? props.getExtraContext() : {};
-    sendChat(text, scene.value, { ...pendingContext.value, ...extra });
+    if (props.beforeSend && !(await props.beforeSend())) {
+      composerRef.value?.setText(text);
+      return;
+    }
+    const extra =
+      typeof props.getExtraContext === 'function'
+        ? props.getExtraContext()
+        : {};
+    sendChat(text, scene.value, {
+      ...pendingContext.value,
+      ...extra,
+      ...(props.etlMode ? { skillIds: skillIds.value } : {}),
+    });
   } catch (e: any) {
+    composerRef.value?.setText(text);
     ElMessage.warning(e?.message || '无法发送，请先选择连接、实例和模型');
   }
 }
 
-function exposeOpen(payload?: { scene?: AgentScene; prefill?: string; context?: any }) {
+function exposeOpen(payload?: {
+  scene?: AgentScene;
+  prefill?: string;
+  context?: any;
+  /** 特定入口可预选技能，后续仍允许用户手动调整。 */
+  skillIds?: string[];
+}) {
   open();
   if (payload?.scene) scene.value = payload.scene;
-  if (payload?.context) pendingContext.value = { ...pendingContext.value, ...payload.context };
+  if (payload?.skillIds && props.etlMode)
+    skillIds.value = [...payload.skillIds];
+  if (payload?.context)
+    pendingContext.value = { ...pendingContext.value, ...payload.context };
   if (payload?.prefill) {
     nextTick(() => composerRef.value?.setText?.(payload.prefill || ''));
   }
@@ -233,6 +298,9 @@ defineExpose({
   restore,
   close,
 });
+onBeforeUnmount(() => {
+  if (props.etlMode) stop();
+});
 </script>
 
 <template>
@@ -240,10 +308,13 @@ defineExpose({
     <div
       v-show="state.visible && !state.minimized"
       class="ai-win"
+      :class="{ 'etl-ai': etlMode }"
       :style="winStyle"
     >
       <div class="ai-win-header" @mousedown="onDragStart">
-        <span class="title">{{ $tr('AI 助手 ·') }} {{ $tr(connLabel || '未连接') }}</span>
+        <span class="title"
+          >{{ $tr('AI 助手 ·') }} {{ $tr(connLabel || '未连接') }}</span
+        >
         <ElTag
           v-if="running"
           size="small"
@@ -273,8 +344,17 @@ defineExpose({
           @mousedown.stop
           @change="onModelChange"
         >
-          <ElOptionGroup v-for="g in selectable" :key="g.providerName" :label="g.providerName">
-            <ElOption v-for="m in g.models" :key="m.id" :label="m.displayName" :value="m.id" />
+          <ElOptionGroup
+            v-for="g in selectable"
+            :key="g.providerName"
+            :label="g.providerName"
+          >
+            <ElOption
+              v-for="m in g.models"
+              :key="m.id"
+              :label="m.displayName"
+              :value="m.id"
+            />
           </ElOptionGroup>
         </ElSelect>
         <div class="actions" @mousedown.stop>
@@ -331,18 +411,46 @@ defineExpose({
           </ElTag>
         </span>
       </div>
-      <div class="schema-doc-tip" @mousedown.stop>
+      <div v-if="etlMode" class="schema-doc-tip" @mousedown.stop>
+        <ElSelect
+          v-model="skillIds"
+          multiple
+          collapse-tags
+          placeholder="按需加载技能（不选时自动匹配）"
+          popper-class="ai-model-select-popper"
+          style="width: 100%"
+        >
+          <ElOption
+            v-for="skill in skills"
+            :key="skill.id"
+            :label="skill.name"
+            :value="skill.id"
+            ><span :title="skill.description">{{ skill.name }}</span></ElOption
+          >
+        </ElSelect>
+      </div>
+      <div v-else class="schema-doc-tip" @mousedown.stop>
         <ElIcon><Document /></ElIcon>
         <span>
-          {{ $tr('AI 会优先依赖结构文档理解表含义、字段和关联；文档越完整，回答越准确。') }}
+          {{
+            $tr(
+              'AI 会优先依赖结构文档理解表含义、字段和关联；文档越完整，回答越准确。',
+            )
+          }}
         </span>
-        <ElButton size="small" type="primary" plain @click="emit('openSchemaDoc')">
+        <ElButton
+          size="small"
+          type="primary"
+          plain
+          @click="emit('openSchemaDoc')"
+        >
           {{ $tr('打开 AI 结构文档') }}
         </ElButton>
       </div>
       <AiMessageList
         :messages="messages"
         :running="running"
+        :etl-mode="etlMode"
         :db-config-id="dbConfigId || undefined"
         :instance-name="instanceName"
         @insert-sql="emit('insertSql', $event)"
@@ -350,11 +458,13 @@ defineExpose({
         @run-sql="emit('runSql', $event)"
         @open-sql-in-new-tab="emit('openSqlInNewTab', $event)"
         @apply-query-config="emit('applyQueryConfig', $event)"
+        @apply-etl-config="emit('applyEtlConfig', $event)"
       />
       <AiComposer
         ref="composerRef"
         v-model:scene="scene"
         :running="running"
+        :etl-mode="etlMode"
         :has-selection="!!pendingContext.selectedSql"
         :has-error="!!pendingContext.lastError"
         @send="send"
@@ -375,7 +485,12 @@ defineExpose({
         append-to-body
         class="ai-chat-drawer"
       >
-        <ElButton size="small" type="primary" :disabled="running" @click="startNewConversation">
+        <ElButton
+          size="small"
+          type="primary"
+          :disabled="running"
+          @click="startNewConversation"
+        >
           {{ $tr('新建会话') }}
         </ElButton>
         <div v-for="c in convs" :key="c.id" class="conv-item">
@@ -397,6 +512,9 @@ defineExpose({
 </template>
 
 <style scoped>
+.ai-win.etl-ai {
+  color: var(--el-text-color-primary);
+}
 .ai-win {
   position: fixed;
   z-index: 3000;
@@ -511,17 +629,59 @@ defineExpose({
 .rs {
   position: absolute;
 }
-.rs-n, .rs-s { left: 8px; right: 8px; height: 6px; cursor: ns-resize; }
-.rs-n { top: 0; }
-.rs-s { bottom: 0; }
-.rs-e, .rs-w { top: 8px; bottom: 8px; width: 6px; cursor: ew-resize; }
-.rs-e { right: 0; }
-.rs-w { left: 0; }
-.rs-ne, .rs-nw, .rs-se, .rs-sw { width: 10px; height: 10px; }
-.rs-ne { top: 0; right: 0; cursor: nesw-resize; }
-.rs-nw { top: 0; left: 0; cursor: nwse-resize; }
-.rs-se { bottom: 0; right: 0; cursor: nwse-resize; }
-.rs-sw { bottom: 0; left: 0; cursor: nesw-resize; }
+.rs-n,
+.rs-s {
+  left: 8px;
+  right: 8px;
+  height: 6px;
+  cursor: ns-resize;
+}
+.rs-n {
+  top: 0;
+}
+.rs-s {
+  bottom: 0;
+}
+.rs-e,
+.rs-w {
+  top: 8px;
+  bottom: 8px;
+  width: 6px;
+  cursor: ew-resize;
+}
+.rs-e {
+  right: 0;
+}
+.rs-w {
+  left: 0;
+}
+.rs-ne,
+.rs-nw,
+.rs-se,
+.rs-sw {
+  width: 10px;
+  height: 10px;
+}
+.rs-ne {
+  top: 0;
+  right: 0;
+  cursor: nesw-resize;
+}
+.rs-nw {
+  top: 0;
+  left: 0;
+  cursor: nwse-resize;
+}
+.rs-se {
+  bottom: 0;
+  right: 0;
+  cursor: nwse-resize;
+}
+.rs-sw {
+  bottom: 0;
+  left: 0;
+  cursor: nesw-resize;
+}
 .conv-item {
   display: flex;
   align-items: center;

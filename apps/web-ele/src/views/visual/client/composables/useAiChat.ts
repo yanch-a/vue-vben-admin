@@ -51,7 +51,20 @@ export interface AiMsg {
     groupItems?: any[];
     orderItems?: any[];
   };
-  chart?: { title: string; sql: string; spec: any; columns: string[]; rows: any[] };
+  chart?: {
+    title: string;
+    sql: string;
+    spec: any;
+    columns: string[];
+    rows: any[];
+  };
+  /** ETL 候选保留本轮完整基准，避免应用历史建议覆盖较新的草稿。 */
+  etlConfig?: {
+    workspace: any;
+    explanation?: string;
+    warnings?: string[];
+    baseJson?: string;
+  };
   error?: string;
   done: boolean;
 }
@@ -92,13 +105,25 @@ function pickProposedQueryConfig(data: any): AiMsg['queryConfig'] | undefined {
   if (!obj || typeof obj !== 'object') return undefined;
   const split = (type: string) =>
     Array.isArray(obj.items)
-      ? obj.items.filter((it: any) => String(it?.queryType || '').toUpperCase() === type)
+      ? obj.items.filter(
+          (it: any) => String(it?.queryType || '').toUpperCase() === type,
+        )
       : [];
-  const columnItems = Array.isArray(obj.columnItems) ? obj.columnItems : split('COLUMN');
-  const whereItems = Array.isArray(obj.whereItems) ? obj.whereItems : split('WHERE');
-  const havingItems = Array.isArray(obj.havingItems) ? obj.havingItems : split('HAVING');
-  const groupItems = Array.isArray(obj.groupItems) ? obj.groupItems : split('GROUP');
-  const orderItems = Array.isArray(obj.orderItems) ? obj.orderItems : split('ORDER');
+  const columnItems = Array.isArray(obj.columnItems)
+    ? obj.columnItems
+    : split('COLUMN');
+  const whereItems = Array.isArray(obj.whereItems)
+    ? obj.whereItems
+    : split('WHERE');
+  const havingItems = Array.isArray(obj.havingItems)
+    ? obj.havingItems
+    : split('HAVING');
+  const groupItems = Array.isArray(obj.groupItems)
+    ? obj.groupItems
+    : split('GROUP');
+  const orderItems = Array.isArray(obj.orderItems)
+    ? obj.orderItems
+    : split('ORDER');
   if (
     !columnItems.length &&
     !whereItems.length &&
@@ -163,7 +188,8 @@ let activeContextGetter: (() => AiChatContext) | undefined;
 /** 跨路由复用的会话状态；页面卸载不会中断正在进行的 SSE 或清空消息。 */
 let sharedAiChatStore: ReturnType<typeof createAiChatStore> | undefined;
 
-export function useAiChat(getCtx: () => AiChatContext) {
+export function useAiChat(getCtx: () => AiChatContext, isolated = false) {
+  if (isolated) return createAiChatStore(getCtx);
   activeContextGetter = getCtx;
   if (!sharedAiChatStore) {
     sharedAiChatStore = createAiChatStore();
@@ -172,7 +198,7 @@ export function useAiChat(getCtx: () => AiChatContext) {
 }
 
 /** 创建一次 AI 会话状态机，后续页面实例均复用该状态机。 */
-function createAiChatStore() {
+function createAiChatStore(isolatedContext?: () => AiChatContext) {
   const messages = ref<AiMsg[]>([]);
   const running = ref(false);
   const conversationId = ref<number | string | undefined>();
@@ -189,8 +215,13 @@ function createAiChatStore() {
     return curIdx >= 0 ? messages.value[curIdx] || null : null;
   }
 
-  function send(text: string, scene: AgentScene, context?: AgentChatRequest['context']) {
-    const getCtx = activeContextGetter;
+  function send(
+    text: string,
+    scene: AgentScene,
+    context?: AgentChatRequest['context'],
+  ) {
+    if (running.value) throw new Error('当前回答尚未完成，请等待或先停止');
+    const getCtx = isolatedContext || activeContextGetter;
     if (!getCtx) {
       throw new Error('AI 工作台尚未就绪');
     }
@@ -199,7 +230,13 @@ function createAiChatStore() {
       throw new Error('请先选择连接、实例和模型');
     }
     // 先落用户气泡，再占一条空助手气泡；后续 SSE 都改这条（用 curIdx 原地更新）
-    messages.value.push({ id: uid(), role: 'user', text, steps: [], done: true });
+    messages.value.push({
+      id: uid(),
+      role: 'user',
+      text,
+      steps: [],
+      done: true,
+    });
     const cur: AiMsg = {
       id: uid(),
       role: 'assistant',
@@ -270,6 +307,12 @@ function createAiChatStore() {
               }
               break;
             }
+            case 'etl.proposed': {
+              if (data?.workspace)
+                msg.etlConfig = { ...data, baseJson: context?.etlWorkspace };
+              touch();
+              break;
+            }
             case 'config.proposed': {
               const proposed = pickProposedQueryConfig(data);
               if (proposed) {
@@ -335,7 +378,13 @@ function createAiChatStore() {
     // 库里 user/assistant/tool 是平铺行；前端要把紧随 assistant 的 tool 行叠进 steps
     for (const m of list) {
       if (m.role === 'user') {
-        out.push({ id: String(m.id), role: 'user', text: m.content || '', steps: [], done: true });
+        out.push({
+          id: String(m.id),
+          role: 'user',
+          text: m.content || '',
+          steps: [],
+          done: true,
+        });
         cur = null;
       } else if (m.role === 'assistant') {
         cur = {
@@ -348,12 +397,18 @@ function createAiChatStore() {
         };
         if (m.attachments) {
           try {
-            const att = typeof m.attachments === 'string' ? JSON.parse(m.attachments) : m.attachments;
+            const att =
+              typeof m.attachments === 'string'
+                ? JSON.parse(m.attachments)
+                : m.attachments;
             if (att.proposedSql) cur.sql = pickProposedSql(att.proposedSql);
             if (att.proposedQueryConfig) {
-              cur.queryConfig = pickProposedQueryConfig(att.proposedQueryConfig);
+              cur.queryConfig = pickProposedQueryConfig(
+                att.proposedQueryConfig,
+              );
             }
             if (att.chart) cur.chart = att.chart;
+            if (att.proposedEtlConfig) cur.etlConfig = att.proposedEtlConfig;
           } catch {
             /* ignore */
           }
@@ -373,5 +428,13 @@ function createAiChatStore() {
     curIdx = -1;
   }
 
-  return { messages, running, conversationId, send, stop, newConversation, loadConversation };
+  return {
+    messages,
+    running,
+    conversationId,
+    send,
+    stop,
+    newConversation,
+    loadConversation,
+  };
 }
