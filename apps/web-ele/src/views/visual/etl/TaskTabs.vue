@@ -1,8 +1,9 @@
 <script setup lang="ts">
 /** 可换位置的任务标签栏；关闭只隐藏标签，删除才修改配置。 @author yanch */
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
-import { Plus, Search, Close, MoreFilled } from '@element-plus/icons-vue';
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { Plus, Close, MoreFilled } from '@element-plus/icons-vue';
 import type { EtlPipeline } from '#/api/visual/etl';
+import { getDesktopScopedStorageKey } from '../../../desktop/runtime';
 
 /** 标签栏停靠位置，交互对齐 Chrome DevTools 三点菜单。 */
 type TabPosition = 'top' | 'left' | 'right';
@@ -13,7 +14,64 @@ const DOCK_OPTIONS: { value: TabPosition; label: string }[] = [
   { value: 'right', label: '右侧标签' },
 ];
 
+/** 按工作区持久化已关闭标签，刷新后保持 tabbar 状态。 */
+const CLOSED_STORE_KEY = 'lemon-etl-closed-tabs-v1';
+
+function closedStorageKey() {
+  return getDesktopScopedStorageKey(CLOSED_STORE_KEY);
+}
+
+function readClosedStore(): Record<string, string[]> {
+  try {
+    const raw = localStorage.getItem(closedStorageKey());
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      return {};
+    }
+    return parsed as Record<string, string[]>;
+  } catch {
+    return {};
+  }
+}
+
+function loadClosedIds(workspaceId: string): string[] {
+  const list = readClosedStore()[workspaceId];
+  return Array.isArray(list) ? list.map(String).filter(Boolean) : [];
+}
+
+function saveClosedIds(workspaceId: string, ids: string[]) {
+  const store = readClosedStore();
+  if (!ids.length) delete store[workspaceId];
+  else store[workspaceId] = [...new Set(ids)];
+  try {
+    if (!Object.keys(store).length) {
+      localStorage.removeItem(closedStorageKey());
+    } else {
+      localStorage.setItem(closedStorageKey(), JSON.stringify(store));
+    }
+  } catch {
+    /* 配额不足时忽略，不影响当前会话 */
+  }
+}
+
+/** 去掉已删除任务，并保证当前激活任务始终可见；任务尚未加载时不做删减，避免冲掉本地缓存。 */
+function sanitizeClosed(
+  ids: string[],
+  tasks: EtlPipeline[],
+  active: string,
+): string[] {
+  let next = ids.map(String).filter(Boolean);
+  if (active) next = next.filter((id) => id !== active);
+  if (tasks.length) {
+    const valid = new Set(tasks.map((task) => String(task.id)));
+    next = next.filter((id) => valid.has(id));
+  }
+  return next;
+}
+
 const props = defineProps<{
+  workspaceId: string | number;
   tasks: EtlPipeline[];
   active: string;
   position: string;
@@ -24,20 +82,20 @@ const emit = defineEmits<{
   delete: [string];
   position: [string];
 }>();
-const search = ref('');
-const closed = ref<string[]>([]);
+
+const workspaceKey = computed(() => String(props.workspaceId));
+const closed = ref<string[]>(
+  sanitizeClosed(
+    loadClosedIds(String(props.workspaceId)),
+    props.tasks,
+    props.active,
+  ),
+);
 const menu = ref<{ id: string; x: number; y: number }>();
 /** 三点菜单展开状态，选完位置后自动收起。 */
 const dockMenuOpen = ref(false);
 const visible = computed(() =>
   props.tasks.filter((task) => !closed.value.includes(task.id)),
-);
-const matches = computed(() =>
-  props.tasks.filter((task) =>
-    (task.name || task.id)
-      .toLowerCase()
-      .includes(search.value.trim().toLowerCase()),
-  ),
 );
 const vertical = computed(() => props.position !== 'top');
 
@@ -47,14 +105,22 @@ function setPosition(next: TabPosition) {
   dockMenuOpen.value = false;
 }
 
-/** 检索包含已关闭任务，选中会重新打开，配置不会因关闭而丢失。 */
+/** 选中任务会重新打开已关闭标签，配置不会因关闭而丢失。 */
 function select(id: string) {
+  if (!id) return;
   closed.value = closed.value.filter((item) => item !== id);
-  search.value = '';
   emit('select', id);
 }
+
+/** 下拉选择任务：打开并激活，使其出现在标签栏。 */
+function pickTask(id: string) {
+  select(id);
+}
+
 function close(id: string) {
-  closed.value.push(id);
+  if (!closed.value.includes(id)) {
+    closed.value = [...closed.value, id];
+  }
   if (props.active === id) emit('select', visible.value[0]?.id || '');
   menu.value = undefined;
 }
@@ -76,6 +142,36 @@ function closeOthers() {
 function dismiss() {
   menu.value = undefined;
 }
+
+watch(workspaceKey, (id) => {
+  closed.value = sanitizeClosed(loadClosedIds(id), props.tasks, props.active);
+});
+
+/** 任务增删或激活切换时，校正关闭列表并保证当前任务可见。 */
+watch(
+  () => [props.tasks.map((task) => task.id).join('\0'), props.active] as const,
+  () => {
+    const next = sanitizeClosed(closed.value, props.tasks, props.active);
+    if (
+      next.length !== closed.value.length ||
+      next.some((id, i) => id !== closed.value[i])
+    ) {
+      closed.value = next;
+    }
+  },
+);
+
+watch(
+  closed,
+  (ids) => {
+    saveClosedIds(
+      workspaceKey.value,
+      sanitizeClosed(ids, props.tasks, props.active),
+    );
+  },
+  { deep: true },
+);
+
 onMounted(() => document.addEventListener('click', dismiss));
 onBeforeUnmount(() => document.removeEventListener('click', dismiss));
 </script>
@@ -89,7 +185,7 @@ onBeforeUnmount(() => document.removeEventListener('click', dismiss));
     }"
     aria-label="同步任务标签栏"
   >
-    <div class="tab-tools">
+    <div class="tab-tools-start">
       <el-dropdown class="add-dropdown" @command="emit('add', $event === 'conditional')">
         <el-button :icon="Plus" type="primary" class="add-btn">新增任务</el-button>
         <template #dropdown
@@ -101,77 +197,8 @@ onBeforeUnmount(() => document.removeEventListener('click', dismiss));
           </el-dropdown-menu></template
         >
       </el-dropdown>
-      <div class="tool-row">
-        <!-- 对齐 Chrome DevTools：三点打开停靠位置选择 -->
-        <el-popover
-          v-model:visible="dockMenuOpen"
-          trigger="click"
-          :width="168"
-          :placement="vertical ? 'bottom' : 'bottom-start'"
-          popper-class="etl-dock-popper"
-        >
-          <template #reference>
-            <el-button
-              :icon="MoreFilled"
-              class="dock-trigger"
-              title="标签栏位置"
-              aria-label="标签栏位置"
-            />
-          </template>
-          <div class="dock-menu" role="menu" aria-label="选择标签栏位置">
-            <div class="dock-menu__title">标签栏位置</div>
-            <div class="dock-icons" role="group">
-              <button
-                v-for="opt in DOCK_OPTIONS"
-                :key="opt.value"
-                type="button"
-                class="dock-icon"
-                :class="{ active: position === opt.value }"
-                :title="opt.label"
-                :aria-label="opt.label"
-                :aria-pressed="position === opt.value"
-                role="menuitemradio"
-                @click="setPosition(opt.value)"
-              >
-                <span class="dock-preview" :data-side="opt.value" aria-hidden="true">
-                  <span class="dock-preview__chrome" />
-                  <span class="dock-preview__panel" />
-                </span>
-              </button>
-            </div>
-          </div>
-        </el-popover>
-        <!-- 检索输入常显；有关键词时下拉展示结果（含已关闭任务） -->
-        <div class="search-box" :class="{ open: !!search.trim() }">
-          <el-input
-            v-model="search"
-            :prefix-icon="Search"
-            clearable
-            class="search-input"
-            placeholder="检索任务"
-            title="检索任务（包含已关闭任务）"
-            aria-label="检索任务"
-          />
-          <div v-if="search.trim()" class="search-results" role="listbox">
-            <button
-              v-for="task in matches"
-              :key="task.id"
-              type="button"
-              role="option"
-              @click="select(task.id)"
-            >
-              {{ task.name }}
-              <small v-if="closed.includes(task.id)">已关闭 · 点击打开</small>
-            </button>
-            <el-empty
-              v-if="!matches.length"
-              :image-size="40"
-              description="无匹配任务"
-            />
-          </div>
-        </div>
-      </div>
     </div>
+
     <div
       class="tab-items"
       role="tablist"
@@ -199,9 +226,69 @@ onBeforeUnmount(() => document.removeEventListener('click', dismiss));
         />
       </div>
       <span v-if="!visible.length" class="empty-tabs"
-        >使用检索重新打开任务</span
+        >使用任务下拉重新打开</span
       >
     </div>
+
+    <!-- 最右侧：任务下拉 + 三点停靠菜单 -->
+    <div class="tab-tools-end">
+      <el-select
+        class="task-picker"
+        :model-value="active || undefined"
+        filterable
+        placeholder="选择任务"
+        title="选择任务（包含已关闭任务）"
+        aria-label="选择任务"
+        :teleported="true"
+        @change="pickTask"
+      >
+        <el-option
+          v-for="task in tasks"
+          :key="task.id"
+          :label="task.name || task.id"
+          :value="task.id"
+        />
+      </el-select>
+      <el-popover
+        v-model:visible="dockMenuOpen"
+        trigger="click"
+        :width="168"
+        placement="bottom-end"
+        popper-class="etl-dock-popper"
+      >
+        <template #reference>
+          <el-button
+            :icon="MoreFilled"
+            class="dock-trigger"
+            title="标签栏位置"
+            aria-label="标签栏位置"
+          />
+        </template>
+        <div class="dock-menu" role="menu" aria-label="选择标签栏位置">
+          <div class="dock-menu__title">标签栏位置</div>
+          <div class="dock-icons" role="group">
+            <button
+              v-for="opt in DOCK_OPTIONS"
+              :key="opt.value"
+              type="button"
+              class="dock-icon"
+              :class="{ active: position === opt.value }"
+              :title="opt.label"
+              :aria-label="opt.label"
+              :aria-pressed="position === opt.value"
+              role="menuitemradio"
+              @click="setPosition(opt.value)"
+            >
+              <span class="dock-preview" :data-side="opt.value" aria-hidden="true">
+                <span class="dock-preview__chrome" />
+                <span class="dock-preview__panel" />
+              </span>
+            </button>
+          </div>
+        </div>
+      </el-popover>
+    </div>
+
     <Teleport to="body"
       ><div
         v-if="menu"
@@ -236,72 +323,38 @@ onBeforeUnmount(() => document.removeEventListener('click', dismiss));
 .task-tabs {
   display: flex;
   gap: 10px;
+  align-items: center;
   padding: 10px 12px;
   border-bottom: 1px solid var(--el-border-color);
   min-width: 0;
   background: var(--el-bg-color);
 }
-.tab-tools {
+.tab-tools-start {
   display: flex;
   gap: 6px;
   align-items: center;
   flex-shrink: 0;
 }
-.tool-row {
+.tab-tools-end {
   display: flex;
   gap: 6px;
   align-items: center;
+  flex-shrink: 0;
+  margin-left: auto;
 }
 .dock-trigger {
   padding: 8px;
 }
-.search-box {
-  position: relative;
-  width: 180px;
-  min-width: 120px;
-}
-.search-input {
-  width: 100%;
-}
-.search-results {
-  position: absolute;
-  z-index: 20;
-  top: calc(100% + 4px);
-  left: 0;
-  right: 0;
-  min-width: 220px;
-  max-height: 300px;
-  overflow: auto;
-  margin-top: 0;
-  padding: 4px;
-  border: 1px solid var(--el-border-color);
-  border-radius: 6px;
-  background: var(--el-bg-color-overlay);
-  box-shadow: var(--el-box-shadow-light);
-}
-.search-results button {
-  display: block;
-  width: 100%;
-  padding: 8px;
-  text-align: left;
-  border: 0;
-  border-radius: 4px;
-  background: transparent;
-  color: inherit;
-  cursor: pointer;
-}
-.search-results button:hover {
-  background: var(--el-fill-color-light);
-}
-.search-results small {
-  display: block;
-  opacity: 0.65;
+.task-picker {
+  width: 200px;
+  min-width: 140px;
 }
 .tab-items {
   display: flex;
   gap: 4px;
   overflow: auto;
   min-width: 0;
+  flex: 1;
   align-items: center;
 }
 .tab-item {
@@ -328,6 +381,7 @@ onBeforeUnmount(() => document.removeEventListener('click', dismiss));
 /* 左右侧：工具区置顶，标签列表纵向占满剩余高度 */
 .vertical {
   flex-direction: column;
+  align-items: stretch;
   width: 100%;
   height: 100%;
   min-height: 0;
@@ -342,11 +396,17 @@ onBeforeUnmount(() => document.removeEventListener('click', dismiss));
 .vertical.pos-right {
   border-left: 1px solid var(--el-border-color);
 }
-.vertical .tab-tools {
+.vertical .tab-tools-start {
+  order: 1;
   flex-direction: column;
   align-items: stretch;
-  gap: 8px;
   width: 100%;
+}
+.vertical .tab-tools-end {
+  order: 2;
+  margin-left: 0;
+  width: 100%;
+  justify-content: flex-end;
 }
 .vertical .add-dropdown {
   display: block;
@@ -355,22 +415,13 @@ onBeforeUnmount(() => document.removeEventListener('click', dismiss));
 .vertical .add-btn {
   width: 100%;
 }
-.vertical .tool-row {
-  width: 100%;
-  justify-content: flex-end;
-}
-.vertical .search-box {
+.vertical .task-picker {
   flex: 1;
   width: auto;
   min-width: 0;
 }
-.vertical .search-results {
-  right: 0;
-  left: auto;
-  width: 100%;
-  min-width: 0;
-}
 .vertical .tab-items {
+  order: 3;
   flex: 1;
   flex-direction: column;
   align-items: stretch;

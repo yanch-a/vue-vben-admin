@@ -1,7 +1,7 @@
 <script setup lang="ts">
 /**
- * SQL ETL 操作台：工作区预选具体数据源，每个步骤配置查询或写入，结果引用自动形成依赖。
- * 简洁步骤编辑与完整 JSON 共享同一文档，支持关联查询和跨库条件查询。
+ * SQL ETL 操作台：工作区在左侧可收起列表，任务用可停靠标签栏。
+ * 步骤排成流水线并标出当前步骤；结果预览可停靠右侧/下方或隐藏。JSON 与步骤共用同一份文档。
  * @author yanch
  */
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
@@ -14,7 +14,7 @@ import {
   Plus,
   VideoPlay,
   Refresh,
-  MagicStick,
+  MoreFilled,
 } from '@element-plus/icons-vue';
 import type {
   EtlConnectionOption,
@@ -73,16 +73,39 @@ const loading = ref(false),
   previewing = ref(false);
 const sidebarOpen = ref(localStorage.getItem('lemon-etl-sidebar') !== 'closed');
 const taskPosition = ref(
-  ['top', 'left', 'right'].includes(
-    localStorage.getItem('lemon-etl-tabs') || '',
-  )
+  ['top', 'left', 'right'].includes(localStorage.getItem('lemon-etl-tabs') || '')
     ? localStorage.getItem('lemon-etl-tabs')!
     : 'top',
 );
+/** 结果预览停靠：右侧 / 下方 / 不显示；偏好记在本机。 */
+type ResultDock = 'right' | 'bottom' | 'hidden';
+const RESULT_DOCK_OPTIONS: { value: ResultDock; label: string }[] = [
+  { value: 'right', label: '右侧结果' },
+  { value: 'bottom', label: '下方结果' },
+  { value: 'hidden', label: '不显示' },
+];
+function loadResultDock(): ResultDock {
+  const saved = localStorage.getItem('lemon-etl-result-dock');
+  if (saved === 'right' || saved === 'bottom' || saved === 'hidden') return saved;
+  // 兼容旧版「隐藏结果」开关
+  if (localStorage.getItem('lemon-etl-result') === 'closed') return 'hidden';
+  return 'right';
+}
+const resultDock = ref<ResultDock>(loadResultDock());
+const resultDockMenuOpen = ref(false);
 /** 用户布局偏好不写进可移植任务 JSON。 */
 function setTaskPosition(position: string) {
   taskPosition.value = position;
   localStorage.setItem('lemon-etl-tabs', position);
+}
+function toggleSidebar() {
+  sidebarOpen.value = !sidebarOpen.value;
+  localStorage.setItem('lemon-etl-sidebar', sidebarOpen.value ? 'open' : 'closed');
+}
+function setResultDock(next: ResultDock) {
+  resultDock.value = next;
+  localStorage.setItem('lemon-etl-result-dock', next);
+  resultDockMenuOpen.value = false;
 }
 const workspaces = ref<EtlWorkspaceRow[]>([]),
   activeWorkspace = ref<EtlWorkspaceRow>();
@@ -192,6 +215,11 @@ const previews = ref<
   >
 >({});
 const previewResult = computed(() => previews.value[selectedNodeId.value]);
+/** 写入步骤右侧对照的是输入查询的样本，不是写入节点自己的预览。 */
+const inputPreview = computed(() => {
+  const id = node.value?.config?.inputStepId;
+  return id ? previews.value[id] : undefined;
+});
 const newVisible = ref(false),
   sourcesVisible = ref(false);
 const newName = ref(''),
@@ -352,14 +380,6 @@ function sourceLabel(ref?: string) {
 function errorMessage(error: any) {
   return error?.msg || error?.message || '操作失败';
 }
-function toggleSidebar() {
-  sidebarOpen.value = !sidebarOpen.value;
-  localStorage.setItem(
-    'lemon-etl-sidebar',
-    sidebarOpen.value ? 'open' : 'closed',
-  );
-}
-
 /**
  * 切换工作区 / 离开页面前：把未保存修改落到本地，不再弹「放弃」以免丢稿。
  * 返回 true 表示可以继续切换。
@@ -701,11 +721,26 @@ async function deleteWorkspace() {
   }
 }
 
-/** 右键：丢掉本地未保存稿，重新加载服务端版本。 */
-async function abandonLocalDraft() {
-  const target = workspaces.value.find(
+/** 右键或「更多」选定的工作区；更多菜单先把目标设成当前工作区。 */
+const workspaceMenu = ref<{ id: string | number; x: number; y: number }>();
+function openWorkspaceMenu(event: MouseEvent, workspace: EtlWorkspaceRow) {
+  workspaceMenu.value = {
+    id: workspace.id,
+    x: Math.max(8, Math.min(event.clientX, window.innerWidth - 160)),
+    y: Math.max(8, Math.min(event.clientY, window.innerHeight - 220)),
+  };
+}
+function dismissWorkspaceMenu() {
+  workspaceMenu.value = undefined;
+}
+function menuWorkspace() {
+  return workspaces.value.find(
     (item) => String(item.id) === String(workspaceMenu.value?.id),
   );
+}
+/** 丢掉目标工作区的本地未保存稿，重新加载服务端版本。 */
+async function abandonLocalDraft() {
+  const target = menuWorkspace() || activeWorkspace.value;
   dismissWorkspaceMenu();
   if (!target || !isWorkspaceDirty(target)) return;
   try {
@@ -722,20 +757,16 @@ async function abandonLocalDraft() {
       ElMessage.error(errorMessage(error));
   }
 }
-/** 工作区右键菜单：定时执行/消息通知/改名/删除；配置不切换当前草稿。 */
+/** 定时和通知按右键选中的工作区打开，不因此切换当前草稿。 */
 const scheduleDialog = ref<InstanceType<typeof WorkspaceSchedule>>();
 const notifyDialog = ref<InstanceType<typeof WorkspaceNotify>>();
 function configureSchedule() {
-  const target = workspaces.value.find(
-    (item) => String(item.id) === String(workspaceMenu.value?.id),
-  );
+  const target = menuWorkspace() || activeWorkspace.value;
   dismissWorkspaceMenu();
   if (target) void scheduleDialog.value?.open(target);
 }
 function configureNotify() {
-  const target = workspaces.value.find(
-    (item) => String(item.id) === String(workspaceMenu.value?.id),
-  );
+  const target = menuWorkspace() || activeWorkspace.value;
   dismissWorkspaceMenu();
   if (target) void notifyDialog.value?.open(target);
 }
@@ -759,21 +790,8 @@ async function openScheduleLogs(workspaceId: string | number, runId: string) {
     ElMessage.error(errorMessage(error));
   }
 }
-const workspaceMenu = ref<{ id: string | number; x: number; y: number }>();
-function openWorkspaceMenu(event: MouseEvent, workspace: EtlWorkspaceRow) {
-  workspaceMenu.value = {
-    id: workspace.id,
-    x: Math.max(8, Math.min(event.clientX, window.innerWidth - 160)),
-    y: Math.max(8, Math.min(event.clientY, window.innerHeight - 160)),
-  };
-}
-function dismissWorkspaceMenu() {
-  workspaceMenu.value = undefined;
-}
 async function renameWorkspace() {
-  const target = workspaces.value.find(
-    (item) => String(item.id) === String(workspaceMenu.value?.id),
-  );
+  const target = menuWorkspace() || activeWorkspace.value;
   dismissWorkspaceMenu();
   if (!target) return;
   try {
@@ -797,15 +815,35 @@ async function renameWorkspace() {
   }
 }
 async function deleteWorkspaceFromMenu() {
-  const target = workspaces.value.find(
-    (item) => String(item.id) === String(workspaceMenu.value?.id),
-  );
+  const target = menuWorkspace() || activeWorkspace.value;
   dismissWorkspaceMenu();
   if (!target) return;
   if (String(target.id) !== String(activeWorkspace.value?.id)) {
     if (!(await openWorkspace(target, true))) return;
   }
   await deleteWorkspace();
+}
+
+/** 「更多」作用在当前工作区，先记下目标再走和右键相同的入口。 */
+function onMore(command: string) {
+  if (activeWorkspace.value)
+    workspaceMenu.value = { id: activeWorkspace.value.id, x: 0, y: 0 };
+  if (command === 'sources') openSources();
+  else if (command === 'mode')
+    void changeMode(editorMode.value === 'json' ? 'steps' : 'json');
+  else if (command === 'import-json') jsonInput.value?.click();
+  else if (command === 'import-kettle') kettleInput.value?.click();
+  else if (command === 'export') void exportJson();
+  else if (command === 'ai') void openAi();
+  else if (command === 'runs') {
+    runsVisible.value = true;
+    void refreshRuns();
+  } else if (command === 'publish') void publish();
+  else if (command === 'schedule') configureSchedule();
+  else if (command === 'notify') configureNotify();
+  else if (command === 'rename') void renameWorkspace();
+  else if (command === 'abandon') void abandonLocalDraft();
+  else if (command === 'delete') void deleteWorkspaceFromMenu();
 }
 
 async function addPipeline(conditional = false) {
@@ -864,6 +902,10 @@ function addStep(type: 'database.query' | 'database.write') {
   pipeline.value.nodes.push(item);
   selectedNodeId.value = item.id;
   syncStepDependencies(pipeline.value, item);
+}
+/** 流水线末尾的下拉只接受查询或写入，避免把任意字符串写进步骤类型。 */
+function addStepCommand(type: string) {
+  if (type === 'database.query' || type === 'database.write') addStep(type);
 }
 async function removeStep() {
   if (!pipeline.value || !node.value) return;
@@ -931,6 +973,15 @@ function addMapping() {
 /** 查询预览会执行必要的只读上游，直接检验关联 SQL 与跨库参数能否工作。 */
 async function preview() {
   if (node.value) await previewQuery(node.value.id);
+}
+/** 顶栏预览：查询看当前步骤，写入则预览其输入查询并加载字段。 */
+async function previewCurrent() {
+  if (!node.value || editorMode.value === 'json') return;
+  if (['database.write', 'database.upsert'].includes(node.value.type)) {
+    await previewInput();
+    return;
+  }
+  await preview();
 }
 /** 写入配置可直接预览输入并加载字段，不需要来回切换查询/写入步骤。 */
 async function previewInput() {
@@ -1485,55 +1536,37 @@ onBeforeUnmount(() => {
   <Page auto-content-height class="etl-page">
     <div v-loading="loading" class="etl-shell">
       <header class="toolbar">
-        <div class="toolbar-title">
+        <div class="toolbar-nav">
           <el-button
             :icon="sidebarOpen ? Fold : Expand"
-            :title="sidebarOpen ? '隐藏任务区' : '展开任务区'"
+            :title="sidebarOpen ? '隐藏工作区' : '展开工作区'"
             @click="toggleSidebar"
-          /><strong>数据同步</strong
-          ><el-tag v-if="dirty" type="warning">未保存</el-tag>
+          />
+          <strong>数据同步</strong>
+          <div v-if="activeWorkspace" class="source-chips">
+            <button
+              v-for="[key, source] in resources"
+              :key="key"
+              type="button"
+              class="source-chip"
+              :title="`${source.displayName} · ${source.instance || '待绑定'}`"
+              @click="openSources"
+            >
+              {{ source.displayName }}
+            </button>
+            <el-button v-if="!resources.length" link @click="openSources"
+              >添加数据源</el-button
+            >
+          </div>
         </div>
         <div class="toolbar-actions">
-          <el-dropdown
-            @command="
-              $event === 'json' ? jsonInput?.click() : kettleInput?.click()
-            "
-            ><el-button :disabled="!activeWorkspace">导入配置</el-button
-            ><template #dropdown
-              ><el-dropdown-menu
-                ><el-dropdown-item command="json">Lemon JSON</el-dropdown-item
-                ><el-dropdown-item command="kettle"
-                  >Kettle 配置</el-dropdown-item
-                ></el-dropdown-menu
-              ></template
-            ></el-dropdown
-          >
-          <el-segmented
-            class="editor-mode-switch"
-            :model-value="editorMode"
-            :disabled="!activeWorkspace"
-            :options="[
-              { label: '步骤配置', value: 'steps' },
-              { label: 'JSON', value: 'json' },
-            ]"
-            @change="changeMode($event as 'steps' | 'json')"
-          />
-          <el-button :disabled="!activeWorkspace" @click="exportJson"
-            >导出 JSON</el-button
-          >
+          <el-tag v-if="dirty" type="warning">未保存</el-tag>
           <el-button
-            :icon="MagicStick"
-            :disabled="!activeWorkspace"
-            @click="openAi"
-            >AI 配置</el-button
-          >
-          <el-button
-            :disabled="!activeWorkspace"
-            @click="
-              runsVisible = true;
-              refreshRuns();
-            "
-            >运行记录</el-button
+            :icon="VideoPlay"
+            :disabled="!node || editorMode === 'json'"
+            :loading="previewing"
+            @click="previewCurrent"
+            >预览</el-button
           >
           <el-button
             :disabled="!activeWorkspace"
@@ -1541,17 +1574,47 @@ onBeforeUnmount(() => {
             @click="saveDraft"
             >保存</el-button
           >
-          <el-button :disabled="!activeWorkspace" @click="publish"
-            >发布</el-button
-          >
           <el-button
-            :icon="VideoPlay"
             type="primary"
             :disabled="!pipeline || editorMode === 'json'"
             :loading="running"
             @click="runPipeline"
-            >运行任务</el-button
+            >运行</el-button
           >
+          <el-dropdown
+            trigger="click"
+            :disabled="!activeWorkspace"
+            @command="onMore"
+          >
+            <el-button :disabled="!activeWorkspace">更多</el-button>
+            <template #dropdown>
+              <el-dropdown-menu>
+                <el-dropdown-item command="sources">数据源</el-dropdown-item>
+                <el-dropdown-item command="mode">{{
+                  editorMode === 'json' ? '返回步骤配置' : 'JSON'
+                }}</el-dropdown-item>
+                <el-dropdown-item command="import-json"
+                  >导入 Lemon JSON</el-dropdown-item
+                >
+                <el-dropdown-item command="import-kettle"
+                  >导入 Kettle</el-dropdown-item
+                >
+                <el-dropdown-item command="export">导出 JSON</el-dropdown-item>
+                <el-dropdown-item command="ai">AI 配置</el-dropdown-item>
+                <el-dropdown-item command="runs">运行记录</el-dropdown-item>
+                <el-dropdown-item command="publish">发布</el-dropdown-item>
+                <el-dropdown-item command="schedule">定时执行</el-dropdown-item>
+                <el-dropdown-item command="notify">消息通知</el-dropdown-item>
+                <el-dropdown-item command="rename">改名</el-dropdown-item>
+                <el-dropdown-item v-if="dirty" command="abandon"
+                  >放弃本地未保存修改</el-dropdown-item
+                >
+                <el-dropdown-item command="delete" divided
+                  >删除工作区</el-dropdown-item
+                >
+              </el-dropdown-menu>
+            </template>
+          </el-dropdown>
         </div>
         <input
           ref="jsonInput"
@@ -1586,8 +1649,8 @@ onBeforeUnmount(() => {
       <div class="etl-body">
         <aside v-if="sidebarOpen" class="workspace-sidebar">
           <div class="sidebar-title">
-            <span>工作区</span
-            ><el-button
+            <span>工作区</span>
+            <el-button
               :icon="Plus"
               circle
               link
@@ -1629,7 +1692,7 @@ onBeforeUnmount(() => {
           />
           <Teleport to="body">
             <div
-              v-if="workspaceMenu"
+              v-if="workspaceMenu && workspaceMenu.x"
               class="workspace-context-menu"
               :style="{
                 left: `${workspaceMenu.x}px`,
@@ -1666,6 +1729,7 @@ onBeforeUnmount(() => {
           <TaskTabs
             :key="String(activeWorkspace.id)"
             class="workspace-tabs"
+            :workspace-id="activeWorkspace.id"
             :tasks="doc.pipelines"
             :active="activePipelineId"
             :position="taskPosition"
@@ -1697,42 +1761,104 @@ onBeforeUnmount(() => {
                   >删除任务</el-button
                 >
               </div>
-              <div class="step-layout">
-                <aside class="steps-sidebar">
+              <div class="flow-strip" aria-label="步骤流水线">
+                <div
+                  v-for="(step, index) in pipeline.nodes"
+                  :key="step.id"
+                  class="flow-node"
+                >
+                  <span v-if="index > 0" class="flow-arrow" aria-hidden="true"
+                    >→</span
+                  >
                   <button
-                    v-for="(step, index) in pipeline.nodes"
-                    :key="step.id"
-                    class="step-item"
+                    type="button"
+                    class="step-item flow-step"
                     :class="{
                       active: selectedNodeId === step.id,
                       disabled: step.enabled === false,
                     }"
+                    :aria-current="selectedNodeId === step.id ? 'step' : undefined"
                     @click="selectedNodeId = step.id"
                   >
                     <span class="step-number">{{ index + 1 }}</span>
-                    <div>
-                      <strong>{{ step.name || stepTitle(step) }}</strong
-                      ><small
+                    <span class="flow-step-text">
+                      <strong>{{ step.name || stepTitle(step) }}</strong>
+                      <small
                         >{{ stepTitle(step)
                         }}<template v-if="step.type !== 'transform.select'">
                           · {{ sourceLabel(step.resourceRef) }}</template
                         ></small
                       >
-                    </div>
+                    </span>
+                    <em v-if="selectedNodeId === step.id" class="step-current"
+                      >当前</em
+                    >
                   </button>
-                  <el-button
-                    class="add-step"
-                    :icon="Plus"
-                    @click="addStep('database.query')"
-                    >查询步骤</el-button
-                  ><el-button
-                    class="add-step"
-                    :icon="Plus"
-                    @click="addStep('database.write')"
-                    >写入步骤</el-button
+                </div>
+                <el-dropdown @command="addStepCommand">
+                  <el-button class="add-step-inline" :icon="Plus"
+                    >步骤</el-button
                   >
-                </aside>
-                <section v-if="node" class="step-editor">
+                  <template #dropdown>
+                    <el-dropdown-menu>
+                      <el-dropdown-item command="database.query"
+                        >查询步骤</el-dropdown-item
+                      >
+                      <el-dropdown-item command="database.write"
+                        >写入步骤</el-dropdown-item
+                      >
+                    </el-dropdown-menu>
+                  </template>
+                </el-dropdown>
+                <el-popover
+                  v-model:visible="resultDockMenuOpen"
+                  trigger="click"
+                  :width="168"
+                  placement="bottom-end"
+                  popper-class="etl-result-dock-popper"
+                >
+                  <template #reference>
+                    <el-button
+                      :icon="MoreFilled"
+                      class="result-dock-trigger"
+                      title="结果预览位置"
+                      aria-label="结果预览位置"
+                    />
+                  </template>
+                  <div class="dock-menu" role="menu" aria-label="选择结果预览位置">
+                    <div class="dock-menu__title">结果预览</div>
+                    <div class="dock-icons" role="group">
+                      <button
+                        v-for="opt in RESULT_DOCK_OPTIONS"
+                        :key="opt.value"
+                        type="button"
+                        class="dock-icon"
+                        :class="{ active: resultDock === opt.value }"
+                        :title="opt.label"
+                        :aria-label="opt.label"
+                        :aria-pressed="resultDock === opt.value"
+                        role="menuitemradio"
+                        @click="setResultDock(opt.value)"
+                      >
+                        <span
+                          class="dock-preview"
+                          :data-side="opt.value"
+                          aria-hidden="true"
+                        >
+                          <span class="dock-preview__chrome" />
+                          <span class="dock-preview__panel" />
+                        </span>
+                      </button>
+                    </div>
+                  </div>
+                </el-popover>
+              </div>
+              <div
+                v-if="node"
+                class="step-split"
+                :class="`result-${resultDock}`"
+              >
+                <section class="step-editor">
                   <div class="step-header">
                     <el-input
                       v-model="node.name"
@@ -1903,41 +2029,9 @@ onBeforeUnmount(() => {
                           :max="50000"
                           :step="1000"
                         /><span class="help"
-                          >每页读取行数；总量不截断，预览仅展示 100 行</span
-                        ><el-button
-                          type="primary"
-                          plain
-                          :icon="VideoPlay"
-                          :loading="previewing"
-                          @click="preview"
-                          >预览查询</el-button
+                          >每页读取行数；总量不截断，右侧预览最多 100 行</span
                         >
                       </div>
-                      <section v-if="previewResult" class="preview-panel">
-                        <div class="section-title">
-                          <strong
-                            >预览读取 {{ previewResult.rowCount }} 行</strong
-                          ><small>{{
-                            previewResult.stale
-                              ? '旧预览 · 配置已修改'
-                              : previewResult.sampled
-                                ? '最多 100 行样本'
-                                : '结果预览'
-                          }}</small>
-                        </div>
-                        <el-table
-                          :data="previewResult.rows"
-                          max-height="280"
-                          border
-                          ><el-table-column
-                            v-for="column in previewResult.columns"
-                            :key="column"
-                            :prop="column"
-                            :label="column"
-                            min-width="130"
-                            show-overflow-tooltip
-                        /></el-table>
-                      </section>
                     </template>
                     <template v-else-if="node.type === 'transform.select'">
                       <el-form-item label="输入步骤"
@@ -1987,9 +2081,6 @@ onBeforeUnmount(() => {
                           allow-create
                           default-first-option
                       /></el-form-item>
-                      <el-button :loading="previewing" @click="preview"
-                        >预览字段选择结果</el-button
-                      >
                     </template>
                     <template
                       v-else-if="
@@ -2084,52 +2175,6 @@ onBeforeUnmount(() => {
                           >当前为空：已有行不更新，只插入缺失行。</small
                         >
                       </el-form-item>
-                      <div class="section-title">
-                        <strong>字段映射</strong>
-                        <div>
-                          <el-button
-                            link
-                            :loading="previewing"
-                            @click="previewInput"
-                            >预览输入并加载字段</el-button
-                          ><el-button link @click="autoMapping"
-                            >同名映射</el-button
-                          ><el-button link :icon="Plus" @click="addMapping"
-                            >添加字段</el-button
-                          >
-                        </div>
-                      </div>
-                      <p class="help">
-                        留空时按查询结果同名写入。SQL
-                        字段别名可以直接对应目标字段。
-                      </p>
-                      <div
-                        v-for="(mapping, index) in node.config.mappings || []"
-                        :key="index"
-                        class="mapping-row"
-                      >
-                        <el-select
-                          v-model="mapping.source"
-                          filterable
-                          allow-create
-                          default-first-option
-                          placeholder="查询结果字段"
-                          ><el-option
-                            v-for="column in inputColumns()"
-                            :key="column"
-                            :value="column"
-                            :label="column" /></el-select
-                        ><span>→</span
-                        ><el-input
-                          v-model="mapping.target"
-                          placeholder="目标字段"
-                        /><el-button
-                          link
-                          type="danger"
-                          @click="node.config.mappings.splice(index, 1)"
-                          >删除</el-button
-                        >
-                      </div>
                       <el-form-item label="每批写入行数" class="batch-field"
                         ><el-input-number
                           v-model="node.config.batchSize"
@@ -2172,8 +2217,136 @@ onBeforeUnmount(() => {
                     >
                   </div>
                 </section>
-                <el-empty v-else description="添加一个查询步骤开始配置" />
+                <aside class="step-result" aria-label="预览与字段映射">
+                  <template
+                    v-if="
+                      node.type === 'database.query' ||
+                      node.type === 'transform.select'
+                    "
+                  >
+                    <div class="section-title">
+                      <strong>{{
+                        previewResult
+                          ? `预览 ${previewResult.rowCount} 行`
+                          : '结果预览'
+                      }}</strong>
+                      <small v-if="previewResult">{{
+                        previewResult.stale
+                          ? '旧预览 · 配置已修改'
+                          : previewResult.sampled
+                            ? '最多 100 行样本'
+                            : '结果预览'
+                      }}</small>
+                    </div>
+                    <p class="help">
+                      正式运行不截断总行数。这里只留样本，用来确认 SQL 和参数。
+                    </p>
+                    <el-table
+                      v-if="previewResult"
+                      :data="previewResult.rows"
+                      max-height="420"
+                      border
+                      ><el-table-column
+                        v-for="column in previewResult.columns"
+                        :key="column"
+                        :prop="column"
+                        :label="column"
+                        min-width="130"
+                        show-overflow-tooltip
+                    /></el-table>
+                    <el-empty
+                      v-else
+                      :image-size="72"
+                      description="点顶部「预览」查看样本"
+                    />
+                  </template>
+                  <template
+                    v-else-if="
+                      ['database.write', 'database.upsert'].includes(node.type)
+                    "
+                  >
+                    <div class="section-title">
+                      <strong>字段映射</strong>
+                      <div>
+                        <el-button
+                          link
+                          :loading="previewing"
+                          @click="previewInput"
+                          >加载字段</el-button
+                        ><el-button link @click="autoMapping">同名映射</el-button
+                        ><el-button link :icon="Plus" @click="addMapping"
+                          >添加字段</el-button
+                        >
+                      </div>
+                    </div>
+                    <p class="help">
+                      留空时按查询结果同名写入。SQL
+                      字段别名可以直接对应目标字段。
+                    </p>
+                    <div
+                      v-for="(mapping, index) in node.config.mappings || []"
+                      :key="index"
+                      class="mapping-row"
+                    >
+                      <el-select
+                        v-model="mapping.source"
+                        filterable
+                        allow-create
+                        default-first-option
+                        placeholder="查询结果字段"
+                        ><el-option
+                          v-for="column in inputColumns()"
+                          :key="column"
+                          :value="column"
+                          :label="column" /></el-select
+                      ><span>→</span
+                      ><el-input
+                        v-model="mapping.target"
+                        placeholder="目标字段"
+                      /><el-button
+                        link
+                        type="danger"
+                        @click="node.config.mappings.splice(index, 1)"
+                        >删除</el-button
+                      >
+                    </div>
+                    <p
+                      v-if="!(node.config.mappings || []).length"
+                      class="help"
+                    >
+                      还没有单独映射。点「加载字段」后可按同名填入，也可以保持留空。
+                    </p>
+                    <section v-if="inputPreview" class="preview-panel">
+                      <div class="section-title">
+                        <strong>输入样本 {{ inputPreview.rowCount }} 行</strong
+                        ><small>{{
+                          inputPreview.stale
+                            ? '旧预览 · 配置已修改'
+                            : '最多 100 行样本'
+                        }}</small>
+                      </div>
+                      <el-table
+                        :data="inputPreview.rows"
+                        max-height="240"
+                        border
+                        ><el-table-column
+                          v-for="column in inputPreview.columns"
+                          :key="column"
+                          :prop="column"
+                          :label="column"
+                          min-width="120"
+                          show-overflow-tooltip
+                      /></el-table>
+                    </section>
+                  </template>
+                  <el-empty
+                    v-else
+                    :image-size="72"
+                    description="此步骤请在左侧或 JSON 中处理"
+                  />
+                </aside>
               </div>
+              <el-empty v-else description="添加一个查询步骤开始配置" />
             </template>
             <el-empty v-else description="添加同步任务开始配置"
               ><el-button type="primary" @click="addPipeline()"
@@ -2382,14 +2555,14 @@ onBeforeUnmount(() => {
   min-height: calc(100vh - 130px);
 }
 .toolbar,
-.toolbar-title,
+.toolbar-nav,
 .toolbar-actions,
-.workspace-head,
-.task-bar,
 .pipeline-header,
 .step-header,
 .section-title,
-.preview-actions {
+.preview-actions,
+.flow-strip,
+.source-chips {
   display: flex;
   align-items: center;
   gap: 10px;
@@ -2400,11 +2573,34 @@ onBeforeUnmount(() => {
   border-bottom: 1px solid var(--el-border-color-light);
   flex-wrap: wrap;
 }
+.toolbar-nav {
+  flex: 1;
+  min-width: 0;
+  flex-wrap: wrap;
+}
 .toolbar-actions {
   flex-wrap: wrap;
 }
-.editor-mode-switch {
-  flex-shrink: 0;
+.nav-select {
+  width: 180px;
+}
+.source-chips {
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.source-chip {
+  border: 1px solid var(--el-border-color);
+  background: var(--el-fill-color-light);
+  color: var(--el-text-color-primary);
+  border-radius: 999px;
+  padding: 2px 10px;
+  font-size: 12px;
+  line-height: 20px;
+  cursor: pointer;
+}
+.source-chip:hover {
+  border-color: var(--el-color-primary-light-5);
+  color: var(--el-color-primary);
 }
 .etl-body {
   display: flex;
@@ -2415,6 +2611,7 @@ onBeforeUnmount(() => {
   padding: 12px;
   border-right: 1px solid var(--el-border-color-light);
   background: var(--el-fill-color-lighter);
+  overflow: auto;
 }
 .sidebar-title {
   display: flex;
@@ -2443,9 +2640,7 @@ onBeforeUnmount(() => {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.workspace-item small,
-.help,
-.head-help {
+.workspace-item small {
   color: var(--el-text-color-secondary);
   font-size: 12px;
 }
@@ -2455,7 +2650,6 @@ onBeforeUnmount(() => {
 }
 .workspace-item.dirty {
   border-color: var(--el-color-warning-light-5);
-  background: var(--el-color-warning-light-9);
 }
 .workspace-item.dirty.active {
   border-color: var(--el-color-warning);
@@ -2514,12 +2708,12 @@ onBeforeUnmount(() => {
 }
 .workspace-main.tasks-left {
   grid-template-areas: 'tabs editor';
-  grid-template-columns: 200px minmax(0, 1fr);
+  grid-template-columns: 220px minmax(0, 1fr);
   grid-template-rows: minmax(0, 1fr);
 }
 .workspace-main.tasks-right {
   grid-template-areas: 'editor tabs';
-  grid-template-columns: minmax(0, 1fr) 200px;
+  grid-template-columns: minmax(0, 1fr) 220px;
   grid-template-rows: minmax(0, 1fr);
 }
 .workspace-main.tasks-left .workspace-tabs,
@@ -2548,14 +2742,70 @@ onBeforeUnmount(() => {
 .pipeline-header > .el-input {
   width: 300px;
 }
-.step-layout {
-  display: flex;
-  min-height: 560px;
+.help,
+.head-help {
+  color: var(--el-text-color-secondary);
+  font-size: 12px;
 }
-.steps-sidebar {
-  padding: 16px 10px;
-  flex: 0 0 210px;
-  border-right: 1px solid var(--el-border-color-light);
+.flow-strip {
+  flex-wrap: wrap;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--el-border-color-light);
+}
+.flow-node {
+  display: contents;
+}
+.flow-arrow {
+  color: var(--el-text-color-secondary);
+}
+.flow-step {
+  align-items: center;
+  width: auto;
+  max-width: 280px;
+  margin-bottom: 0;
+}
+.flow-step-text {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+.add-step-inline {
+  margin-left: 4px;
+}
+.step-split {
+  display: grid;
+  /* 编辑区与结果区等高，分隔线才能铺满 */
+  align-items: stretch;
+}
+.step-split.result-right {
+  grid-template-columns: minmax(320px, 1.15fr) minmax(280px, 0.9fr);
+}
+.step-split.result-bottom {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: auto auto;
+}
+.step-split.result-hidden {
+  grid-template-columns: minmax(0, 1fr);
+}
+.step-result {
+  min-width: 0;
+  min-height: 100%;
+  height: 100%;
+  box-sizing: border-box;
+  padding: 8px 16px 24px;
+  background: var(--el-fill-color-lighter);
+}
+.step-split.result-right .step-result {
+  border-left: 1px solid var(--el-border-color-light);
+}
+.step-split.result-bottom .step-result {
+  border-left: 0;
+  border-top: 1px solid var(--el-border-color-light);
+  min-height: 0;
+  height: auto;
+}
+.step-split.result-hidden .step-result {
+  display: none;
 }
 .step-item {
   display: flex;
@@ -2571,12 +2821,41 @@ onBeforeUnmount(() => {
   background: var(--el-bg-color);
   cursor: pointer;
 }
-.step-item.active {
+.result-dock-trigger {
+  margin-left: auto;
+  padding: 8px;
+}
+button.step-item.active {
   border-color: var(--el-color-primary);
-  background: var(--el-color-primary-light-9);
+  background: var(--el-color-primary-light-8);
+  color: var(--el-color-primary);
+}
+button.step-item.active .step-number {
+  background: var(--el-color-primary);
+  color: var(--el-color-white);
+}
+button.step-item.active small {
+  color: var(--el-color-primary);
+}
+.step-current {
+  flex: 0 0 auto;
+  margin-left: 4px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--el-color-primary);
+  color: var(--el-color-white);
+  font-size: 11px;
+  font-style: normal;
+  line-height: 18px;
 }
 .step-item.disabled {
   opacity: 0.5;
+}
+button.step-item.flow-step {
+  width: auto;
+  max-width: 280px;
+  margin-bottom: 0;
+  align-items: center;
 }
 .step-item div {
   display: grid;
@@ -2613,6 +2892,9 @@ onBeforeUnmount(() => {
 .step-editor {
   flex: 1;
   min-width: 0;
+  min-height: 100%;
+  height: 100%;
+  box-sizing: border-box;
   padding: 20px;
 }
 .step-header {
@@ -2622,7 +2904,7 @@ onBeforeUnmount(() => {
   max-width: 320px;
 }
 .step-editor .el-form-item .el-select {
-  width: min(560px, 85%);
+  width: 100%;
 }
 .source-settings {
   margin-left: 10px;
@@ -2671,6 +2953,10 @@ onBeforeUnmount(() => {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 18px;
+}
+.step-editor .write-grid {
+  grid-template-columns: 1fr;
+  gap: 0;
 }
 .write-grid .el-select {
   width: 100% !important;
@@ -2738,11 +3024,12 @@ onBeforeUnmount(() => {
   margin-top: 20px;
 }
 @media (max-width: 1100px) {
-  .workspace-sidebar {
-    flex-basis: 170px;
+  .step-split.result-right {
+    grid-template-columns: 1fr;
   }
-  .steps-sidebar {
-    flex-basis: 175px;
+  .step-split.result-right .step-result {
+    border-left: 0;
+    border-top: 1px solid var(--el-border-color-light);
   }
   .step-editor {
     padding: 14px;
@@ -2753,5 +3040,101 @@ onBeforeUnmount(() => {
   .parameter-row {
     flex-wrap: wrap;
   }
+  .nav-select {
+    width: 140px;
+  }
+}
+</style>
+
+<!-- 结果区三点菜单挂到 body，样式需非 scoped -->
+<style>
+.etl-result-dock-popper.el-popover {
+  padding: 10px 12px !important;
+  min-width: 0 !important;
+}
+.etl-result-dock-popper .dock-menu__title {
+  margin-bottom: 8px;
+  color: var(--el-text-color-secondary);
+  font-size: 12px;
+  line-height: 1.2;
+}
+.etl-result-dock-popper .dock-icons {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  justify-content: space-between;
+}
+.etl-result-dock-popper .dock-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 42px;
+  height: 36px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  cursor: pointer;
+  color: inherit;
+}
+.etl-result-dock-popper .dock-icon:hover {
+  background: var(--el-fill-color-light);
+}
+.etl-result-dock-popper .dock-icon.active {
+  border-color: var(--el-color-primary);
+  background: var(--el-color-primary-light-9);
+}
+.etl-result-dock-popper .dock-preview {
+  position: relative;
+  display: block;
+  width: 28px;
+  height: 20px;
+  overflow: hidden;
+  border: 1px solid var(--el-border-color);
+  border-radius: 3px;
+  background: var(--el-fill-color);
+  box-sizing: border-box;
+}
+.etl-result-dock-popper .dock-preview__chrome {
+  position: absolute;
+  inset: 0;
+  background: var(--el-bg-color);
+}
+.etl-result-dock-popper .dock-preview__panel {
+  position: absolute;
+  background: var(--el-color-primary);
+  opacity: 0.85;
+}
+.etl-result-dock-popper .dock-preview[data-side='right'] .dock-preview__panel {
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 8px;
+}
+.etl-result-dock-popper .dock-preview[data-side='bottom'] .dock-preview__panel {
+  right: 0;
+  bottom: 0;
+  left: 0;
+  height: 6px;
+}
+/* 不显示：空窗 + 斜线 */
+.etl-result-dock-popper .dock-preview[data-side='hidden'] .dock-preview__panel {
+  display: none;
+}
+.etl-result-dock-popper .dock-preview[data-side='hidden']::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    to top left,
+    transparent calc(50% - 0.5px),
+    var(--el-border-color-darker) calc(50% - 0.5px),
+    var(--el-border-color-darker) calc(50% + 0.5px),
+    transparent calc(50% + 0.5px)
+  );
+  pointer-events: none;
+}
+.etl-result-dock-popper .dock-icon.active .dock-preview {
+  border-color: var(--el-color-primary);
 }
 </style>
