@@ -1,10 +1,12 @@
 <script setup lang="ts">
-/** 工作区右键定时配置：简单表单、时间预览和触发历史；不保存或发布任务草稿。@author yanch */
+/** 工作区右键定时配置：支持前置工作区串行、时间预览和触发历史；不保存或发布任务草稿。@author yanch */
 import { computed, ref, watch } from 'vue';
 import { ElMessage } from 'element-plus';
 import type {
   EtlScheduleConfig,
   EtlScheduleDetail,
+  EtlSchedulePeerWorkspace,
+  EtlScheduleStep,
   EtlWorkspaceRow,
 } from '#/api/visual/etl';
 import {
@@ -13,6 +15,7 @@ import {
   schedulePayload,
 } from './scheduleModel';
 import {
+  getEtlRun,
   getEtlSchedule,
   pauseEtlSchedule,
   previewEtlSchedule,
@@ -32,6 +35,7 @@ const form = ref<EtlScheduleConfig>(defaults());
 const times = ref<number[]>([]),
   ruleError = ref(''),
   taskSearch = ref('');
+const addingPeerId = ref<string | number>();
 let requestVersion = 0;
 const modes = [
   { value: 'ONCE', label: '单次' },
@@ -62,6 +66,15 @@ const tasks = computed(() =>
   ),
 );
 const published = computed(() => detail.value?.publishedVersion || 0);
+/** 尚未加入前置链的其他已发布工作区。 */
+const availablePeers = computed(() => {
+  const used = new Set(
+    (form.value.preSteps || []).map((step) => String(step.workspaceId)),
+  );
+  return (detail.value?.peerWorkspaces || []).filter(
+    (peer) => !used.has(String(peer.id)),
+  );
+});
 const statusText: Record<string, string> = {
   PENDING: '等待执行',
   RUNNING: '执行中',
@@ -76,6 +89,7 @@ async function open(workspace: EtlWorkspaceRow) {
   target.value = workspace;
   visible.value = true;
   taskSearch.value = '';
+  addingPeerId.value = undefined;
   detail.value = undefined;
   form.value = defaults();
   times.value = [];
@@ -93,7 +107,7 @@ async function load(reset = false) {
     if (reset) {
       const row = detail.value?.schedule;
       form.value = row
-        ? fromRow(row)
+        ? fromRow(row, detail.value?.preSteps || [])
         : {
             ...defaults(),
             publishedVersion: published.value,
@@ -115,11 +129,84 @@ function useLatest() {
     .filter((task) => task.enabled)
     .map((task) => task.id);
 }
+/** 前置步骤改用该工作区最新发布版本。 */
+function useLatestPre(step: EtlScheduleStep) {
+  const latest = step.latestPublishedVersion || 0;
+  if (!latest) return;
+  step.publishedVersion = latest;
+  step.pipelines = step.latestPipelines || [];
+  step.pipelineIds = (step.latestPipelines || [])
+    .filter((task) => task.enabled)
+    .map((task) => task.id);
+}
 /** 所选任务按列表/勾选顺序串行，不开启多个工作区写入批次。 */
 function selectAll() {
   form.value.pipelineIds = taskOptions.value
     .filter((task) => task.enabled)
     .map((task) => task.id);
+}
+function selectAllPre(step: EtlScheduleStep) {
+  const options =
+    step.publishedVersion === step.latestPublishedVersion
+      ? step.latestPipelines || []
+      : step.pipelines || [];
+  step.pipelineIds = options
+    .filter((task) => task.enabled)
+    .map((task) => task.id);
+}
+function preTaskOptions(step: EtlScheduleStep) {
+  return step.publishedVersion === step.latestPublishedVersion
+    ? step.latestPipelines || []
+    : step.pipelines || [];
+}
+/** 追加一个前置工作区，默认勾选其全部已启用任务。 */
+function addPreStep() {
+  const peer = (detail.value?.peerWorkspaces || []).find(
+    (item) => String(item.id) === String(addingPeerId.value),
+  );
+  if (!peer) {
+    ElMessage.warning('请选择要先执行的工作区');
+    return;
+  }
+  if (
+    (form.value.preSteps || []).some(
+      (step) => String(step.workspaceId) === String(peer.id),
+    )
+  ) {
+    ElMessage.warning('该工作区已在前置列表中');
+    return;
+  }
+  form.value.preSteps = [
+    ...(form.value.preSteps || []),
+    peerToStep(peer),
+  ];
+  addingPeerId.value = undefined;
+}
+function peerToStep(peer: EtlSchedulePeerWorkspace): EtlScheduleStep {
+  return {
+    workspaceId: peer.id,
+    workspaceName: peer.workspaceName,
+    publishedVersion: peer.publishedVersion,
+    latestPublishedVersion: peer.publishedVersion,
+    pipelines: peer.latestPipelines,
+    latestPipelines: peer.latestPipelines,
+    pipelineIds: peer.latestPipelines
+      .filter((task) => task.enabled)
+      .map((task) => task.id),
+  };
+}
+function removePreStep(index: number) {
+  form.value.preSteps = (form.value.preSteps || []).filter(
+    (_, i) => i !== index,
+  );
+}
+function movePreStep(index: number, delta: number) {
+  const list = [...(form.value.preSteps || [])];
+  const next = index + delta;
+  if (next < 0 || next >= list.length) return;
+  const [item] = list.splice(index, 1);
+  list.splice(next, 0, item!);
+  form.value.preSteps = list;
 }
 /** 规则变化使旧预览失效；使用版本号忽略旧的并发预览响应。 */
 let previewVersion = 0;
@@ -150,8 +237,22 @@ async function preview() {
 async function save() {
   if (!target.value || !detail.value) return;
   if (!form.value.pipelineIds.length) {
-    ElMessage.warning('请至少选择一个同步任务');
+    ElMessage.warning('请至少选择一个本工作区同步任务');
     return;
+  }
+  for (const step of form.value.preSteps || []) {
+    if (step.missing) {
+      ElMessage.warning(
+        `前置工作区「${step.workspaceName || step.workspaceId}」已不可用，请先移除`,
+      );
+      return;
+    }
+    if (!step.pipelineIds?.length) {
+      ElMessage.warning(
+        `前置工作区「${step.workspaceName || step.workspaceId}」请至少选择一个任务`,
+      );
+      return;
+    }
   }
   saving.value = true;
   try {
@@ -198,12 +299,22 @@ function formatTime(value?: number) {
     return '时区无效';
   }
 }
-/** 历史批次可关联多个原任务运行，不额外生成一份伪造的节点日志。 */
+/** 历史批次可关联多个原任务运行，按运行所属工作区打开日志。 */
 function runIds(json: string): string[] {
   try {
     return JSON.parse(json || '[]');
   } catch {
     return [];
+  }
+}
+async function openRunLog(runId: string) {
+  try {
+    const response: any = await getEtlRun(runId);
+    const run = response.data ?? response;
+    emit('logs', run.workspaceId ?? target.value!.id, runId);
+    visible.value = false;
+  } catch (error: any) {
+    ElMessage.error(error.msg || error.message || '运行记录加载失败');
   }
 }
 defineExpose({ open });
@@ -213,8 +324,8 @@ defineExpose({ open });
   <el-dialog
     v-model="visible"
     title="定时执行配置"
-    width="min(820px, 94vw)"
-    top="5vh"
+    width="min(880px, 94vw)"
+    top="4vh"
     :close-on-click-modal="false"
     destroy-on-close
   >
@@ -233,7 +344,7 @@ defineExpose({ open });
       />
       <template v-else>
         <el-alert
-          title="定时执行使用已发布版本；保存计划不会保存或发布草稿。所选任务串行执行，失败中断本次。"
+          title="定时执行使用已发布版本；保存计划不会保存或发布草稿。可配置前置工作区，整条链按顺序串行，失败中断本次。"
           type="info"
           :closable="false"
         />
@@ -247,7 +358,105 @@ defineExpose({ open });
               >关闭仅暂停后续触发，当前批次继续</span
             ></el-form-item
           >
-          <el-form-item label="配置版本"
+          <el-form-item label="前置工作区">
+            <div class="pre-steps">
+              <p class="hint block-hint">
+                可选：先串行执行其他工作区的已发布任务，再执行本工作区。例如先同步 B，再同步当前工作区
+                A。
+              </p>
+              <div
+                v-for="(step, index) in form.preSteps"
+                :key="`${step.workspaceId}-${index}`"
+                class="pre-step-card"
+                :class="{ missing: step.missing }"
+              >
+                <div class="pre-step-head">
+                  <strong
+                    >{{ index + 1 }}.
+                    {{ step.workspaceName || step.workspaceId }}</strong
+                  >
+                  <el-tag v-if="step.missing" type="danger" size="small"
+                    >已失效，请移除</el-tag
+                  >
+                  <span v-else class="hint"
+                    >发布版本 {{ step.publishedVersion }}</span
+                  >
+                  <el-button
+                    v-if="
+                      step.latestPublishedVersion &&
+                      step.publishedVersion !== step.latestPublishedVersion
+                    "
+                    link
+                    type="primary"
+                    @click="useLatestPre(step)"
+                    >改用最新发布版本
+                    {{ step.latestPublishedVersion }}</el-button
+                  >
+                  <div class="pre-step-actions">
+                    <el-button
+                      link
+                      :disabled="index === 0"
+                      @click="movePreStep(index, -1)"
+                      >上移</el-button
+                    >
+                    <el-button
+                      link
+                      :disabled="index === form.preSteps.length - 1"
+                      @click="movePreStep(index, 1)"
+                      >下移</el-button
+                    >
+                    <el-button link type="danger" @click="removePreStep(index)"
+                      >移除</el-button
+                    >
+                  </div>
+                </div>
+                <div class="picker-tools">
+                  <el-button @click="selectAllPre(step)"
+                    >全选已启用任务</el-button
+                  >
+                </div>
+                <el-checkbox-group
+                  v-model="step.pipelineIds"
+                  class="task-options"
+                >
+                  <el-checkbox
+                    v-for="task in preTaskOptions(step)"
+                    :key="task.id"
+                    :value="task.id"
+                    :disabled="!task.enabled"
+                    >{{ task.name || task.id
+                    }}{{ task.enabled ? '' : '（已停用）' }}</el-checkbox
+                  >
+                </el-checkbox-group>
+                <small
+                  >已选 {{ step.pipelineIds.length }} 个；按勾选顺序执行。</small
+                >
+              </div>
+              <div v-if="availablePeers.length" class="add-pre">
+                <el-select
+                  v-model="addingPeerId"
+                  clearable
+                  filterable
+                  placeholder="选择要先执行的工作区"
+                  style="width: 260px"
+                >
+                  <el-option
+                    v-for="peer in availablePeers"
+                    :key="peer.id"
+                    :label="peer.workspaceName"
+                    :value="peer.id"
+                  />
+                </el-select>
+                <el-button type="primary" plain @click="addPreStep"
+                  >添加前置工作区</el-button
+                >
+              </div>
+              <p v-else-if="!(form.preSteps || []).length" class="hint">
+                暂无其他已发布工作区可作前置；请先发布需要先执行的工作区。
+              </p>
+            </div>
+          </el-form-item>
+          <el-form-item label="本工作区版本"
             ><span>发布版本 {{ form.publishedVersion }}</span
             ><el-button
               v-if="form.publishedVersion !== published"
@@ -257,7 +466,7 @@ defineExpose({ open });
               >改用最新发布版本 {{ published }}</el-button
             ><span v-else class="hint">当前最新发布版本</span></el-form-item
           >
-          <el-form-item label="执行任务"
+          <el-form-item label="本工作区任务"
             ><div class="task-picker">
               <div class="picker-tools">
                 <el-input
@@ -276,7 +485,7 @@ defineExpose({ open });
                   }}{{ task.enabled ? '' : '（已停用）' }}</el-checkbox
                 ></el-checkbox-group
               ><small
-                >已选 {{ form.pipelineIds.length }} 个；按勾选顺序执行。</small
+                >已选 {{ form.pipelineIds.length }} 个；在前置工作区之后按勾选顺序执行。</small
               >
             </div></el-form-item
           >
@@ -414,17 +623,14 @@ defineExpose({ open });
               :key="id"
               link
               type="primary"
-              @click="
-                emit('logs', target!.id, id);
-                visible = false;
-              "
+              @click="openRunLog(id)"
               >任务 {{ index + 1 }}</el-button
             ></template
           ></el-table-column
         ></el-table
       >
       <p class="hint">
-        上次仍在运行时跳过本次，不重叠、不积压。服务停机错过超过一分钟的计划不会补跑。
+        相关工作区仍在运行时跳过本次，不重叠、不积压。服务停机错过超过一分钟的计划不会补跑。
       </p>
     </div>
     <template #footer
@@ -453,11 +659,14 @@ defineExpose({ open });
 }
 .schedule-heading,
 .history-heading,
-.picker-tools {
+.picker-tools,
+.add-pre,
+.pre-step-head {
   display: flex;
   align-items: center;
   gap: 12px;
   margin-bottom: 14px;
+  flex-wrap: wrap;
 }
 .history-heading {
   justify-content: space-between;
@@ -473,9 +682,31 @@ small {
 .hint {
   margin-left: 10px;
 }
+.block-hint {
+  margin: 0 0 10px;
+  margin-left: 0;
+  line-height: 1.5;
+}
 .task-picker,
-.cron-input {
+.cron-input,
+.pre-steps {
   width: 100%;
+}
+.pre-step-card {
+  border: 1px solid var(--el-border-color-light);
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin-bottom: 12px;
+  background: var(--el-fill-color-blank);
+}
+.pre-step-card.missing {
+  border-color: var(--el-color-danger-light-5);
+  background: var(--el-color-danger-light-9);
+}
+.pre-step-actions {
+  margin-left: auto;
+  display: flex;
+  gap: 4px;
 }
 .task-options {
   display: flex;

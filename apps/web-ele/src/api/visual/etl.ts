@@ -8,12 +8,27 @@ import request from '#/utils/request';
 
 const url = `${adminUrl}/etlWorkspace/`;
 
+/** 定时计划中单个工作区步骤（前置或本工作区）。 */
+export interface EtlScheduleStep {
+  workspaceId: string | number;
+  publishedVersion: number;
+  pipelineIds: string[];
+  workspaceName?: string;
+  latestPublishedVersion?: number;
+  pipelines?: Array<{ id: string; name: string; enabled: boolean }>;
+  latestPipelines?: Array<{ id: string; name: string; enabled: boolean }>;
+  /** 前置工作区已删除或无权访问时为 true，需移除后才能保存。 */
+  missing?: boolean;
+}
+
 /** 工作区独立定时计划，绑定已发布版本而非编辑中的草稿。 */
 export interface EtlScheduleConfig {
   enabled: boolean;
   revision: number;
   publishedVersion: number;
   pipelineIds: string[];
+  /** 前置工作区，按序先于本工作区执行；空则仅跑本工作区。 */
+  preSteps: EtlScheduleStep[];
   mode: 'ONCE' | 'DAILY' | 'WEEKLY' | 'INTERVAL' | 'CRON';
   timeZone: string;
   cronExpression?: string;
@@ -26,10 +41,11 @@ export interface EtlScheduleConfig {
 /** 服务端计划状态和下一次时间，数组以持久化 JSON 返回。 */
 export interface EtlScheduleRow extends Omit<
   EtlScheduleConfig,
-  'pipelineIds' | 'weekDays'
+  'pipelineIds' | 'weekDays' | 'preSteps'
 > {
   workspaceId: string | number;
   pipelineIdsJson: string;
+  stepsJson?: string;
   weekDaysJson: string;
   nextFireAt?: number;
 }
@@ -42,8 +58,16 @@ export interface EtlScheduleFire {
   message?: string;
   scheduledAt: number;
   runIdsJson: string;
+  jobsJson?: string;
   currentRunId?: string;
   nextIndex: number;
+}
+
+export interface EtlSchedulePeerWorkspace {
+  id: string | number;
+  workspaceName: string;
+  publishedVersion: number;
+  latestPipelines: Array<{ id: string; name: string; enabled: boolean }>;
 }
 
 export interface EtlScheduleDetail {
@@ -51,6 +75,10 @@ export interface EtlScheduleDetail {
   publishedVersion: number;
   pipelines: Array<{ id: string; name: string; enabled: boolean }>;
   latestPipelines: Array<{ id: string; name: string; enabled: boolean }>;
+  /** 已保存的前置步骤视图（含任务选项）。 */
+  preSteps?: EtlScheduleStep[];
+  /** 可选用的其他已发布工作区。 */
+  peerWorkspaces?: EtlSchedulePeerWorkspace[];
   recentFires: EtlScheduleFire[];
 }
 

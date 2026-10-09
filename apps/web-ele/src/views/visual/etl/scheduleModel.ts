@@ -1,4 +1,8 @@
-import type { EtlScheduleConfig, EtlScheduleRow } from '#/api/visual/etl';
+import type {
+  EtlScheduleConfig,
+  EtlScheduleRow,
+  EtlScheduleStep,
+} from '#/api/visual/etl';
 
 /** 新计划默认关闭；打开弹窗不构成授权定时写入。 @author yanch */
 export function createScheduleForm(): EtlScheduleConfig {
@@ -7,6 +11,7 @@ export function createScheduleForm(): EtlScheduleConfig {
     revision: 0,
     publishedVersion: 0,
     pipelineIds: [],
+    preSteps: [],
     mode: 'DAILY',
     timeZone: 'Asia/Shanghai',
     timeOfDay: '02:00',
@@ -17,7 +22,10 @@ export function createScheduleForm(): EtlScheduleConfig {
 }
 
 /** 持久化状态只取请求白名单字段，不能把工作区 ID、租约、审计字段回传当成可编辑配置。 @author yanch */
-export function decodeSchedule(row: EtlScheduleRow): EtlScheduleConfig {
+export function decodeSchedule(
+  row: EtlScheduleRow,
+  preSteps: EtlScheduleStep[] = [],
+): EtlScheduleConfig {
   const ids: unknown = JSON.parse(row.pipelineIdsJson || '[]');
   const days: unknown = JSON.parse(row.weekDaysJson || '[]');
   if (
@@ -32,6 +40,16 @@ export function decodeSchedule(row: EtlScheduleRow): EtlScheduleConfig {
     revision: row.revision,
     publishedVersion: row.publishedVersion,
     pipelineIds: [...ids],
+    preSteps: preSteps.map((step) => ({
+      workspaceId: String(step.workspaceId),
+      publishedVersion: step.publishedVersion,
+      pipelineIds: [...(step.pipelineIds || [])],
+      workspaceName: step.workspaceName,
+      latestPublishedVersion: step.latestPublishedVersion,
+      pipelines: step.pipelines,
+      latestPipelines: step.latestPipelines,
+      missing: !!step.missing,
+    })),
     mode: row.mode,
     timeZone: row.timeZone,
     cronExpression: row.cronExpression || undefined,
@@ -49,6 +67,11 @@ export function schedulePayload(form: EtlScheduleConfig): EtlScheduleConfig {
     revision: form.revision,
     publishedVersion: form.publishedVersion,
     pipelineIds: [...form.pipelineIds],
+    preSteps: (form.preSteps || []).map((step) => ({
+      workspaceId: String(step.workspaceId),
+      publishedVersion: step.publishedVersion,
+      pipelineIds: [...step.pipelineIds],
+    })),
     mode: form.mode,
     timeZone: form.timeZone,
     cronExpression: form.cronExpression,

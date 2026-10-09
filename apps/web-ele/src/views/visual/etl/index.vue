@@ -15,6 +15,7 @@ import {
   VideoPlay,
   Refresh,
   MoreFilled,
+  MagicStick,
 } from '@element-plus/icons-vue';
 import type {
   EtlConnectionOption,
@@ -77,21 +78,36 @@ const taskPosition = ref(
     ? localStorage.getItem('lemon-etl-tabs')!
     : 'top',
 );
-/** 结果预览停靠：右侧 / 下方 / 不显示；偏好记在本机。 */
+/**
+ * 侧栏停靠：右侧 / 下方 / 不显示。
+ * 查询预览与写入字段映射各自独立记忆——预览常隐藏，映射基本常开，不能共用。
+ */
 type ResultDock = 'right' | 'bottom' | 'hidden';
+type ResultDockKind = 'preview' | 'mapping';
 const RESULT_DOCK_OPTIONS: { value: ResultDock; label: string }[] = [
-  { value: 'right', label: '右侧结果' },
-  { value: 'bottom', label: '下方结果' },
+  { value: 'right', label: '右侧' },
+  { value: 'bottom', label: '下方' },
   { value: 'hidden', label: '不显示' },
 ];
-function loadResultDock(): ResultDock {
-  const saved = localStorage.getItem('lemon-etl-result-dock');
+const PREVIEW_DOCK_KEY = 'lemon-etl-result-dock';
+const MAPPING_DOCK_KEY = 'lemon-etl-mapping-dock';
+function parseResultDock(raw: string | null, fallback: ResultDock): ResultDock {
+  if (raw === 'right' || raw === 'bottom' || raw === 'hidden') return raw;
+  return fallback;
+}
+function loadPreviewDock(): ResultDock {
+  const saved = localStorage.getItem(PREVIEW_DOCK_KEY);
   if (saved === 'right' || saved === 'bottom' || saved === 'hidden') return saved;
   // 兼容旧版「隐藏结果」开关
   if (localStorage.getItem('lemon-etl-result') === 'closed') return 'hidden';
   return 'right';
 }
-const resultDock = ref<ResultDock>(loadResultDock());
+function loadMappingDock(): ResultDock {
+  // 写入字段映射默认常开右侧；不继承预览的「隐藏」偏好
+  return parseResultDock(localStorage.getItem(MAPPING_DOCK_KEY), 'right');
+}
+const previewDock = ref<ResultDock>(loadPreviewDock());
+const mappingDock = ref<ResultDock>(loadMappingDock());
 const resultDockMenuOpen = ref(false);
 /** 用户布局偏好不写进可移植任务 JSON。 */
 function setTaskPosition(position: string) {
@@ -101,11 +117,6 @@ function setTaskPosition(position: string) {
 function toggleSidebar() {
   sidebarOpen.value = !sidebarOpen.value;
   localStorage.setItem('lemon-etl-sidebar', sidebarOpen.value ? 'open' : 'closed');
-}
-function setResultDock(next: ResultDock) {
-  resultDock.value = next;
-  localStorage.setItem('lemon-etl-result-dock', next);
-  resultDockMenuOpen.value = false;
 }
 const workspaces = ref<EtlWorkspaceRow[]>([]),
   activeWorkspace = ref<EtlWorkspaceRow>();
@@ -123,6 +134,29 @@ const pipeline = computed(() =>
 const node = computed(() =>
   pipeline.value?.nodes.find((item) => item.id === selectedNodeId.value),
 );
+function isWriteStep(type?: string) {
+  return type === 'database.write' || type === 'database.upsert';
+}
+/** 当前步骤对应的侧栏类型：查询用预览偏好，写入用映射偏好 */
+function currentDockKind(): ResultDockKind {
+  return isWriteStep(node.value?.type) ? 'mapping' : 'preview';
+}
+const resultDock = computed(() =>
+  currentDockKind() === 'mapping' ? mappingDock.value : previewDock.value,
+);
+const resultDockMenuTitle = computed(() =>
+  currentDockKind() === 'mapping' ? '字段映射位置' : '结果预览位置',
+);
+function setResultDock(next: ResultDock) {
+  if (currentDockKind() === 'mapping') {
+    mappingDock.value = next;
+    localStorage.setItem(MAPPING_DOCK_KEY, next);
+  } else {
+    previewDock.value = next;
+    localStorage.setItem(PREVIEW_DOCK_KEY, next);
+  }
+  resultDockMenuOpen.value = false;
+}
 const resources = computed(() => Object.entries(doc.value.resources));
 const queryColumns = ref<Record<string, string[]>>({});
 const sqlInput = ref<{ textarea?: HTMLTextAreaElement }>();
@@ -775,7 +809,10 @@ async function openScheduleLogs(workspaceId: string | number, runId: string) {
   const target = workspaces.value.find(
     (item) => String(item.id) === String(workspaceId),
   );
-  if (!target) return;
+  if (!target) {
+    ElMessage.warning('运行所属工作区不在当前列表（可能已删除），无法打开日志');
+    return;
+  }
   if (
     String(activeWorkspace.value?.id) !== String(workspaceId) &&
     !(await openWorkspace(target, true))
@@ -834,12 +871,10 @@ function onMore(command: string) {
   else if (command === 'import-json') jsonInput.value?.click();
   else if (command === 'import-kettle') kettleInput.value?.click();
   else if (command === 'export') void exportJson();
-  else if (command === 'ai') void openAi();
   else if (command === 'runs') {
     runsVisible.value = true;
     void refreshRuns();
-  } else if (command === 'publish') void publish();
-  else if (command === 'schedule') configureSchedule();
+  } else if (command === 'schedule') configureSchedule();
   else if (command === 'notify') configureNotify();
   else if (command === 'rename') void renameWorkspace();
   else if (command === 'abandon') void abandonLocalDraft();
@@ -973,15 +1008,6 @@ function addMapping() {
 /** 查询预览会执行必要的只读上游，直接检验关联 SQL 与跨库参数能否工作。 */
 async function preview() {
   if (node.value) await previewQuery(node.value.id);
-}
-/** 顶栏预览：查询看当前步骤，写入则预览其输入查询并加载字段。 */
-async function previewCurrent() {
-  if (!node.value || editorMode.value === 'json') return;
-  if (['database.write', 'database.upsert'].includes(node.value.type)) {
-    await previewInput();
-    return;
-  }
-  await preview();
 }
 /** 写入配置可直接预览输入并加载字段，不需要来回切换查询/写入步骤。 */
 async function previewInput() {
@@ -1562,17 +1588,13 @@ onBeforeUnmount(() => {
         <div class="toolbar-actions">
           <el-tag v-if="dirty" type="warning">未保存</el-tag>
           <el-button
-            :icon="VideoPlay"
-            :disabled="!node || editorMode === 'json'"
-            :loading="previewing"
-            @click="previewCurrent"
-            >预览</el-button
-          >
-          <el-button
             :disabled="!activeWorkspace"
             :loading="saving"
             @click="saveDraft"
             >保存</el-button
+          >
+          <el-button :disabled="!activeWorkspace" @click="publish"
+            >发布</el-button
           >
           <el-button
             type="primary"
@@ -1580,6 +1602,12 @@ onBeforeUnmount(() => {
             :loading="running"
             @click="runPipeline"
             >运行</el-button
+          >
+          <el-button
+            :icon="MagicStick"
+            :disabled="!activeWorkspace"
+            @click="openAi"
+            >AI 配置</el-button
           >
           <el-dropdown
             trigger="click"
@@ -1600,9 +1628,7 @@ onBeforeUnmount(() => {
                   >导入 Kettle</el-dropdown-item
                 >
                 <el-dropdown-item command="export">导出 JSON</el-dropdown-item>
-                <el-dropdown-item command="ai">AI 配置</el-dropdown-item>
                 <el-dropdown-item command="runs">运行记录</el-dropdown-item>
-                <el-dropdown-item command="publish">发布</el-dropdown-item>
                 <el-dropdown-item command="schedule">定时执行</el-dropdown-item>
                 <el-dropdown-item command="notify">消息通知</el-dropdown-item>
                 <el-dropdown-item command="rename">改名</el-dropdown-item>
@@ -1821,12 +1847,16 @@ onBeforeUnmount(() => {
                     <el-button
                       :icon="MoreFilled"
                       class="result-dock-trigger"
-                      title="结果预览位置"
-                      aria-label="结果预览位置"
+                      :title="resultDockMenuTitle"
+                      :aria-label="resultDockMenuTitle"
                     />
                   </template>
-                  <div class="dock-menu" role="menu" aria-label="选择结果预览位置">
-                    <div class="dock-menu__title">结果预览</div>
+                  <div
+                    class="dock-menu"
+                    role="menu"
+                    :aria-label="`选择${resultDockMenuTitle}`"
+                  >
+                    <div class="dock-menu__title">{{ resultDockMenuTitle }}</div>
                     <div class="dock-icons" role="group">
                       <button
                         v-for="opt in RESULT_DOCK_OPTIONS"
@@ -1872,21 +1902,24 @@ onBeforeUnmount(() => {
                     <el-form-item
                       v-if="node.type !== 'transform.select'"
                       label="数据源"
-                      ><el-select
-                        v-model="node.resourceRef"
-                        filterable
-                        placeholder="选择工作区数据源别名"
-                        ><el-option
-                          v-for="[key, source] in resources"
-                          :key="key"
-                          :label="`${source.displayName} · ${source.instance || '待绑定'}`"
-                          :value="key" /></el-select
-                      ><el-button
-                        link
-                        class="source-settings"
-                        @click="openSources"
-                        >管理数据源</el-button
-                      ></el-form-item
+                      class="form-row-inline source-row"
+                      ><div class="inline-control">
+                        <el-select
+                          v-model="node.resourceRef"
+                          filterable
+                          placeholder="选择工作区数据源别名"
+                          ><el-option
+                            v-for="[key, source] in resources"
+                            :key="key"
+                            :label="`${source.displayName} · ${source.instance || '待绑定'}`"
+                            :value="key" /></el-select
+                        ><el-button
+                          link
+                          class="source-settings"
+                          @click="openSources"
+                          >管理数据源</el-button
+                        >
+                      </div></el-form-item
                     >
                     <el-alert
                       v-if="
@@ -1913,16 +1946,25 @@ onBeforeUnmount(() => {
                     </div>
                     <template v-if="node.type === 'database.query'">
                       <div class="sql-label">
-                        <span>查询 SQL · 可 JOIN 多张表</span
-                        ><el-popover
-                          placement="bottom"
-                          :width="360"
-                          trigger="click"
-                          ><template #reference
-                            ><el-button link :loading="catalogLoading"
-                              >可用表目录</el-button
-                            ></template
+                        <span>查询 SQL · 可 JOIN 多张表</span>
+                        <div class="sql-label-actions">
+                          <el-button
+                            link
+                            type="primary"
+                            :icon="VideoPlay"
+                            :loading="previewing"
+                            @click="preview"
+                            >预览</el-button
                           >
+                          <el-popover
+                            placement="bottom"
+                            :width="360"
+                            trigger="click"
+                            ><template #reference
+                              ><el-button link :loading="catalogLoading"
+                                >可用表目录</el-button
+                              ></template
+                            >
                           <div class="table-catalog">
                             <el-input
                               v-model="catalogSearch"
@@ -1955,7 +1997,8 @@ onBeforeUnmount(() => {
                                   : '暂无可读表'
                             }}</span>
                           </div></el-popover
-                        >
+                          >
+                        </div>
                       </div>
                       <el-input
                         ref="sqlInput"
@@ -2090,7 +2133,9 @@ onBeforeUnmount(() => {
                       "
                     >
                       <div class="write-grid">
-                        <el-form-item label="输入查询结果"
+                        <el-form-item
+                          label="输入查询结果"
+                          class="form-row-inline"
                           ><el-select
                             v-model="node.config.inputStepId"
                             placeholder="选择上游查询步骤"
@@ -2101,8 +2146,11 @@ onBeforeUnmount(() => {
                               :value="upstream.id"
                               :label="
                                 upstream.name || upstream.id
-                              " /></el-select></el-form-item
-                        ><el-form-item label="目标表（已有表）"
+                              " /></el-select
+                        ></el-form-item>
+                        <el-form-item
+                          label="目标表（已有表）"
+                          class="form-row-inline"
                           ><el-select
                             v-model="node.config.table"
                             filterable
@@ -2119,7 +2167,7 @@ onBeforeUnmount(() => {
                               " /></el-select
                         ></el-form-item>
                       </div>
-                      <el-form-item label="写入方式"
+                      <el-form-item label="写入方式" class="form-row-inline"
                         ><el-radio-group v-model="node.config.mode"
                           ><el-radio-button value="append"
                             >追加数据</el-radio-button
@@ -2134,6 +2182,7 @@ onBeforeUnmount(() => {
                           node.type === 'database.upsert'
                         "
                         label="目标键字段（应有唯一约束）"
+                        class="form-row-inline"
                         ><el-select
                           v-model="node.config.keyColumns"
                           multiple
@@ -2152,30 +2201,38 @@ onBeforeUnmount(() => {
                           node.config.mode === 'upsert' ||
                           node.type === 'database.upsert'
                         "
-                        label="允许更新的字段（未设置时更新全部非键字段）"
+                        label="允许更新的字段"
+                        class="form-row-inline"
+                        title="未设置时更新全部非键字段"
                       >
-                        <el-select
-                          v-model="node.config.updateColumns"
-                          multiple
-                          filterable
-                          placeholder="Kettle 仅插入字段不会在更新时改动"
-                          ><el-option
-                            v-for="mapping in node.config.mappings || []"
-                            :key="mapping.target"
-                            :value="mapping.target"
-                            :label="mapping.target"
-                        /></el-select>
-                        <el-button
-                          v-if="node.config.updateColumns !== undefined"
-                          link
-                          @click="delete node.config.updateColumns"
-                          >恢复更新全部</el-button
-                        >
-                        <small v-if="node.config.updateColumns?.length === 0"
+                        <div class="inline-control">
+                          <el-select
+                            v-model="node.config.updateColumns"
+                            multiple
+                            filterable
+                            placeholder="未设置时更新全部非键字段"
+                            ><el-option
+                              v-for="mapping in node.config.mappings || []"
+                              :key="mapping.target"
+                              :value="mapping.target"
+                              :label="mapping.target"
+                          /></el-select>
+                          <el-button
+                            v-if="node.config.updateColumns !== undefined"
+                            link
+                            @click="delete node.config.updateColumns"
+                            >恢复更新全部</el-button
+                          >
+                        </div>
+                        <small
+                          v-if="node.config.updateColumns?.length === 0"
+                          class="field-hint"
                           >当前为空：已有行不更新，只插入缺失行。</small
                         >
                       </el-form-item>
-                      <el-form-item label="每批写入行数" class="batch-field"
+                      <el-form-item
+                        label="每批写入行数"
+                        class="form-row-inline batch-field"
                         ><el-input-number
                           v-model="node.config.batchSize"
                           :min="1"
@@ -2257,7 +2314,7 @@ onBeforeUnmount(() => {
                     <el-empty
                       v-else
                       :image-size="72"
-                      description="点顶部「预览」查看样本"
+                      description="点「预览」查看样本"
                     />
                   </template>
                   <template
@@ -2906,8 +2963,67 @@ button.step-item.flow-step {
 .step-editor .el-form-item .el-select {
   width: 100%;
 }
+/* 数据源选择框与「管理数据源」同一行 */
+.inline-control {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-width: 0;
+}
+.inline-control > .el-select {
+  flex: 1;
+  min-width: 0;
+  width: auto !important;
+}
 .source-settings {
-  margin-left: 10px;
+  flex: 0 0 auto;
+  margin-left: 0;
+}
+/* 标签与控件同一行，label 不换行 */
+.step-editor .form-row-inline {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  flex-wrap: nowrap;
+}
+.step-editor .form-row-inline :deep(.el-form-item__label) {
+  width: auto !important;
+  max-width: none;
+  margin-bottom: 0 !important;
+  padding-right: 12px;
+  line-height: 32px;
+  white-space: nowrap;
+  justify-content: flex-start;
+}
+.step-editor .form-row-inline :deep(.el-form-item__content) {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+}
+.step-editor .form-row-inline .el-radio-group {
+  display: inline-flex;
+  flex-wrap: nowrap;
+  align-self: flex-start;
+}
+.step-editor .form-row-inline .field-hint {
+  display: block;
+  margin-top: 4px;
+  color: var(--el-text-color-secondary);
+  font-size: 12px;
+}
+/* 写入两列：每列内 label + 控件横排，两列并排 */
+.step-editor .write-grid {
+  align-items: center;
+  margin-bottom: 18px;
+}
+.step-editor .write-grid .form-row-inline {
+  margin-bottom: 0;
+}
+.step-editor .form-row-inline + .form-row-inline {
+  margin-top: 6px;
 }
 .sql-label,
 .section-title {
@@ -2916,6 +3032,11 @@ button.step-item.flow-step {
   align-items: center;
   margin: 16px 0 10px;
   font-size: 14px;
+}
+.sql-label-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
 }
 .sql-editor :deep(textarea) {
   font-family: Consolas, monospace;
@@ -2954,10 +3075,6 @@ button.step-item.flow-step {
   grid-template-columns: 1fr 1fr;
   gap: 18px;
 }
-.step-editor .write-grid {
-  grid-template-columns: 1fr;
-  gap: 0;
-}
 .write-grid .el-select {
   width: 100% !important;
 }
@@ -2972,7 +3089,7 @@ button.step-item.flow-step {
   flex: 1;
 }
 .batch-field {
-  margin-top: 22px;
+  margin-top: 8px;
 }
 .dependency-strip {
   display: flex;
