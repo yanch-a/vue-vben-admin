@@ -8,6 +8,170 @@ import request from '#/utils/request';
 
 const url = `${adminUrl}/etlWorkspace/`;
 
+/** 工作区独立定时计划，绑定已发布版本而非编辑中的草稿。 */
+export interface EtlScheduleConfig {
+  enabled: boolean;
+  revision: number;
+  publishedVersion: number;
+  pipelineIds: string[];
+  mode: 'ONCE' | 'DAILY' | 'WEEKLY' | 'INTERVAL' | 'CRON';
+  timeZone: string;
+  cronExpression?: string;
+  timeOfDay?: string;
+  weekDays: number[];
+  intervalMinutes?: number;
+  runAt?: number;
+}
+
+/** 服务端计划状态和下一次时间，数组以持久化 JSON 返回。 */
+export interface EtlScheduleRow extends Omit<
+  EtlScheduleConfig,
+  'pipelineIds' | 'weekDays'
+> {
+  workspaceId: string | number;
+  pipelineIdsJson: string;
+  weekDaysJson: string;
+  nextFireAt?: number;
+}
+
+/** 一次定时触发批次，可从运行 ID 跳转原任务与节点日志。 */
+export interface EtlScheduleFire {
+  id: string;
+  publishedVersion: number;
+  status: string;
+  message?: string;
+  scheduledAt: number;
+  runIdsJson: string;
+  currentRunId?: string;
+  nextIndex: number;
+}
+
+export interface EtlScheduleDetail {
+  schedule?: EtlScheduleRow;
+  publishedVersion: number;
+  pipelines: Array<{ id: string; name: string; enabled: boolean }>;
+  latestPipelines: Array<{ id: string; name: string; enabled: boolean }>;
+  recentFires: EtlScheduleFire[];
+}
+
+/** 当前用户工作区的计划和已发布任务选项。 */
+export function getEtlSchedule(id: string | number) {
+  return request({
+    url: `${url}${encodeURIComponent(id)}/schedule`,
+    method: 'get',
+  });
+}
+
+/** 直接读取运行详情，历史计划即使超出最近一百条也能查看节点日志。 */
+export function getEtlRun(id: string) {
+  return request({
+    url: `${url}runs/${encodeURIComponent(id)}`,
+    method: 'get',
+  });
+}
+
+/** 保存后由后台调度，不需要浏览器保持打开。 */
+export function saveEtlSchedule(id: string | number, data: EtlScheduleConfig) {
+  return request({
+    url: `${url}${encodeURIComponent(id)}/schedule`,
+    method: 'post',
+    data,
+  });
+}
+
+/** 独立暂停，不重置已经过去的一次性规则。 */
+export function pauseEtlSchedule(id: string | number, revision: number) {
+  return request({
+    url: `${url}${encodeURIComponent(id)}/schedule/pause`,
+    method: 'post',
+    data: { revision },
+  });
+}
+
+/** 纯时间预览，不改变计划或触发同步。 */
+export function previewEtlSchedule(data: EtlScheduleConfig) {
+  return request({ url: `${url}schedule/preview`, method: 'post', data });
+}
+
+/** 工作区失败通知开关；渠道 Webhook 在用户级消息渠道中维护。 */
+export interface EtlNotifyConfig {
+  enabled: boolean;
+  onFailure: boolean;
+  /** 雪花 ID 用字符串，避免 JS 精度丢失。 */
+  channelIds: Array<string | number>;
+  revision: number;
+}
+
+export interface NotifyChannelRow {
+  id: number | string;
+  channelType: 'WECOM' | 'DINGTALK' | 'FEISHU' | string;
+  channelName: string;
+  enabled: boolean;
+  webhookUrl: string;
+  /** 机器人安全关键词；发送时若正文没有会自动补上 */
+  keyword?: string;
+  secretConfigured?: boolean;
+}
+
+export interface EtlNotifyDetail {
+  notify?: {
+    workspaceId: number | string;
+    enabled: boolean;
+    onFailure: boolean;
+    channelIdsJson: string;
+    revision: number;
+  };
+  channels: NotifyChannelRow[];
+}
+
+export function getEtlNotify(id: string | number) {
+  return request({
+    url: `${url}${encodeURIComponent(id)}/notify`,
+    method: 'get',
+  });
+}
+
+export function saveEtlNotify(id: string | number, data: EtlNotifyConfig) {
+  return request({
+    url: `${url}${encodeURIComponent(id)}/notify`,
+    method: 'post',
+    data,
+  });
+}
+
+/** 在 EtlWorkspace:notify 权限下维护渠道，无需单独授予 NotifyChannel。 */
+export interface EtlNotifyChannelSave {
+  id?: number | string;
+  channelType: 'WECOM' | 'DINGTALK' | 'FEISHU';
+  channelName: string;
+  enabled: boolean;
+  webhookUrl: string;
+  /** 空字符串表示清空；不传表示不修改 */
+  keyword?: string;
+  secretInput?: string;
+  /** 清空已存加签密钥 */
+  clearSecret?: boolean;
+}
+
+export function saveEtlNotifyChannel(data: EtlNotifyChannelSave) {
+  return request({ url: `${url}notify/channels`, method: 'post', data });
+}
+
+export function deleteEtlNotifyChannel(channelId: string | number) {
+  return request({
+    url: `${url}notify/channels/${encodeURIComponent(channelId)}`,
+    method: 'delete',
+  });
+}
+
+export function testEtlNotifyChannel(channelId: string | number) {
+  return request({
+    url: `${url}notify/channels/${encodeURIComponent(channelId)}/test`,
+    method: 'post',
+    data: {},
+  });
+}
+
 export interface EtlResource {
   kind: 'database' | string;
   bindingRef: string;
