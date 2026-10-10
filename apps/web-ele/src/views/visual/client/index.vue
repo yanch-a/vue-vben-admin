@@ -43,6 +43,7 @@ import ChangeWindowBadge from './components/ChangeWindowBadge.vue';
 import ClientToolbar from './components/ClientToolbar.vue';
 import ConnectionDialog from './components/ConnectionDialog.vue';
 import ConnectionTabs from './components/ConnectionTabs.vue';
+import WorkspaceSnapshotDialog from './components/WorkspaceSnapshotDialog.vue';
 import EmptyWorkspace from './components/EmptyWorkspace.vue';
 import ObjectTree from './components/object-tree/ObjectTree.vue';
 import OracleObjectTree from './components/object-tree/OracleObjectTree.vue';
@@ -75,7 +76,10 @@ import {
 import { getLicenseStatus } from '#/api/visual/license';
 import { useConnectionStore } from './composables/useConnectionStore';
 import { useClientTasks } from './composables/useClientTasks';
-import { setupClientSessionPersist } from './composables/useClientSessionPersist';
+import {
+  setupClientSessionPersist,
+  type ClientSessionSnapshot,
+} from './composables/useClientSessionPersist';
 import { notifyClientSessionChange } from './composables/clientSessionNotify';
 import {
   consumePendingSavedQueryOpen,
@@ -315,7 +319,7 @@ sessionPersist.restore();
 
 /**
  * 导出当前本地缓存中的已打开连接与 SQL Tab（不含密码、不含结果集）。
- * Web / Electron 均走浏览器下载；Electron 会写入当前服务端隔离的会话键对应内容。
+ * Web / Electron 均走浏览器下载；落盘键按登录用户隔离，Electron 再按服务端隔离。
  */
 function exportTemporarySession() {
   try {
@@ -341,7 +345,7 @@ function exportTemporarySession() {
 
 /**
  * 导入另一台设备导出的临时查询 JSON，覆盖当前已打开连接与查询。
- * 校验失败则拒绝写入；成功后落盘到当前环境的会话键（Electron 按服务端隔离）。
+ * 校验失败则拒绝写入；成功后落盘到当前用户的会话键（Electron 再按服务端隔离）。
  */
 async function importTemporarySession(file: File) {
   try {
@@ -368,6 +372,64 @@ async function importTemporarySession(file: File) {
     if (e === 'cancel' || e?.action === 'cancel') return;
     ElMessage.error(e?.message || '导入失败');
   }
+}
+
+/** 服务器工作现场：保存时带上当前快照，加载时按返回的 id 记回本地缓存。 */
+const workspaceDialog = reactive({
+  visible: false,
+  mode: 'save' as 'load' | 'save',
+  persistId: '',
+  persistAlias: '',
+  snapshot: null as ClientSessionSnapshot | null,
+});
+
+function syncWorkspaceMeta() {
+  const meta = sessionPersist.getPersistMeta();
+  workspaceDialog.persistId = meta.id;
+  workspaceDialog.persistAlias = meta.alias;
+}
+
+function openSaveWorkspace() {
+  const snap = sessionPersist.exportSnapshot();
+  if (!snap.connections.length) {
+    ElMessage.warning('当前没有可保存的连接');
+    return;
+  }
+  syncWorkspaceMeta();
+  workspaceDialog.snapshot = snap;
+  workspaceDialog.mode = 'save';
+  workspaceDialog.visible = true;
+}
+
+function openLoadWorkspace() {
+  syncWorkspaceMeta();
+  workspaceDialog.snapshot = null;
+  workspaceDialog.mode = 'load';
+  workspaceDialog.visible = true;
+}
+
+function onWorkspaceSaved(payload: { id: string; alias: string }) {
+  sessionPersist.setPersistMeta(payload.id, payload.alias);
+  syncWorkspaceMeta();
+  ElMessage.success('工作现场已保存，可在另一台电脑登录同一账号后加载');
+}
+
+function onWorkspaceLoaded(payload: { id: string; alias: string; snapshot: unknown }) {
+  const snap = sessionPersist.applyOwnedSnapshot(payload.snapshot, {
+    id: payload.id,
+    alias: payload.alias,
+  });
+  if (!snap) {
+    ElMessage.error('这份现场无法打开');
+    return;
+  }
+  syncWorkspaceMeta();
+  ElMessage.success(`已加载工作现场「${payload.alias || '未命名'}」`);
+}
+
+function onWorkspaceUnlinked() {
+  sessionPersist.setPersistMeta('', '');
+  syncWorkspaceMeta();
 }
 
 /**
@@ -3388,9 +3450,21 @@ onBeforeUnmount(() => {
         @open="onOpenConnection"
         @export-session="exportTemporarySession"
         @import-session="importTemporarySession"
+        @save-workspace="openSaveWorkspace"
+        @load-workspace="openLoadWorkspace"
         @export-connection-queries="exportConnectionQueries"
         @import-connection-queries="importConnectionQueries"
         @executed-sql="onShowExecutedSql"
+      />
+      <WorkspaceSnapshotDialog
+        v-model="workspaceDialog.visible"
+        :mode="workspaceDialog.mode"
+        :persist-id="workspaceDialog.persistId"
+        :persist-alias="workspaceDialog.persistAlias"
+        :snapshot="workspaceDialog.snapshot"
+        @saved="onWorkspaceSaved"
+        @loaded="onWorkspaceLoaded"
+        @unlinked="onWorkspaceUnlinked"
       />
 
       <div

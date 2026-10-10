@@ -3,7 +3,7 @@
  * 顶部已打开连接栏
  * - 单击切换；关闭按钮关闭页签
  * - 连接页签右键：刷新 / 改颜色 / 已执行 SQL / 导入导出本连接查询
- * - 空白区域右键：导入 / 导出全部临时查询记录（本地会话缓存）
+ * - 空白区域右键：保存 / 加载服务器工作现场，或导入导出本地临时查询
  * @author yanch
  */
 import { onBeforeUnmount, onMounted, reactive, ref } from 'vue';
@@ -32,6 +32,10 @@ const emit = defineEmits<{
   refresh: [sessionId: number | string];
   /** 导出全部本地临时连接与查询记录 */
   exportSession: [];
+  /** 把当前工作现场保存到服务器 */
+  saveWorkspace: [];
+  /** 从服务器选择一份本人的工作现场加载 */
+  loadWorkspace: [];
   /** 导入全部本地临时连接与查询记录文件内容 */
   importSession: [file: File];
   /** 导出当前右键连接的查询记录 */
@@ -173,6 +177,16 @@ function onEditColor() {
 function onExportSession() {
   closeCtx();
   emit('exportSession');
+}
+
+function onSaveWorkspace() {
+  closeCtx();
+  emit('saveWorkspace');
+}
+
+function onLoadWorkspace() {
+  closeCtx();
+  emit('loadWorkspace');
 }
 
 function onImportSession() {
@@ -322,7 +336,9 @@ defineExpose({
           </div>
         </template>
         <template v-else>
-          <div class="item" @click="onExportSession">{{ $tr('导出临时查询记录') }}</div>
+          <div class="item" @click="onSaveWorkspace">{{ $tr('保存工作现场') }}</div>
+          <div class="item" @click="onLoadWorkspace">{{ $tr('加载工作现场') }}</div>
+          <div class="item divider" @click="onExportSession">{{ $tr('导出临时查询记录') }}</div>
           <div class="item" @click="onImportSession">{{ $tr('导入临时查询记录') }}</div>
         </template>
       </div>
