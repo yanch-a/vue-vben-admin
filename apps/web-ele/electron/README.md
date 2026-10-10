@@ -27,7 +27,7 @@ pnpm build:ele
 - macOS：`~/Library/Application Support/Lemon DB Client/server-config.json`
 - Linux：`~/.config/Lemon DB Client/server-config.json`
 
-运行中也可以通过“服务端 → 选择或配置服务端…”（快捷键 `Ctrl/Cmd + ,`）切换环境。每个“配置 ID + 服务端 URL”使用独立的前端 Store 和 SQL 会话缓存，避免登录令牌、打开的数据库连接、SQL Tab、后台任务和 AI 模型选择串用。
+同一个窗口可以同时连接多个服务端。窗口顶部的标签对应各自的连接，切换标签不会断开其他服务端。菜单“服务端 → 连接服务端…”（快捷键 `Ctrl/Cmd + ,`）或标签栏上的“+”用于再接入一个环境。每个服务端使用独立的浏览器会话，登录令牌、打开的数据库连接、SQL Tab、后台任务和 AI 模型选择不会串用。
 
 ## 打包
 

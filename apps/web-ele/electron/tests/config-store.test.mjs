@@ -55,6 +55,24 @@ test('ServerConfigStore 未修改 URL 时保留登录状态', async (t) => {
   assert.equal(renamed.authenticated, true);
 });
 
+test('ServerConfigStore 切换当前服务端时保留各自的登录状态', async (t) => {
+  const { store } = await createFixture(t);
+  const first = await store.upsert({
+    name: '开发环境',
+    url: 'https://dev.example/lmdb',
+  });
+  const second = await store.upsert({
+    name: '生产环境',
+    url: 'https://prod.example/lmdb',
+  });
+  await store.setAuthenticated(first.id, true);
+  const state = await store.select(first.id);
+  assert.equal(state.selectedServerId, first.id);
+  assert.equal(state.servers.find((item) => item.id === first.id)?.authenticated, true);
+  assert.equal(state.servers.find((item) => item.id === second.id)?.name, '生产环境');
+  assert.equal((await store.select('missing-id')).selectedServerId, first.id);
+});
+
 test('ServerConfigStore 删除当前记录后清空选中状态', async (t) => {
   const { store } = await createFixture(t);
   const server = await store.upsert({

@@ -21,6 +21,7 @@ module.exports = {
     'electron/**/*.cjs',
     'electron/**/*.mjs',
     'electron/config/**/*',
+    'electron/tabs/**/*',
     'package.json',
     '!electron/tests/**/*',
     '!node_modules/**/*',

@@ -3,7 +3,18 @@ import { createServer } from 'node:http';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { app, BrowserWindow, ipcMain, Menu, net, protocol, shell } from 'electron';
+import {
+  app,
+  BaseWindow,
+  BrowserWindow,
+  ipcMain,
+  Menu,
+  net,
+  protocol,
+  session,
+  shell,
+  WebContentsView,
+} from 'electron';
 
 import { ServerConfigStore } from './config-store.mjs';
 import { buildProxyTarget, RENDERER_API_PREFIX } from './server-url.mjs';
@@ -11,14 +22,26 @@ import { buildProxyTarget, RENDERER_API_PREFIX } from './server-url.mjs';
 const electronDirectory = path.dirname(fileURLToPath(import.meta.url));
 const rendererDirectory = path.resolve(electronDirectory, '..', 'dist');
 const configPage = path.join(electronDirectory, 'config', 'index.html');
+const tabPage = path.join(electronDirectory, 'tabs', 'index.html');
 const isSmokeTest = process.env.LEMON_DESKTOP_SMOKE_TEST === 'true';
 const isRendererSmokeTest =
   process.env.LEMON_DESKTOP_RENDERER_SMOKE_TEST === 'true';
 const isAnySmokeTest = isSmokeTest || isRendererSmokeTest;
+/** 标签栏高度，需与 tabs/style.css 中的 40px 保持一致。 */
+const TAB_BAR_HEIGHT = 40;
 
 let configStore;
-let activeServer = null;
+/** 同一窗口内同时在线的服务端。键是服务端配置 ID。 */
+const serverTabs = new Map();
+/** 协议代理读取的最新服务端记录，URL 或登录标记变化后立即生效。 */
+const serversById = new Map();
+/** 已经注册过 lemon:// 的会话分区，避免重复注册导致抛错。 */
+const registeredPartitions = new Set();
+let activeTabId = null;
+/** @type {import('electron').BaseWindow | null} */
 let mainWindow = null;
+/** @type {import('electron').WebContentsView | null} */
+let tabBarView = null;
 let selectorWindow = null;
 let selectorAccepted = false;
 let desktopLocale = 'zh-CN';
@@ -74,9 +97,10 @@ function isApiPath(pathname) {
 /**
  * 由 Electron 主进程转发 API，桌面客户端无需关闭 webSecurity，
  * 也不要求每个被连接的 Lemon 服务端额外开放 CORS。
+ * 每个服务端标签使用自己的会话，因此这里必须转发到发起请求的那个服务端。
  */
-async function proxyApiRequest(request) {
-  if (!activeServer) {
+async function proxyApiRequest(request, server) {
+  if (!server) {
     return Response.json(
       {
         code: 503,
@@ -90,7 +114,7 @@ async function proxyApiRequest(request) {
   }
 
   try {
-    const target = buildProxyTarget(activeServer.url, request.url);
+    const target = buildProxyTarget(server.url, request.url);
     const headers = new Headers(request.headers);
     // 目标站点应自行生成 Host/Content-Length；移除自定义协议来源，避免后端误判 CORS。
     for (const name of ['content-length', 'host', 'origin', 'referer']) {
@@ -167,22 +191,44 @@ async function serveRenderer(pathname) {
   }
 }
 
-/** 注册桌面端统一协议：静态资源本地读取，/lmdb 请求转发到当前服务端。 */
-function registerApplicationProtocol() {
-  protocol.handle('lemon', async (request) => {
+/**
+ * 把服务端 ID 变成稳定的会话分区名。
+ * 不同分区拥有独立的 Cookie 和 localStorage，因此多个服务端可以同时保持登录。
+ */
+function partitionForServer(id) {
+  const safe = String(id).replaceAll(/[^a-zA-Z0-9_-]/g, '');
+  return `persist:lemon-${safe || 'server'}`;
+}
+
+/**
+ * 在该服务端自己的会话上注册 lemon://。
+ * 静态资源仍读本地包，/lmdb 只转发到这个分区对应的服务端。
+ */
+function registerPartitionProtocol(serverId) {
+  const partition = partitionForServer(serverId);
+  if (registeredPartitions.has(partition)) {
+    return partition;
+  }
+  const serverSession = session.fromPartition(partition);
+  serverSession.protocol.handle('lemon', async (request) => {
     const url = new URL(request.url);
     if (url.hostname !== 'app') {
       return new Response('Not Found', { status: 404 });
     }
-    return isApiPath(url.pathname) ? proxyApiRequest(request) : serveRenderer(url.pathname);
+    return isApiPath(url.pathname)
+      ? proxyApiRequest(request, serversById.get(serverId) ?? null)
+      : serveRenderer(url.pathname);
   });
+  registeredPartitions.add(partition);
+  return partition;
 }
 
-/** 仅允许业务窗口在当前应用内导航；http(s) 新窗口交给系统默认浏览器。 */
-function secureMainWindowNavigation(window) {
-  window.webContents.setWindowOpenHandler(({ url }) => {
-    if (url.startsWith('lemon://app/lmdb') && activeServer) {
-      void shell.openExternal(buildProxyTarget(activeServer.url, url));
+/** 仅允许业务页在当前应用内导航；http(s) 新窗口交给系统默认浏览器。 */
+function secureServerView(webContents, serverId) {
+  webContents.setWindowOpenHandler(({ url }) => {
+    const server = serversById.get(serverId);
+    if (url.startsWith('lemon://app/lmdb') && server) {
+      void shell.openExternal(buildProxyTarget(server.url, url));
       return { action: 'deny' };
     }
     if (/^https?:\/\//i.test(url)) {
@@ -190,7 +236,7 @@ function secureMainWindowNavigation(window) {
     }
     return { action: 'deny' };
   });
-  window.webContents.on('will-navigate', (event, url) => {
+  webContents.on('will-navigate', (event, url) => {
     if (!url.startsWith('lemon://app/')) {
       event.preventDefault();
       if (/^https?:\/\//i.test(url)) {
@@ -200,15 +246,122 @@ function secureMainWindowNavigation(window) {
   });
 }
 
-/** 创建或重新加载主业务窗口。 */
-async function createMainWindow() {
-  if (mainWindow && !mainWindow.isDestroyed()) {
-    await mainWindow.loadURL('lemon://app/index.html');
+/** 放大或缩小当前服务端页面，不影响标签栏和其他服务端。 */
+function adjustActiveZoom(delta) {
+  const contents = activeServerWebContents();
+  if (!contents) {
+    return;
+  }
+  contents.setZoomLevel(contents.getZoomLevel() + delta);
+}
+
+/** 当前正在查看的服务端页面；菜单动作只作用于这个标签。 */
+function activeServerWebContents() {
+  const tab = serverTabs.get(activeTabId);
+  if (!tab || tab.view.webContents.isDestroyed()) {
+    return null;
+  }
+  return tab.view.webContents;
+}
+
+/** 按发起 IPC 的页面找到它所属的服务端，避免标签之间读到彼此的地址。 */
+function serverTabByWebContents(webContents) {
+  for (const tab of serverTabs.values()) {
+    if (tab.view.webContents.id === webContents.id) {
+      return tab;
+    }
+  }
+  return null;
+}
+
+/** 标签栏和主进程共用的标签快照。 */
+function tabsPayload() {
+  return {
+    activeId: activeTabId,
+    locale: desktopLocale,
+    tabs: [...serverTabs.values()].map((tab) => ({
+      id: tab.server.id,
+      name: tab.server.name,
+      url: tab.server.url,
+    })),
+  };
+}
+
+/** 通知标签栏刷新。页面尚未加载完成时，标签栏会在启动后再拉取一次。 */
+function broadcastTabs() {
+  const payload = tabsPayload();
+  if (tabBarView && !tabBarView.webContents.isDestroyed()) {
+    tabBarView.webContents.send('lemon-tabs:changed', payload);
+  }
+  return payload;
+}
+
+/** 按窗口客户区摆放标签栏和全部服务端页面，隐藏的标签继续保留连接。 */
+function layoutServerViews() {
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    return;
+  }
+  let [width, height] = mainWindow.getContentSize();
+  // 窗口尚未显示时客户区可能暂时为 0，先用设计尺寸把页面铺开，避免后台标签无法完成加载。
+  if (width <= 0 || height <= 0) {
+    width = 1440;
+    height = 860;
+  }
+  tabBarView?.setBounds({ x: 0, y: 0, width, height: TAB_BAR_HEIGHT });
+  const contentBounds = {
+    height: Math.max(0, height - TAB_BAR_HEIGHT),
+    width,
+    x: 0,
+    y: TAB_BAR_HEIGHT,
+  };
+  for (const [id, tab] of serverTabs) {
+    tab.view.setBounds(contentBounds);
+    const visible = id === activeTabId;
+    tab.view.setVisible(visible);
+    if (visible) {
+      mainWindow.contentView.addChildView(tab.view);
+    }
+  }
+}
+
+/** 显示当前标签，并让窗口标题跟随该服务端名称。 */
+function revealActiveTab() {
+  const tab = serverTabs.get(activeTabId);
+  layoutServerViews();
+  if (!tab || !mainWindow || mainWindow.isDestroyed()) {
+    return;
+  }
+  mainWindow.setTitle(
+    tab.server.name ? `${tab.server.name} — Lemon DB Client` : 'Lemon DB Client',
+  );
+  if (!isRendererSmokeTest) {
+    if (mainWindow.isMinimized()) {
+      mainWindow.restore();
+    }
     mainWindow.show();
+    mainWindow.focus();
+  }
+  if (!isAnySmokeTest && !tab.view.webContents.isDestroyed()) {
+    tab.view.webContents.focus();
+  }
+}
+
+/** 记住上次查看的服务端，下次启动时优先打开它。 */
+async function rememberSelectedServer(id) {
+  try {
+    await configStore?.select(id);
+  } catch (error) {
+    console.warn('[desktop] 记录当前服务端失败', error);
+  }
+}
+
+/** 创建带标签栏的主窗口。业务页面随后作为子视图加入，而不是替换整个窗口。 */
+async function ensureMainWindow() {
+  if (mainWindow && !mainWindow.isDestroyed()) {
     return;
   }
 
-  mainWindow = new BrowserWindow({
+  mainWindow = new BaseWindow({
     autoHideMenuBar: false,
     backgroundColor: '#0f172a',
     height: 900,
@@ -218,23 +371,129 @@ async function createMainWindow() {
     show: false,
     title: 'Lemon DB Client',
     width: 1440,
+  });
+  tabBarView = new WebContentsView({
     webPreferences: {
       contextIsolation: true,
       nodeIntegration: false,
+      preload: path.join(electronDirectory, 'preload-tabs.cjs'),
+      sandbox: true,
+    },
+  });
+  mainWindow.contentView.addChildView(tabBarView);
+  tabBarView.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  tabBarView.webContents.on('will-navigate', (event, url) => {
+    // 首次 loadFile 使用 file://，之后禁止标签栏离开本地页面。
+    if (!url.startsWith('file:')) {
+      event.preventDefault();
+    }
+  });
+  try {
+    tabBarView.webContents.setVisualZoomLevelLimits(1, 1);
+  } catch (error) {
+    console.warn('[desktop] 标签栏缩放限制未生效', error);
+  }
+  for (const eventName of [
+    'resize',
+    'maximize',
+    'unmaximize',
+    'enter-full-screen',
+    'leave-full-screen',
+  ]) {
+    mainWindow.on(eventName, () => layoutServerViews());
+  }
+  mainWindow.on('closed', () => {
+    mainWindow = null;
+    tabBarView = null;
+    serverTabs.clear();
+    serversById.clear();
+    activeTabId = null;
+  });
+  layoutServerViews();
+  await tabBarView.webContents.loadFile(tabPage);
+  if (!isRendererSmokeTest) {
+    mainWindow.show();
+  }
+  layoutServerViews();
+}
+
+/**
+ * 在当前窗口打开一个服务端标签。
+ * 同一配置已打开时只切换过去；地址没变则不重新加载，避免丢掉正在编辑的内容。
+ */
+async function openServerTab(server) {
+  await ensureMainWindow();
+  serversById.set(server.id, server);
+  const existing = serverTabs.get(server.id);
+  if (existing) {
+    const urlChanged = existing.server.url !== server.url;
+    existing.server = server;
+    activeTabId = server.id;
+    revealActiveTab();
+    if (urlChanged && !existing.view.webContents.isDestroyed()) {
+      try {
+        await existing.view.webContents.loadURL('lemon://app/index.html');
+      } catch (error) {
+        console.error('[desktop] 服务端页面加载失败', error);
+      }
+    }
+    broadcastTabs();
+    void rememberSelectedServer(server.id);
+    return;
+  }
+
+  const partition = registerPartitionProtocol(server.id);
+  const view = new WebContentsView({
+    webPreferences: {
+      backgroundThrottling: false,
+      contextIsolation: true,
+      nodeIntegration: false,
+      partition,
       preload: path.join(electronDirectory, 'preload-main.cjs'),
       sandbox: true,
     },
   });
-  secureMainWindowNavigation(mainWindow);
-  mainWindow.once('ready-to-show', () => {
-    if (!isRendererSmokeTest) {
-      mainWindow?.show();
-    }
-  });
-  mainWindow.on('closed', () => {
-    mainWindow = null;
-  });
-  await mainWindow.loadURL('lemon://app/index.html');
+  secureServerView(view.webContents, server.id);
+  serverTabs.set(server.id, { server, view });
+  mainWindow.contentView.addChildView(view);
+  activeTabId = server.id;
+  revealActiveTab();
+  broadcastTabs();
+  try {
+    await view.webContents.loadURL('lemon://app/index.html');
+  } catch (error) {
+    console.error('[desktop] 服务端页面加载失败', error);
+  }
+  void rememberSelectedServer(server.id);
+}
+
+/** 关闭一个服务端标签。最后一个标签关闭后回到服务端选择窗口。 */
+async function closeServerTab(id) {
+  const tab = serverTabs.get(id);
+  if (!tab || !mainWindow || mainWindow.isDestroyed()) {
+    return;
+  }
+  serverTabs.delete(id);
+  serversById.delete(id);
+  mainWindow.contentView.removeChildView(tab.view);
+  if (!tab.view.webContents.isDestroyed()) {
+    tab.view.webContents.close();
+  }
+  if (activeTabId === id) {
+    const remaining = [...serverTabs.keys()];
+    activeTabId = remaining.at(-1) ?? null;
+  }
+  if (activeTabId) {
+    revealActiveTab();
+  } else {
+    mainWindow.setTitle('Lemon DB Client');
+    layoutServerViews();
+  }
+  broadcastTabs();
+  if (serverTabs.size === 0) {
+    mainWindow.hide();
+    await showServerSelector();
+  }
 }
 
 /**
@@ -254,14 +513,14 @@ async function runRendererSmokeTest() {
   if (!address || typeof address === 'string') {
     throw new Error('无法创建桌面端冒烟测试服务');
   }
-  activeServer = {
+  const smokeServerConfig = {
     id: 'desktop-smoke-server',
     name: '桌面冒烟测试',
     url: `http://127.0.0.1:${address.port}/lmdb`,
   };
-  await createMainWindow();
+  await openServerTab(smokeServerConfig);
   try {
-    const ready = await mainWindow.webContents.executeJavaScript(`
+    const ready = await activeServerWebContents().executeJavaScript(`
       new Promise((resolve) => {
         const deadline = Date.now() + 15000;
         const inspect = () => {
@@ -277,9 +536,47 @@ async function runRendererSmokeTest() {
         inspect();
       })
     `);
-    console.log(`[desktop-smoke] renderer mounted: ${ready}`);
+    const tabsReady = await tabBarView.webContents.executeJavaScript(
+      `Boolean(document.querySelector('#add-server') && window.lemonServerTabs)`,
+    );
+    // 再打开一个服务端，确认第一个标签的页面没有被销毁。
+    const secondServer = {
+      id: 'desktop-smoke-server-b',
+      name: '第二个冒烟服务端',
+      url: smokeServerConfig.url,
+    };
+    await openServerTab(secondServer);
+    const firstContents = serverTabs.get(smokeServerConfig.id)?.view.webContents;
+    const firstStillMounted = firstContents
+      ? await firstContents.executeJavaScript(`
+          (async () => {
+            const server = await window.lemonDesktop.getActiveServer();
+            return Boolean(
+              server?.id === 'desktop-smoke-server' &&
+              document.querySelector('#app')?.childElementCount > 0
+            );
+          })()
+        `)
+      : false;
+    const secondMounted = await activeServerWebContents().executeJavaScript(`
+      (async () => {
+        const server = await window.lemonDesktop.getActiveServer();
+        return Boolean(
+          server?.id === 'desktop-smoke-server-b' &&
+          document.querySelector('#app')?.childElementCount > 0
+        );
+      })()
+    `);
+    const multiTabReady =
+      serverTabs.size === 2 &&
+      activeTabId === secondServer.id &&
+      firstStillMounted &&
+      secondMounted;
+    console.log(
+      `[desktop-smoke] renderer mounted: ${ready}; tabs: ${tabsReady}; multi: ${multiTabReady}`,
+    );
     smokeServer.close();
-    app.exit(ready ? 0 : 1);
+    app.exit(ready && tabsReady && multiTabReady ? 0 : 1);
   } catch (error) {
     console.error('[desktop-smoke] renderer failed', error);
     smokeServer.close();
@@ -331,14 +628,13 @@ async function testServerConnection(rawUrl) {
   }
 }
 
-/** 用户确认服务端后关闭选择器，并以新的隔离命名空间加载业务窗口。 */
+/** 用户确认服务端后关闭选择器，并在当前窗口增加或切到对应标签。 */
 async function activateServer(server) {
-  activeServer = server;
   selectorAccepted = true;
   if (selectorWindow && !selectorWindow.isDestroyed()) {
     selectorWindow.close();
   }
-  await createMainWindow();
+  await openServerTab(server);
 }
 
 /** 每次启动或从菜单切换时显示服务端选择/编辑窗口。 */
@@ -349,13 +645,17 @@ async function showServerSelector() {
   }
 
   selectorAccepted = false;
-  mainWindow?.hide();
+  // 已经有在线服务端时，选择器只是再加一个连接，不能把现有窗口藏起来。
+  if (serverTabs.size === 0) {
+    mainWindow?.hide();
+  }
   selectorWindow = new BrowserWindow({
     backgroundColor: '#f4f7fb',
     height: 640,
     maximizable: false,
     minimizable: false,
-    parent: mainWindow ?? undefined,
+    // 没有在线标签时主窗口会被隐藏；这时不能把选择器设成它的子窗口，否则选择器会一起被隐藏。
+    parent: serverTabs.size > 0 ? mainWindow ?? undefined : undefined,
     resizable: false,
     show: false,
     title: desktopText('选择 Lemon 服务端', 'Select Lemon Server'),
@@ -379,7 +679,7 @@ async function showServerSelector() {
       selectorWindow = null;
     }
     if (!selectorAccepted) {
-      if (mainWindow && !mainWindow.isDestroyed()) {
+      if (serverTabs.size > 0 && mainWindow && !mainWindow.isDestroyed()) {
         mainWindow.show();
       } else if (!isSmokeTest) {
         app.quit();
@@ -413,18 +713,43 @@ async function showServerSelector() {
 /** 注册选择器与业务窗口需要的受限 IPC。 */
 function registerIpcHandlers() {
   ipcMain.handle('lemon-server:list', () => configStore.read());
-  ipcMain.handle('lemon-server:get-active', () => activeServer);
-  ipcMain.handle('lemon-server:set-authenticated', async (_event, authenticated) => {
-    if (!activeServer) return;
+  ipcMain.handle('lemon-server:get-active', (event) => {
+    return serverTabByWebContents(event.sender)?.server ?? null;
+  });
+  ipcMain.handle('lemon-server:set-authenticated', async (event, authenticated) => {
+    const tab = serverTabByWebContents(event.sender);
+    if (!tab) return;
     const updated = await configStore.setAuthenticated(
-      activeServer.id,
+      tab.server.id,
       authenticated === true,
     );
-    if (updated) activeServer = updated;
+    if (!updated) return;
+    tab.server = updated;
+    serversById.set(updated.id, updated);
+  });
+  ipcMain.handle('lemon-tabs:list', () => tabsPayload());
+  ipcMain.handle('lemon-tabs:activate', async (_event, id) => {
+    const tabId = String(id ?? '');
+    if (!serverTabs.has(tabId)) {
+      return tabsPayload();
+    }
+    activeTabId = tabId;
+    revealActiveTab();
+    broadcastTabs();
+    await rememberSelectedServer(tabId);
+    return tabsPayload();
+  });
+  ipcMain.handle('lemon-tabs:close', async (_event, id) => {
+    await closeServerTab(String(id ?? ''));
+    return tabsPayload();
+  });
+  ipcMain.handle('lemon-tabs:add', async () => {
+    await showServerSelector();
   });
   ipcMain.handle('lemon-i18n:set-locale', (_event, locale) => {
     desktopLocale = normalizeDesktopLocale(locale);
     installApplicationMenu();
+    broadcastTabs();
   });
   ipcMain.handle('lemon-server:test', (_event, url) => testServerConnection(url));
   ipcMain.handle('lemon-server:remove', (_event, id) => configStore.remove(String(id ?? '')));
@@ -446,17 +771,13 @@ function installApplicationMenu() {
     {
       label: desktopText('导出临时查询记录', 'Export Temporary Queries'),
       click: () => {
-        if (mainWindow && !mainWindow.isDestroyed()) {
-          mainWindow.webContents.send('lemon-session:export');
-        }
+        activeServerWebContents()?.send('lemon-session:export');
       },
     },
     {
       label: desktopText('导入临时查询记录', 'Import Temporary Queries'),
       click: () => {
-        if (mainWindow && !mainWindow.isDestroyed()) {
-          mainWindow.webContents.send('lemon-session:import');
-        }
+        activeServerWebContents()?.send('lemon-session:import');
       },
     },
   ];
@@ -480,14 +801,52 @@ function installApplicationMenu() {
         {
           accelerator: 'CmdOrCtrl+,',
           click: () => void showServerSelector(),
-          label: desktopText(
-            '选择或配置服务端…',
-            'Select or Configure Server…',
-          ),
+          label: desktopText('连接服务端…', 'Connect Server…'),
         },
       ],
     },
-    { role: 'viewMenu', label: desktopText('视图', 'View') },
+    {
+      label: desktopText('视图', 'View'),
+      submenu: [
+        {
+          accelerator: 'CmdOrCtrl+R',
+          click: () => activeServerWebContents()?.reload(),
+          label: desktopText('重新加载', 'Reload'),
+        },
+        {
+          accelerator: 'CmdOrCtrl+Shift+R',
+          click: () => activeServerWebContents()?.reloadIgnoringCache(),
+          label: desktopText('强制重新加载', 'Force Reload'),
+        },
+        { type: 'separator' },
+        {
+          accelerator: 'CmdOrCtrl+Plus',
+          click: () => adjustActiveZoom(0.5),
+          label: desktopText('放大', 'Zoom In'),
+        },
+        {
+          accelerator: 'CmdOrCtrl+-',
+          click: () => adjustActiveZoom(-0.5),
+          label: desktopText('缩小', 'Zoom Out'),
+        },
+        {
+          accelerator: 'CmdOrCtrl+0',
+          click: () => activeServerWebContents()?.setZoomLevel(0),
+          label: desktopText('实际大小', 'Actual Size'),
+        },
+        { type: 'separator' },
+        {
+          accelerator: 'F12',
+          click: () => activeServerWebContents()?.toggleDevTools(),
+          label: desktopText('开发者工具', 'Toggle Developer Tools'),
+        },
+        { type: 'separator' },
+        {
+          role: 'togglefullscreen',
+          label: desktopText('切换全屏', 'Toggle Full Screen'),
+        },
+      ],
+    },
     // 自定义窗口菜单：不把 Cmd/Ctrl+W 绑到关窗口，留给查询编辑器关页签
     {
       label: desktopText('窗口', 'Window'),
@@ -537,7 +896,6 @@ if (!hasSingleInstanceLock) {
   app.whenReady().then(async () => {
     desktopLocale = normalizeDesktopLocale(app.getLocale());
     configStore = new ServerConfigStore(path.join(app.getPath('userData'), 'server-config.json'));
-    registerApplicationProtocol();
     registerIpcHandlers();
     installApplicationMenu();
     if (isRendererSmokeTest) {
@@ -552,8 +910,7 @@ if (!hasSingleInstanceLock) {
           server.id === config.selectedServerId && server.authenticated,
       );
       if (selectedServer) {
-        activeServer = selectedServer;
-        await createMainWindow();
+        await openServerTab(selectedServer);
       } else {
         await showServerSelector();
       }

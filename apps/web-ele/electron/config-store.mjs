@@ -103,6 +103,23 @@ export class ServerConfigStore {
     return server;
   }
 
+  /**
+   * 记住用户当前正在查看的服务端，供下次启动时恢复。
+   * 不改变各服务端自己的登录标记。
+   */
+  async select(id) {
+    const config = await this.read();
+    if (!config.servers.some((item) => item.id === id)) {
+      return config;
+    }
+    if (config.selectedServerId === id) {
+      return config;
+    }
+    const next = { ...config, selectedServerId: id };
+    await this.write(next);
+    return next;
+  }
+
   /** 更新指定服务端的登录状态，返回更新后的记录。 */
   async setAuthenticated(id, authenticated) {
     const config = await this.read();

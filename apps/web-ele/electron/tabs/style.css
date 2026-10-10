@@ -1,0 +1,107 @@
+:root {
+  color: #e2e8f0;
+  background: #0f172a;
+  font-family:
+    Inter,
+    'PingFang SC',
+    'Microsoft YaHei',
+    system-ui,
+    sans-serif;
+  font-synthesis: none;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  height: 40px;
+  margin: 0;
+  overflow: hidden;
+  background: #0f172a;
+  user-select: none;
+}
+
+.bar {
+  display: flex;
+  align-items: flex-end;
+  height: 40px;
+  padding: 6px 8px 0;
+  gap: 4px;
+}
+
+.tabs {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  height: 34px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  gap: 4px;
+}
+
+.tabs::-webkit-scrollbar {
+  height: 0;
+}
+
+.tab {
+  display: flex;
+  align-items: center;
+  max-width: 240px;
+  min-width: 120px;
+  height: 34px;
+  padding: 0 4px 0 10px;
+  border: 0;
+  border-radius: 8px 8px 0 0;
+  background: #1e293b;
+  color: #cbd5e1;
+  cursor: pointer;
+  gap: 4px;
+}
+
+.tab[aria-selected='true'] {
+  background: #334155;
+  color: #f8fafc;
+}
+
+.tab__name {
+  overflow: hidden;
+  flex: 1;
+  font-size: 13px;
+  line-height: 34px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tab__close {
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 22px;
+}
+
+.tab__close:hover,
+.add:hover {
+  background: rgb(255 255 255 / 12%);
+}
+
+.add {
+  flex: none;
+  width: 28px;
+  height: 28px;
+  margin-bottom: 3px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: #e2e8f0;
+  cursor: pointer;
+  font-size: 18px;
+  line-height: 28px;
+}
