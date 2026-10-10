@@ -28,6 +28,12 @@ const databaseStatsLoading = ref(false);
 const databaseStatsError = ref('');
 const keyPattern = ref('*');
 const keys = ref<any[]>([]);
+const keyScanTruncated = ref(false);
+const keyScanLimit = ref(500);
+/** 切换连接、库或再次扫描时递增，用来丢弃已经过期的扫描结果。 */
+let keyLoadSeq = 0;
+/** 连续点开不同键时递增，避免慢请求把编辑区刷回上一个键。 */
+let keyReadSeq = 0;
 type KeyTreeNode = {
   children?: KeyTreeNode[];
   id: string;
@@ -40,16 +46,19 @@ type KeyTreeNode = {
   type?: string;
 };
 
-/** Redis 通常用冒号表达命名空间；树节点保留完整前缀用于目录删除。 */
+/** Spring / 本项目的 Redis 键用双冒号分层，例如 cache::user::1001。按单冒号切会把 :: 切出空目录。 */
+const KEY_SEPARATOR = '::';
+
+/** 树节点的 prefix 带完整分隔符，删除目录时按这个前缀匹配。 */
 const keyTree = computed<KeyTreeNode[]>(() => {
   const root: KeyTreeNode[] = [];
   for (const item of keys.value) {
-    const parts = String(item.key).split(':');
+    const parts = String(item.key).split(KEY_SEPARATOR);
     let level = root;
     let path = '';
     for (let index = 0; index < parts.length - 1; index++) {
       const part = parts[index] || '(空)';
-      path += `${parts[index]}:`;
+      path += `${parts[index]}${KEY_SEPARATOR}`;
       let folder = level.find((node) => node.isFolder && node.prefix === path);
       if (!folder) {
         folder = { id: `folder:${path}`, isFolder: true, label: part, prefix: path, children: [] };
@@ -175,28 +184,49 @@ function refreshStatsOnOpen(visible: boolean) {
 }
 
 async function loadKeys() {
-  if (!activeId.value) { keys.value = []; return; }
+  if (!activeId.value) {
+    keys.value = [];
+    keyScanTruncated.value = false;
+    return;
+  }
+  const requestId = ++keyLoadSeq;
   const connectionId = activeId.value;
   const selectedDatabase = database.value;
   loadingKeys.value = true;
+  const stillCurrent = () => requestId === keyLoadSeq
+    && activeId.value === connectionId
+    && database.value === selectedDatabase;
   try {
-    const result = unbox(await scanRedisKeys(connectionId, selectedDatabase, keyPattern.value || '*')) || [];
-    // 快速切换连接或 DB 时，丢弃旧请求的迟到响应，避免展示错库键列表。
-    if (activeId.value === connectionId && database.value === selectedDatabase) keys.value = result;
+    const result = unbox(await scanRedisKeys(connectionId, selectedDatabase, keyPattern.value || '*')) ?? {};
+    if (!stillCurrent()) return;
+    // 兼容旧接口直接返回数组；新接口在超出上限时带 truncated。
+    const list = Array.isArray(result) ? result : (result.keys || []);
+    keys.value = list;
+    keyScanTruncated.value = !Array.isArray(result) && Boolean(result.truncated);
+    keyScanLimit.value = Number(result.limit) > 0 ? Number(result.limit) : list.length;
+  } catch (error: any) {
+    if (!stillCurrent()) return;
+    keys.value = [];
+    keyScanTruncated.value = false;
+    ElMessage.error(cleanCommandError(error) || '加载 Redis 键失败');
   } finally {
-    if (activeId.value === connectionId && database.value === selectedDatabase) loadingKeys.value = false;
+    if (stillCurrent()) loadingKeys.value = false;
   }
 }
 
 async function selectKey(item: any) {
   if (item.isFolder) return;
+  const requestId = ++keyReadSeq;
   const connectionId = activeId.value;
   const selectedDatabase = database.value;
   const requestedKeyBase64 = item.keyBase64 || toKeyBase64(item.key);
   selectedKey.value = item.key; keyLoading.value = true;
+  const stillCurrent = () => requestId === keyReadSeq
+    && activeId.value === connectionId
+    && database.value === selectedDatabase;
   try {
     const data = unbox(await getRedisKey(connectionId, selectedDatabase, requestedKeyBase64));
-    if (activeId.value !== connectionId || database.value !== selectedDatabase) return;
+    if (!stillCurrent()) return;
     originalKey.value = data.key; keyForm.key = data.key; keyForm.type = data.type; keyForm.ttlSeconds = data.ttlSeconds;
     keyTruncated.value = Boolean(data.truncated);
     if (data.type === 'STRING') keyForm.content = data.value ?? '';
@@ -204,12 +234,17 @@ async function selectKey(item: any) {
     else if (data.type === 'ZSET') keyForm.content = JSON.stringify(data.scoredValues || {}, null, 2);
     else keyForm.content = JSON.stringify(data.values || [], null, 2);
     if (data.truncated) ElMessage.warning('集合内容超过服务端展示上限，当前只显示前 500 项');
+  } catch (error: any) {
+    if (stillCurrent()) ElMessage.error(cleanCommandError(error) || '读取 Redis 键失败');
   } finally {
-    if (activeId.value === connectionId && database.value === selectedDatabase) keyLoading.value = false;
+    if (stillCurrent()) keyLoading.value = false;
   }
 }
 
 function newKey() {
+  // 作废进行中的读键请求，避免切库后加载圈停不下来，或旧内容写回编辑区。
+  keyReadSeq += 1;
+  keyLoading.value = false;
   selectedKey.value = ''; originalKey.value = '';
   keyTruncated.value = false;
   Object.assign(keyForm, { key: '', type: 'STRING', ttlSeconds: -1, content: '' });
@@ -492,7 +527,13 @@ watch(activeId, async () => {
   const databaseChanged = database.value !== 0;
   database.value = 0;
   newKey();
-  if (!activeId.value) { keys.value = []; return; }
+  if (!activeId.value) {
+    keyLoadSeq += 1;
+    keys.value = [];
+    keyScanTruncated.value = false;
+    loadingKeys.value = false;
+    return;
+  }
   await loadDatabaseStats().catch(() => undefined);
   if (!databaseChanged) await loadKeys();
   if (mode.value === 'cli') await focusCommandInput();
@@ -581,19 +622,20 @@ onBeforeUnmount(() => {
         <template v-if="active && mode === 'browser'">
           <section class="key-list">
             <div class="search-row">
-              <ElInput v-model="keyPattern" :placeholder="$tr('匹配模式，如 user:*')" :prefix-icon="Search" @keyup.enter="loadKeys" />
+              <ElInput v-model="keyPattern" :placeholder="$tr('匹配模式，如 user::*')" :prefix-icon="Search" @keyup.enter="loadKeys" />
               <div class="key-actions">
                 <ElButton :icon="Refresh" circle :title="$tr('刷新键与数量')" @click="refreshConnection(active)" />
                 <ElButton v-if="writable" :icon="Plus" circle type="primary" :title="$tr('新建键')" @click="newKey" />
               </div>
             </div>
+            <p v-if="keyScanTruncated && !loadingKeys" class="key-scan-hint">只显示了前 {{ keyScanLimit }} 个键。缩小匹配模式后再搜索，才能看到其余键。</p>
             <ElScrollbar v-loading="loadingKeys">
               <ElTree
+                :key="`${activeId}-${database}`"
                 class="key-tree"
                 :data="keyTree"
                 node-key="id"
-                default-expand-all
-                :expand-on-click-node="false"
+                :expand-on-click-node="true"
                 @node-click="selectKey"
                 @node-contextmenu="openKeyMenu"
               >
@@ -691,6 +733,7 @@ onBeforeUnmount(() => {
 .resize-handle::after { position: absolute; inset: 0 1px; content: ''; }
 .resize-handle:hover::after { background: var(--el-color-primary-light-5); }
 .search-row { display: grid; grid-template-columns: minmax(80px, 1fr) auto; gap: 6px; padding: 9px 16px 9px 9px; border-bottom: 1px solid var(--el-border-color); }
+.key-scan-hint { margin: 0; padding: 8px 12px; color: var(--el-color-warning); background: var(--el-color-warning-light-9); font-size: 12px; line-height: 1.5; }
 .key-actions { display: flex; gap: 2px; padding-right: 2px; }
 .key-actions :deep(.el-button + .el-button) { margin-left: 0; }
 .key-item { min-height: 40px; padding: 6px 10px; }

@@ -19,6 +19,7 @@ import {
   testEtlNotifyChannel,
   type EtlNotifyChannelSave,
 } from '#/api/visual/etl';
+import { translateUiText } from '#/locales/ui-text';
 
 const visible = ref(false);
 const loading = ref(false);
@@ -37,11 +38,11 @@ const channelForm = ref<EtlNotifyChannelSave>(emptyChannel());
 const clearSecret = ref(false);
 let requestVersion = 0;
 
-const typeLabels: Record<string, string> = {
-  WECOM: '企业微信',
-  DINGTALK: '钉钉',
-  FEISHU: '飞书',
-};
+const typeLabels = computed<Record<string, string>>(() => ({
+  WECOM: translateUiText('企业微信'),
+  DINGTALK: translateUiText('钉钉'),
+  FEISHU: translateUiText('飞书'),
+}));
 const channels = computed(() => detail.value?.channels || []);
 const enabledChannels = computed(() =>
   channels.value.filter((item) => item.enabled),
@@ -56,9 +57,13 @@ const webhookHint = computed(() => {
 });
 const hostHint = computed(() => {
   const type = channelForm.value.channelType;
-  if (type === 'WECOM') return '仅允许主机 qyapi.weixin.qq.com（https）';
-  if (type === 'DINGTALK') return '仅允许主机 oapi.dingtalk.com（https）';
-  return '仅允许主机 open.feishu.cn / open.larksuite.com（https）';
+  if (type === 'WECOM')
+    return translateUiText('仅允许主机 qyapi.weixin.qq.com（https）');
+  if (type === 'DINGTALK')
+    return translateUiText('仅允许主机 oapi.dingtalk.com（https）');
+  return translateUiText(
+    '仅允许主机 open.feishu.cn / open.larksuite.com（https）',
+  );
 });
 /** 复选框值统一字符串，避免雪花 ID 经 Number 丢精度。 */
 function channelKey(id: string | number) {
@@ -245,7 +250,7 @@ defineExpose({ open });
 <template>
   <el-dialog
     v-model="visible"
-    title="消息通知配置"
+    :title="$tr('消息通知配置')"
     width="min(760px, 94vw)"
     top="6vh"
     :close-on-click-modal="false"
@@ -255,28 +260,34 @@ defineExpose({ open });
       <div class="notify-heading">
         <strong>{{ target?.workspaceName }}</strong>
         <el-tag :type="form.enabled ? 'success' : 'info'">{{
-          form.enabled ? '失败通知已开启' : '未开启'
+          form.enabled ? $tr('失败通知已开启') : $tr('未开启')
         }}</el-tag>
       </div>
       <el-alert
-        title="开启后，本工作区 ETL 执行失败时，会向勾选的已启用渠道发送摘要（不含业务数据行）。渠道 Webhook 为当前用户共用。"
+        :title="
+          $tr(
+            '开启后，本工作区 ETL 执行失败时，会向勾选的已启用渠道发送摘要（不含业务数据行）。渠道 Webhook 为当前用户共用。',
+          )
+        "
         type="info"
         :closable="false"
       />
       <el-form label-width="110px" class="notify-form" @submit.prevent="save">
-        <el-form-item label="失败通知">
+        <el-form-item :label="$tr('失败通知')">
           <el-switch v-model="form.enabled" />
-          <span class="hint">关闭后本工作区不再发送；不影响其他工作区</span>
+          <span class="hint">{{
+            $tr('关闭后本工作区不再发送；不影响其他工作区')
+          }}</span>
         </el-form-item>
-        <el-form-item label="通知渠道">
+        <el-form-item :label="$tr('通知渠道')">
           <div class="channel-picker">
             <div class="picker-tools">
-              <el-button size="small" @click="selectAllEnabled"
-                >全选已启用</el-button
-              >
-              <el-button size="small" type="primary" @click="startCreate"
-                >新增渠道</el-button
-              >
+              <el-button size="small" @click="selectAllEnabled">{{
+                $tr('全选已启用')
+              }}</el-button>
+              <el-button size="small" type="primary" @click="startCreate">{{
+                $tr('新增渠道')
+              }}</el-button>
             </div>
             <el-checkbox-group v-model="form.channelIds" class="channel-options">
               <div
@@ -290,15 +301,15 @@ defineExpose({ open });
                 >
                   {{ typeLabels[channel.channelType] || channel.channelType }} ·
                   {{ channel.channelName
-                  }}{{ channel.enabled ? '' : '（已停用）' }}
-                  <el-tag v-if="channel.keyword" size="small" class="mini-tag"
-                    >关键词</el-tag
-                  >
+                  }}{{ channel.enabled ? '' : $tr('（已停用）') }}
+                  <el-tag v-if="channel.keyword" size="small" class="mini-tag">{{
+                    $tr('关键词')
+                  }}</el-tag>
                   <el-tag
                     v-if="channel.secretConfigured"
                     size="small"
                     class="mini-tag"
-                    >已加签</el-tag
+                    >{{ $tr('已加签') }}</el-tag
                   >
                 </el-checkbox>
                 <div class="channel-actions">
@@ -307,40 +318,52 @@ defineExpose({ open });
                     type="primary"
                     :loading="testingId === String(channel.id)"
                     @click="testChannel(channel)"
-                    >测试</el-button
+                    >{{ $tr('测试') }}</el-button
                   >
-                  <el-button link @click="startEdit(channel)">编辑</el-button>
-                  <el-button link type="danger" @click="removeChannel(channel)"
-                    >删除</el-button
-                  >
+                  <el-button link @click="startEdit(channel)">{{
+                    $tr('编辑')
+                  }}</el-button>
+                  <el-button link type="danger" @click="removeChannel(channel)">{{
+                    $tr('删除')
+                  }}</el-button>
                 </div>
               </div>
             </el-checkbox-group>
-            <small v-if="!channels.length"
-              >尚未配置渠道。请新增企微 / 钉钉 / 飞书 Webhook。</small
-            >
-            <small v-else
-              >未勾选时发送到当前用户全部已启用渠道；已勾选则仅发送到勾选项。</small
-            >
+            <small v-if="!channels.length">{{
+              $tr('尚未配置渠道。请新增企微 / 钉钉 / 飞书 Webhook。')
+            }}</small>
+            <small v-else>{{
+              $tr(
+                '未勾选时发送到当前用户全部已启用渠道；已勾选则仅发送到勾选项。',
+              )
+            }}</small>
           </div>
         </el-form-item>
       </el-form>
 
       <div v-if="editing" class="channel-editor">
-        <strong>{{ channelForm.id ? '编辑渠道' : '新增渠道' }}</strong>
+        <strong>{{
+          channelForm.id ? $tr('编辑渠道') : $tr('新增渠道')
+        }}</strong>
         <el-form label-width="100px" class="editor-form">
-          <el-form-item label="渠道类型">
+          <el-form-item :label="$tr('渠道类型')">
             <el-radio-group v-model="channelForm.channelType">
-              <el-radio-button value="WECOM">企业微信</el-radio-button>
-              <el-radio-button value="DINGTALK">钉钉</el-radio-button>
-              <el-radio-button value="FEISHU">飞书</el-radio-button>
+              <el-radio-button value="WECOM">{{
+                $tr('企业微信')
+              }}</el-radio-button>
+              <el-radio-button value="DINGTALK">{{
+                $tr('钉钉')
+              }}</el-radio-button>
+              <el-radio-button value="FEISHU">{{
+                $tr('飞书')
+              }}</el-radio-button>
             </el-radio-group>
           </el-form-item>
-          <el-form-item label="渠道名称">
+          <el-form-item :label="$tr('渠道名称')">
             <el-input
               v-model="channelForm.channelName"
               maxlength="64"
-              placeholder="例如：运维告警群"
+              :placeholder="$tr('例如：运维告警群')"
             />
           </el-form-item>
           <el-form-item label="Webhook">
@@ -350,22 +373,28 @@ defineExpose({ open });
               :rows="2"
               :placeholder="webhookHint"
             />
-            <small class="hint-block">{{ hostHint }}。超长正文会按各平台上限截断后再发。</small>
+            <small class="hint-block"
+              >{{ hostHint
+              }}{{
+                $tr('。超长正文会按各平台上限截断后再发。')
+              }}</small
+            >
           </el-form-item>
-          <el-form-item label="安全关键词">
+          <el-form-item :label="$tr('安全关键词')">
             <el-input
               v-model="channelForm.keyword"
               maxlength="32"
-              placeholder="与机器人安全设置中的关键词一致，可不填"
+              :placeholder="$tr('与机器人安全设置中的关键词一致，可不填')"
             />
-            <small class="hint-block"
-              >填写后，测试和告警若正文里没有该词，会自动补在末尾。企微群机器人主要靠关键词或
-              IP 白名单；钉钉、飞书可与加签同时使用。</small
-            >
+            <small class="hint-block">{{
+              $tr(
+                '填写后，测试和告警若正文里没有该词，会自动补在末尾。企微群机器人主要靠关键词或 IP 白名单；钉钉、飞书可与加签同时使用。',
+              )
+            }}</small>
           </el-form-item>
           <el-form-item
             v-if="channelForm.channelType !== 'WECOM'"
-            label="加签密钥"
+            :label="$tr('加签密钥')"
           >
             <el-input
               v-model="channelForm.secretInput"
@@ -374,34 +403,34 @@ defineExpose({ open });
               :disabled="clearSecret"
               :placeholder="
                 channelForm.id
-                  ? '留空表示不修改已存密钥'
-                  : '机器人开启加签时填写'
+                  ? $tr('留空表示不修改已存密钥')
+                  : $tr('机器人开启加签时填写')
               "
             />
             <el-checkbox
               v-if="channelForm.id"
               v-model="clearSecret"
               class="clear-secret"
-              >清空已存密钥</el-checkbox
+              >{{ $tr('清空已存密钥') }}</el-checkbox
             >
           </el-form-item>
-          <el-form-item label="启用">
+          <el-form-item :label="$tr('启用')">
             <el-switch v-model="channelForm.enabled" />
           </el-form-item>
           <el-form-item>
-            <el-button type="primary" :loading="saving" @click="saveChannel"
-              >保存渠道</el-button
-            >
-            <el-button @click="editing = false">取消</el-button>
+            <el-button type="primary" :loading="saving" @click="saveChannel">{{
+              $tr('保存渠道')
+            }}</el-button>
+            <el-button @click="editing = false">{{ $tr('取消') }}</el-button>
           </el-form-item>
         </el-form>
       </div>
     </div>
     <template #footer>
-      <el-button @click="visible = false">关闭</el-button>
-      <el-button type="primary" :loading="saving" @click="save"
-        >保存通知配置</el-button
-      >
+      <el-button @click="visible = false">{{ $tr('关闭') }}</el-button>
+      <el-button type="primary" :loading="saving" @click="save">{{
+        $tr('保存通知配置')
+      }}</el-button>
     </template>
   </el-dialog>
 </template>

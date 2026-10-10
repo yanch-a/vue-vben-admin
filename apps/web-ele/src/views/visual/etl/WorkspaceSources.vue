@@ -124,13 +124,17 @@ async function loadSchemas(key: string, resource: EtlResource) {
 <template>
   <div class="sources-manager">
     <p class="help">
-      先选好连接和具体库，为它设置容易辨认的别名。每个查询或写入步骤都直接选这里的数据源。
+      {{
+        $tr(
+          '先选好连接和具体库，为它设置容易辨认的别名。每个查询或写入步骤都直接选这里的数据源。',
+        )
+      }}
     </p>
     <div class="source-builder">
       <el-select
         v-model="connectionId"
         filterable
-        placeholder="选择有权限的数据库连接"
+        :placeholder="$tr('选择有权限的数据库连接')"
         @change="changeConnection"
       >
         <el-option
@@ -148,8 +152,8 @@ async function loadSchemas(key: string, resource: EtlResource) {
         :disabled="!connectionId"
         :placeholder="
           selectedConnection?.instanceKind === 'SCHEMA'
-            ? '勾选 Schema / 模式'
-            : '勾选数据库 / 实例'
+            ? $tr('勾选 Schema / 模式')
+            : $tr('勾选数据库 / 实例')
         "
       >
         <el-option
@@ -163,23 +167,26 @@ async function loadSchemas(key: string, resource: EtlResource) {
         type="primary"
         :disabled="!selectedInstances.length"
         @click="addSources"
-        >加入工作区</el-button
+        >{{ $tr('加入工作区') }}</el-button
       >
     </div>
     <el-empty
       v-if="!entries.length"
       :image-size="60"
-      description="选好具体实例后加入工作区"
+      :description="$tr('选好具体实例后加入工作区')"
     />
     <div v-for="[key, resource] in entries" :key="key" class="source-row">
       <div class="source-identity">
         <span
-          >{{ resource.dbType || resource.databaseTypeHint || '待绑定' }} ·
-          {{ resource.instance || '尚未绑定实例' }}</span
+          >{{
+            resource.dbType || resource.databaseTypeHint || $tr('待绑定')
+          }}
+          ·
+          {{ resource.instance || $tr('尚未绑定实例') }}</span
         >
         <el-input
           :model-value="resource.displayName"
-          placeholder="数据源别名，例如：订单库、数仓"
+          :placeholder="$tr('数据源别名，例如：订单库、数仓')"
           maxlength="100"
           @input="patchSource(key, { displayName: String($event) })"
         />
@@ -191,7 +198,7 @@ async function loadSchemas(key: string, resource: EtlResource) {
         filterable
         allow-create
         default-first-option
-        placeholder="Schema / owner（可选）"
+        :placeholder="$tr('Schema / owner（可选）')"
         @visible-change="$event && loadSchemas(key, resource)"
         @change="patchSource(key, { schema: String($event || '') })"
       >
@@ -203,12 +210,18 @@ async function loadSchemas(key: string, resource: EtlResource) {
         />
       </el-select>
       <el-tag :type="resource.canWriteData ? 'success' : 'info'">{{
-        resource.canWriteData ? '可读写' : '只读 / 权限待核对'
+        resource.canWriteData ? $tr('可读写') : $tr('只读 / 权限待核对')
       }}</el-tag>
-      <el-button link type="danger" @click="removeSource(key)">移除</el-button>
+      <el-button link type="danger" @click="removeSource(key)">{{
+        $tr('移除')
+      }}</el-button>
     </div>
     <p v-if="!connections.length" class="help">
-      当前没有可使用的数据库连接，请在数据库连接管理中配置或申请授权。
+      {{
+        $tr(
+          '当前没有可使用的数据库连接，请在数据库连接管理中配置或申请授权。',
+        )
+      }}
     </p>
   </div>
 </template>

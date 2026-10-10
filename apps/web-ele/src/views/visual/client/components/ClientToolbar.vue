@@ -27,6 +27,8 @@ const emit = defineEmits<{
   savedQueries: [];
   /** 跳转数据大屏工作台（路由名 Dashboard） */
   chartLibrary: [];
+  /** 跳转变更窗口配置（路由名 DbChangeWindow） */
+  changeWindow: [];
   /** 打开右上角任务进度 */
   progress: [];
   /** 系统功能：导出 / 导入配置 */
@@ -82,7 +84,11 @@ function onSystemCommand(cmd: string | number) {
     <ElButton size="small" @click="emit('chartLibrary')">
       {{ $tr('数据大屏') }}
     </ElButton>
+    <ElButton size="small" @click="emit('changeWindow')">
+      {{ $tr('变更窗口') }}
+    </ElButton>
     <ElButton
+      v-permissions="{ permission: ['SqlWorkOrder:aou', 'SqlWorkOrder:submit'] }"
       size="small"
       type="warning"
       plain

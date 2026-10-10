@@ -21,6 +21,7 @@ import {
   previewEtlSchedule,
   saveEtlSchedule,
 } from '#/api/visual/etl';
+import { translateUiText } from '#/locales/ui-text';
 
 const emit = defineEmits<{
   logs: [workspaceId: string | number, runId: string];
@@ -75,14 +76,14 @@ const availablePeers = computed(() => {
     (peer) => !used.has(String(peer.id)),
   );
 });
-const statusText: Record<string, string> = {
-  PENDING: '等待执行',
-  RUNNING: '执行中',
-  SUCCESS: '成功',
-  FAILED: '失败',
-  SKIPPED: '已跳过',
-  CANCELLED: '已取消',
-};
+const statusText = computed<Record<string, string>>(() => ({
+  PENDING: translateUiText('等待执行'),
+  RUNNING: translateUiText('执行中'),
+  SUCCESS: translateUiText('成功'),
+  FAILED: translateUiText('失败'),
+  SKIPPED: translateUiText('已跳过'),
+  CANCELLED: translateUiText('已取消'),
+}));
 
 /** 打开指定工作区，不切换/丢弃当前编辑中的工作区草稿。 */
 async function open(workspace: EtlWorkspaceRow) {
@@ -228,7 +229,8 @@ async function preview() {
     if (version === previewVersion) times.value = response.data ?? response;
   } catch (error: any) {
     if (version === previewVersion)
-      ruleError.value = error.msg || error.message || '时间规则无效';
+      ruleError.value =
+        error.msg || error.message || translateUiText('时间规则无效');
   } finally {
     if (version === previewVersion) previewing.value = false;
   }
@@ -296,7 +298,7 @@ function formatTime(value?: number) {
       hour12: false,
     }).format(value);
   } catch {
-    return '时区无效';
+    return translateUiText('时区无效');
   }
 }
 /** 历史批次可关联多个原任务运行，按运行所属工作区打开日志。 */
@@ -323,7 +325,7 @@ defineExpose({ open });
 <template>
   <el-dialog
     v-model="visible"
-    title="定时执行配置"
+    :title="$tr('定时执行配置')"
     width="min(880px, 94vw)"
     top="4vh"
     :close-on-click-modal="false"
@@ -333,18 +335,22 @@ defineExpose({ open });
       <div class="schedule-heading">
         <strong>{{ target?.workspaceName }}</strong
         ><el-tag :type="detail?.schedule?.enabled ? 'success' : 'info'">{{
-          detail?.schedule?.enabled ? '已启用' : '未启用'
+          detail?.schedule?.enabled ? $tr('已启用') : $tr('未启用')
         }}</el-tag>
       </div>
       <el-alert
         v-if="!published"
-        title="请先保存并发布工作区，再配置定时执行"
+        :title="$tr('请先保存并发布工作区，再配置定时执行')"
         type="warning"
         :closable="false"
       />
       <template v-else>
         <el-alert
-          title="定时执行使用已发布版本；保存计划不会保存或发布草稿。可配置前置工作区，整条链按顺序串行，失败中断本次。"
+          :title="
+            $tr(
+              '定时执行使用已发布版本；保存计划不会保存或发布草稿。可配置前置工作区，整条链按顺序串行，失败中断本次。',
+            )
+          "
           type="info"
           :closable="false"
         />
@@ -353,16 +359,19 @@ defineExpose({ open });
           class="schedule-form"
           @submit.prevent="save"
         >
-          <el-form-item label="定时开关"
-            ><el-switch v-model="form.enabled" /><span class="hint"
-              >关闭仅暂停后续触发，当前批次继续</span
-            ></el-form-item
+          <el-form-item :label="$tr('定时开关')"
+            ><el-switch v-model="form.enabled" /><span class="hint">{{
+              $tr('关闭仅暂停后续触发，当前批次继续')
+            }}</span></el-form-item
           >
-          <el-form-item label="前置工作区">
+          <el-form-item :label="$tr('前置工作区')">
             <div class="pre-steps">
               <p class="hint block-hint">
-                可选：先串行执行其他工作区的已发布任务，再执行本工作区。例如先同步 B，再同步当前工作区
-                A。
+                {{
+                  $tr(
+                    '可选：先串行执行其他工作区的已发布任务，再执行本工作区。例如先同步 B，再同步当前工作区 A。',
+                  )
+                }}
               </p>
               <div
                 v-for="(step, index) in form.preSteps"
@@ -375,11 +384,11 @@ defineExpose({ open });
                     >{{ index + 1 }}.
                     {{ step.workspaceName || step.workspaceId }}</strong
                   >
-                  <el-tag v-if="step.missing" type="danger" size="small"
-                    >已失效，请移除</el-tag
-                  >
+                  <el-tag v-if="step.missing" type="danger" size="small">{{
+                    $tr('已失效，请移除')
+                  }}</el-tag>
                   <span v-else class="hint"
-                    >发布版本 {{ step.publishedVersion }}</span
+                    >{{ $tr('发布版本') }} {{ step.publishedVersion }}</span
                   >
                   <el-button
                     v-if="
@@ -389,7 +398,7 @@ defineExpose({ open });
                     link
                     type="primary"
                     @click="useLatestPre(step)"
-                    >改用最新发布版本
+                    >{{ $tr('改用最新发布版本') }}
                     {{ step.latestPublishedVersion }}</el-button
                   >
                   <div class="pre-step-actions">
@@ -397,23 +406,23 @@ defineExpose({ open });
                       link
                       :disabled="index === 0"
                       @click="movePreStep(index, -1)"
-                      >上移</el-button
+                      >{{ $tr('上移') }}</el-button
                     >
                     <el-button
                       link
                       :disabled="index === form.preSteps.length - 1"
                       @click="movePreStep(index, 1)"
-                      >下移</el-button
+                      >{{ $tr('下移') }}</el-button
                     >
-                    <el-button link type="danger" @click="removePreStep(index)"
-                      >移除</el-button
-                    >
+                    <el-button link type="danger" @click="removePreStep(index)">{{
+                      $tr('移除')
+                    }}</el-button>
                   </div>
                 </div>
                 <div class="picker-tools">
-                  <el-button @click="selectAllPre(step)"
-                    >全选已启用任务</el-button
-                  >
+                  <el-button @click="selectAllPre(step)">{{
+                    $tr('全选已启用任务')
+                  }}</el-button>
                 </div>
                 <el-checkbox-group
                   v-model="step.pipelineIds"
@@ -425,11 +434,12 @@ defineExpose({ open });
                     :value="task.id"
                     :disabled="!task.enabled"
                     >{{ task.name || task.id
-                    }}{{ task.enabled ? '' : '（已停用）' }}</el-checkbox
+                    }}{{ task.enabled ? '' : $tr('（已停用）') }}</el-checkbox
                   >
                 </el-checkbox-group>
                 <small
-                  >已选 {{ step.pipelineIds.length }} 个；按勾选顺序执行。</small
+                  >{{ $tr('已选') }} {{ step.pipelineIds.length }}
+                  {{ $tr('个；按勾选顺序执行。') }}</small
                 >
               </div>
               <div v-if="availablePeers.length" class="add-pre">
@@ -437,7 +447,7 @@ defineExpose({ open });
                   v-model="addingPeerId"
                   clearable
                   filterable
-                  placeholder="选择要先执行的工作区"
+                  :placeholder="$tr('选择要先执行的工作区')"
                   style="width: 260px"
                 >
                   <el-option
@@ -447,33 +457,39 @@ defineExpose({ open });
                     :value="peer.id"
                   />
                 </el-select>
-                <el-button type="primary" plain @click="addPreStep"
-                  >添加前置工作区</el-button
-                >
+                <el-button type="primary" plain @click="addPreStep">{{
+                  $tr('添加前置工作区')
+                }}</el-button>
               </div>
               <p v-else-if="!(form.preSteps || []).length" class="hint">
-                暂无其他已发布工作区可作前置；请先发布需要先执行的工作区。
+                {{
+                  $tr(
+                    '暂无其他已发布工作区可作前置；请先发布需要先执行的工作区。',
+                  )
+                }}
               </p>
             </div>
           </el-form-item>
-          <el-form-item label="本工作区版本"
-            ><span>发布版本 {{ form.publishedVersion }}</span
+          <el-form-item :label="$tr('本工作区版本')"
+            ><span>{{ $tr('发布版本') }} {{ form.publishedVersion }}</span
             ><el-button
               v-if="form.publishedVersion !== published"
               link
               type="primary"
               @click="useLatest"
-              >改用最新发布版本 {{ published }}</el-button
-            ><span v-else class="hint">当前最新发布版本</span></el-form-item
+              >{{ $tr('改用最新发布版本') }} {{ published }}</el-button
+            ><span v-else class="hint">{{ $tr('当前最新发布版本') }}</span></el-form-item
           >
-          <el-form-item label="本工作区任务"
+          <el-form-item :label="$tr('本工作区任务')"
             ><div class="task-picker">
               <div class="picker-tools">
                 <el-input
                   v-model="taskSearch"
-                  placeholder="检索同步任务"
+                  :placeholder="$tr('检索同步任务')"
                   clearable
-                /><el-button @click="selectAll">全选已启用任务</el-button>
+                /><el-button @click="selectAll">{{
+                  $tr('全选已启用任务')
+                }}</el-button>
               </div>
               <el-checkbox-group v-model="form.pipelineIds" class="task-options"
                 ><el-checkbox
@@ -482,92 +498,94 @@ defineExpose({ open });
                   :value="task.id"
                   :disabled="!task.enabled"
                   >{{ task.name || task.id
-                  }}{{ task.enabled ? '' : '（已停用）' }}</el-checkbox
+                  }}{{ task.enabled ? '' : $tr('（已停用）') }}</el-checkbox
                 ></el-checkbox-group
               ><small
-                >已选 {{ form.pipelineIds.length }} 个；在前置工作区之后按勾选顺序执行。</small
+                >{{ $tr('已选') }} {{ form.pipelineIds.length }}
+                {{ $tr('个；在前置工作区之后按勾选顺序执行。') }}</small
               >
             </div></el-form-item
           >
-          <el-form-item label="执行方式"
+          <el-form-item :label="$tr('执行方式')"
             ><el-radio-group v-model="form.mode"
               ><el-radio-button
                 v-for="mode in modes"
                 :key="mode.value"
                 :value="mode.value"
-                >{{ mode.label }}</el-radio-button
+                >{{ $tr(mode.label) }}</el-radio-button
               ></el-radio-group
             ></el-form-item
           >
-          <el-form-item label="执行时区"
+          <el-form-item :label="$tr('执行时区')"
             ><el-select
               v-model="form.timeZone"
               filterable
               allow-create
               default-first-option
-              aria-label="执行时区"
+              :aria-label="$tr('执行时区')"
               ><el-option
                 v-for="zone in zones"
                 :key="zone"
                 :label="zone"
                 :value="zone" /></el-select
           ></el-form-item>
-          <el-form-item v-if="form.mode === 'ONCE'" label="执行日期"
+          <el-form-item v-if="form.mode === 'ONCE'" :label="$tr('执行日期')"
             ><el-date-picker
               v-model="form.runAt"
               type="datetime"
               value-format="x"
-              placeholder="选择未来时间（浏览器本地时区）"
-            /><small class="hint"
-              >日期选择器用浏览器本地时区，以下预览按执行时区显示。</small
-            ></el-form-item
+              :placeholder="$tr('选择未来时间（浏览器本地时区）')"
+            /><small class="hint">{{
+              $tr('日期选择器用浏览器本地时区，以下预览按执行时区显示。')
+            }}</small></el-form-item
           >
           <el-form-item
             v-if="['DAILY', 'WEEKLY'].includes(form.mode)"
-            label="执行时间"
+            :label="$tr('执行时间')"
             ><el-time-select
               v-model="form.timeOfDay"
               start="00:00"
               step="00:01"
               end="23:59"
-              placeholder="选择时:分"
+              :placeholder="$tr('选择时:分')"
           /></el-form-item>
-          <el-form-item v-if="form.mode === 'WEEKLY'" label="执行星期"
+          <el-form-item v-if="form.mode === 'WEEKLY'" :label="$tr('执行星期')"
             ><el-checkbox-group v-model="form.weekDays"
               ><el-checkbox
                 v-for="(day, index) in weekDays"
                 :key="day"
                 :value="index + 1"
-                >{{ day }}</el-checkbox
+                >{{ $tr(day) }}</el-checkbox
               ></el-checkbox-group
             ></el-form-item
           >
-          <el-form-item v-if="form.mode === 'INTERVAL'" label="执行间隔"
+          <el-form-item v-if="form.mode === 'INTERVAL'" :label="$tr('执行间隔')"
             ><el-input-number
               v-model="form.intervalMinutes"
               :min="1"
               :max="10080"
-              aria-label="执行间隔分钟"
-            /><span class="hint"
-              >分钟；首次在保存后一个间隔触发</span
-            ></el-form-item
+              :aria-label="$tr('执行间隔分钟')"
+            /><span class="hint">{{
+              $tr('分钟；首次在保存后一个间隔触发')
+            }}</span></el-form-item
           >
-          <el-form-item v-if="form.mode === 'CRON'" label="Cron 表达式"
+          <el-form-item v-if="form.mode === 'CRON'" :label="$tr('Cron 表达式')"
             ><div class="cron-input">
               <el-input
                 v-model="form.cronExpression"
                 placeholder="0 */5 * * * *"
-              /><small
-                >六段：秒 分 时 日 月 周；秒为 0。例如每 5 分钟：0 */5 * * *
-                *</small
-              >
+              /><small>{{
+                $tr(
+                  '六段：秒 分 时 日 月 周；秒为 0。例如每 5 分钟：0 */5 * * * *',
+                )
+              }}</small>
             </div></el-form-item
           >
-          <el-form-item label="时间预览"
+          <el-form-item :label="$tr('时间预览')"
             ><div>
-              <el-button :loading="previewing" @click="preview"
-                >预览接下来执行时间</el-button
-              >
+              <el-button :loading="previewing" @click="preview">{{
+                $tr('预览接下来执行时间')
+              }}</el-button>
               <p v-if="ruleError" class="rule-error">{{ ruleError }}</p>
               <ol v-if="times.length" class="time-preview">
                 <li v-for="time in times" :key="time">
@@ -576,29 +594,29 @@ defineExpose({ open });
               </ol>
             </div></el-form-item
           >
-          <el-form-item label="下次触发"
+          <el-form-item :label="$tr('下次触发')"
             ><span>{{ formatTime(detail?.schedule?.nextFireAt) }}</span
-            ><span class="hint"
-              >服务端运行，关闭页面不影响执行；扫描误差约 5 秒</span
-            ></el-form-item
+            ><span class="hint">{{
+              $tr('服务端运行，关闭页面不影响执行；扫描误差约 5 秒')
+            }}</span></el-form-item
           >
         </el-form>
       </template>
       <div class="history-heading">
-        <strong>最近定时触发</strong
-        ><el-button link type="primary" @click="load(false)"
-          >刷新状态</el-button
-        >
+        <strong>{{ $tr('最近定时触发') }}</strong
+        ><el-button link type="primary" @click="load(false)">{{
+          $tr('刷新状态')
+        }}</el-button>
       </div>
       <el-table
         :data="detail?.recentFires || []"
         max-height="220"
-        empty-text="暂无定时触发记录"
-        ><el-table-column label="计划时间" width="175"
+        :empty-text="$tr('暂无定时触发记录')"
+        ><el-table-column :label="$tr('计划时间')" width="175"
           ><template #default="{ row }">{{
             formatTime(row.scheduledAt)
           }}</template></el-table-column
-        ><el-table-column label="状态" width="85"
+        ><el-table-column :label="$tr('状态')" width="85"
           ><template #default="{ row }"
             ><el-tag
               :type="
@@ -613,10 +631,10 @@ defineExpose({ open });
           ></el-table-column
         ><el-table-column
           prop="message"
-          label="说明"
+          :label="$tr('说明')"
           min-width="150"
           show-overflow-tooltip
-        /><el-table-column label="运行日志" width="100"
+        /><el-table-column :label="$tr('运行日志')" width="100"
           ><template #default="{ row }"
             ><el-button
               v-for="(id, index) in runIds(row.runIdsJson)"
@@ -624,28 +642,32 @@ defineExpose({ open });
               link
               type="primary"
               @click="openRunLog(id)"
-              >任务 {{ index + 1 }}</el-button
+              >{{ $tr('任务') }} {{ index + 1 }}</el-button
             ></template
           ></el-table-column
         ></el-table
       >
       <p class="hint">
-        相关工作区仍在运行时跳过本次，不重叠、不积压。服务停机错过超过一分钟的计划不会补跑。
+        {{
+          $tr(
+            '相关工作区仍在运行时跳过本次，不重叠、不积压。服务停机错过超过一分钟的计划不会补跑。',
+          )
+        }}
       </p>
     </div>
     <template #footer
-      ><el-button @click="visible = false">关闭</el-button
+      ><el-button @click="visible = false">{{ $tr('关闭') }}</el-button
       ><el-button
         v-if="detail?.schedule?.enabled"
         :loading="saving"
         @click="pause"
-        >暂停定时</el-button
+        >{{ $tr('暂停定时') }}</el-button
       ><el-button
         type="primary"
         :loading="saving"
         :disabled="loading || !published || !detail"
         @click="save"
-        >保存定时配置</el-button
+        >{{ $tr('保存定时配置') }}</el-button
       ></template
     >
   </el-dialog>

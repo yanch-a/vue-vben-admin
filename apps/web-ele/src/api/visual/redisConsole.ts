@@ -10,10 +10,10 @@ export function testRedisConnection(id: number | string) { return request({ url:
 export function getRedisDatabases(id: number | string) { return request({ url: url + 'connection/' + id + '/databases', method: 'get', timeout: 0 }); }
 export function getRedisInfo(id: number | string) { return request({ url: url + 'connection/' + id + '/info', method: 'get', timeout: 0 }); }
 export function scanRedisKeys(id: number | string, database: number, pattern: string) {
-  return request({ url: url + id + '/keys', method: 'get', params: { database, pattern, count: 500 }, timeout: 0 });
+  return request({ url: url + id + '/keys', method: 'get', params: { database, pattern, count: 500 }, timeout: 0, showErrorMessage: false });
 }
 export function getRedisKey(id: number | string, database: number, keyBase64: string) {
-  return request({ url: url + id + '/key', method: 'get', params: { database, keyBase64 } });
+  return request({ url: url + id + '/key', method: 'get', params: { database, keyBase64 }, showErrorMessage: false });
 }
 export function saveRedisKey(id: number | string, database: number, data: Record<string, any>) {
   return request({ url: url + id + '/key', method: 'post', params: { database }, data });

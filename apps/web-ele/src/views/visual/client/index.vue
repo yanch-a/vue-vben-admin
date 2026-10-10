@@ -881,6 +881,11 @@ function goChartLibrary() {
   router.push({ name: 'Dashboard' });
 }
 
+/** 跳转变更窗口配置页（路由名以后台菜单为准：DbChangeWindow） */
+function goChangeWindow() {
+  router.push({ name: 'DbChangeWindow' });
+}
+
 function onAddQueryTab() {
   const t = addTab({
     instanceName:
@@ -3362,6 +3367,7 @@ onBeforeUnmount(() => {
         @relation="goRelation"
         @saved-queries="goSavedQueryManage"
         @chart-library="goChartLibrary"
+        @change-window="goChangeWindow"
         @submit-work-order="submitAsWorkOrder"
         @progress="onOpenTaskPanel"
         @system="onOpenSystemFunctions"

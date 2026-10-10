@@ -416,7 +416,7 @@ onBeforeUnmount(() => {
           v-model="skillIds"
           multiple
           collapse-tags
-          placeholder="按需加载技能（不选时自动匹配）"
+          :placeholder="$tr('按需加载技能（不选时自动匹配）')"
           popper-class="ai-model-select-popper"
           style="width: 100%"
         >

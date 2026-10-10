@@ -11,6 +11,7 @@ import type {
   EtlPipeline,
   EtlWorkspaceDocument,
 } from '#/api/visual/etl';
+import { translateUiText } from '#/locales/ui-text';
 
 /** 生成适合作为 JSON 稳定 ID 的短 ID。 */
 export function etlId(prefix: string): string {
@@ -18,7 +19,9 @@ export function etlId(prefix: string): string {
 }
 
 /** 创建包含源、目标两个节点的傻瓜式同步任务。 */
-export function createSimplePipeline(name = '新建同步任务'): EtlPipeline {
+export function createSimplePipeline(
+  name = translateUiText('新建同步任务'),
+): EtlPipeline {
   const id = etlId('pipeline');
   const sourceId = etlId('read');
   const targetId = etlId('write');
@@ -30,7 +33,7 @@ export function createSimplePipeline(name = '新建同步任务'): EtlPipeline {
     nodes: [
       {
         id: sourceId,
-        name: '读取源表',
+        name: translateUiText('读取源表'),
         type: 'database.table.read',
         typeVersion: 1,
         resourceRef: `source_${id}`,
@@ -38,7 +41,7 @@ export function createSimplePipeline(name = '新建同步任务'): EtlPipeline {
       },
       {
         id: targetId,
-        name: '写入目标库',
+        name: translateUiText('写入目标库'),
         type: 'database.table.write',
         typeVersion: 1,
         resourceRef: `target_${id}`,
@@ -232,7 +235,7 @@ export function createSqlPipeline(
   const writeId = etlId('write');
   const pipeline: EtlPipeline = {
     id: etlId('pipeline'),
-    name: conditional ? '先取条件，再同步' : '数据同步',
+    name: translateUiText(conditional ? '先取条件，再同步' : '数据同步'),
     enabled: true,
     dependsOn: [],
     nodes: [],
@@ -242,7 +245,7 @@ export function createSqlPipeline(
     const conditionId = etlId('condition');
     pipeline.nodes.push({
       id: conditionId,
-      name: '从数仓读取水位',
+      name: translateUiText('从数仓读取水位'),
       type: 'database.query',
       typeVersion: 1,
       resourceRef: resourceRefs[1] || resourceRefs[0],
@@ -254,7 +257,7 @@ export function createSqlPipeline(
     });
     pipeline.nodes.push({
       id: readId,
-      name: '源数据',
+      name: translateUiText('源数据'),
       type: 'database.query',
       typeVersion: 1,
       resourceRef: resourceRefs[0],
@@ -275,7 +278,7 @@ export function createSqlPipeline(
   } else
     pipeline.nodes.push({
       id: readId,
-      name: '源数据',
+      name: translateUiText('源数据'),
       type: 'database.query',
       typeVersion: 1,
       resourceRef: resourceRefs[0],
@@ -283,7 +286,7 @@ export function createSqlPipeline(
     });
   pipeline.nodes.push({
     id: writeId,
-    name: '写入目标表',
+    name: translateUiText('写入目标表'),
     type: 'database.write',
     typeVersion: 1,
     resourceRef: resourceRefs[1] || resourceRefs[0],

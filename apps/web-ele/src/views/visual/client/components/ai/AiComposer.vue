@@ -6,6 +6,7 @@
 import { computed, ref } from 'vue';
 
 import type { AgentScene } from '#/api/ai/agent';
+import { translateUiText } from '#/locales/ui-text';
 
 defineOptions({ name: 'AiComposer' });
 
@@ -31,6 +32,7 @@ const scene = computed({
   set: (v: AgentScene) => emit('update:scene', v),
 });
 
+/** 快捷芯片：label/tpl 存中文源文案，展示与填入时走 translateUiText。 */
 const chips = computed(() =>
   props.etlMode
     ? [
@@ -91,7 +93,7 @@ const chips = computed(() =>
 
 function applyChip(c: (typeof chips.value)[number]) {
   scene.value = c.scene;
-  text.value = c.tpl;
+  text.value = translateUiText(c.tpl);
 }
 
 function onKey(e: KeyboardEvent) {
@@ -125,11 +127,11 @@ defineExpose({ setText });
         effect="plain"
         @click="applyChip(c)"
       >
-        {{ c.label }}
+        {{ $tr(c.label) }}
       </ElTag>
     </div>
     <div class="row">
-      <ElTag v-if="etlMode">ETL 配置与问答</ElTag>
+      <ElTag v-if="etlMode">{{ $tr('ETL 配置与问答') }}</ElTag>
       <ElRadioGroup v-else v-model="scene" size="small">
         <ElRadioButton label="sql" value="sql">SQL</ElRadioButton>
         <ElRadioButton label="chart" value="chart">{{

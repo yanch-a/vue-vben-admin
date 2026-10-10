@@ -8,10 +8,10 @@ import { getDesktopScopedStorageKey } from '../../../desktop/runtime';
 /** 标签栏停靠位置，交互对齐 Chrome DevTools 三点菜单。 */
 type TabPosition = 'top' | 'left' | 'right';
 
-const DOCK_OPTIONS: { value: TabPosition; label: string }[] = [
-  { value: 'top', label: '顶部标签' },
-  { value: 'left', label: '左侧标签' },
-  { value: 'right', label: '右侧标签' },
+const DOCK_OPTIONS: { value: TabPosition; labelKey: string }[] = [
+  { value: 'top', labelKey: '顶部标签' },
+  { value: 'left', labelKey: '左侧标签' },
+  { value: 'right', labelKey: '右侧标签' },
 ];
 
 /** 按工作区持久化已关闭标签，刷新后保持 tabbar 状态。 */
@@ -183,17 +183,21 @@ onBeforeUnmount(() => document.removeEventListener('click', dismiss));
       'pos-left': position === 'left',
       'pos-right': position === 'right',
     }"
-    aria-label="同步任务标签栏"
+    :aria-label="$tr('同步任务标签栏')"
   >
     <div class="tab-tools-start">
       <el-dropdown class="add-dropdown" @command="emit('add', $event === 'conditional')">
-        <el-button :icon="Plus" type="primary" class="add-btn">新增任务</el-button>
+        <el-button :icon="Plus" type="primary" class="add-btn">{{
+          $tr('新增任务')
+        }}</el-button>
         <template #dropdown
           ><el-dropdown-menu>
-            <el-dropdown-item command="simple">数据同步</el-dropdown-item>
-            <el-dropdown-item command="conditional"
-              >先从 B 取条件 → A 查询 → B 写入</el-dropdown-item
-            >
+            <el-dropdown-item command="simple">{{
+              $tr('数据同步')
+            }}</el-dropdown-item>
+            <el-dropdown-item command="conditional">{{
+              $tr('先从 B 取条件 → A 查询 → B 写入')
+            }}</el-dropdown-item>
           </el-dropdown-menu></template
         >
       </el-dropdown>
@@ -216,18 +220,18 @@ onBeforeUnmount(() => document.removeEventListener('click', dismiss));
         @keydown.enter="select(task.id)"
         @contextmenu.prevent="context($event, task.id)"
       >
-        <span :title="task.name">{{ task.name }}</span
-        ><small v-if="task.enabled === false">停用</small>
+        <span :title="$tr(task.name)">{{ $tr(task.name) }}</span
+        ><small v-if="task.enabled === false">{{ $tr('停用') }}</small>
         <el-button
           :icon="Close"
           link
-          :title="`关闭 ${task.name}`"
+          :title="`${$tr('关闭')} ${task.name}`"
           @click.stop="close(task.id)"
         />
       </div>
-      <span v-if="!visible.length" class="empty-tabs"
-        >使用任务下拉重新打开</span
-      >
+      <span v-if="!visible.length" class="empty-tabs">{{
+        $tr('使用任务下拉重新打开')
+      }}</span>
     </div>
 
     <!-- 最右侧：任务下拉 + 三点停靠菜单 -->
@@ -236,16 +240,16 @@ onBeforeUnmount(() => document.removeEventListener('click', dismiss));
         class="task-picker"
         :model-value="active || undefined"
         filterable
-        placeholder="选择任务"
-        title="选择任务（包含已关闭任务）"
-        aria-label="选择任务"
+        :placeholder="$tr('选择任务')"
+        :title="$tr('选择任务（包含已关闭任务）')"
+        :aria-label="$tr('选择任务')"
         :teleported="true"
         @change="pickTask"
       >
         <el-option
           v-for="task in tasks"
           :key="task.id"
-          :label="task.name || task.id"
+          :label="$tr(task.name || task.id)"
           :value="task.id"
         />
       </el-select>
@@ -260,12 +264,12 @@ onBeforeUnmount(() => document.removeEventListener('click', dismiss));
           <el-button
             :icon="MoreFilled"
             class="dock-trigger"
-            title="标签栏位置"
-            aria-label="标签栏位置"
+            :title="$tr('标签栏位置')"
+            :aria-label="$tr('标签栏位置')"
           />
         </template>
-        <div class="dock-menu" role="menu" aria-label="选择标签栏位置">
-          <div class="dock-menu__title">标签栏位置</div>
+        <div class="dock-menu" role="menu" :aria-label="$tr('选择标签栏位置')">
+          <div class="dock-menu__title">{{ $tr('标签栏位置') }}</div>
           <div class="dock-icons" role="group">
             <button
               v-for="opt in DOCK_OPTIONS"
@@ -273,8 +277,8 @@ onBeforeUnmount(() => document.removeEventListener('click', dismiss));
               type="button"
               class="dock-icon"
               :class="{ active: position === opt.value }"
-              :title="opt.label"
-              :aria-label="opt.label"
+              :title="$tr(opt.labelKey)"
+              :aria-label="$tr(opt.labelKey)"
               :aria-pressed="position === opt.value"
               role="menuitemradio"
               @click="setPosition(opt.value)"
@@ -296,15 +300,15 @@ onBeforeUnmount(() => document.removeEventListener('click', dismiss));
         :style="{ left: `${menu.x}px`, top: `${menu.y}px` }"
         @click.stop
       >
-        <button @click="close(menu.id)">关闭标签</button
-        ><button @click="closeOthers">关闭其他标签</button>
+        <button @click="close(menu.id)">{{ $tr('关闭标签') }}</button
+        ><button @click="closeOthers">{{ $tr('关闭其他标签') }}</button>
         <button
           @click="
             closed = [];
             dismiss();
           "
         >
-          打开全部任务
+          {{ $tr('打开全部任务') }}
         </button>
         <button
           class="danger"
@@ -313,7 +317,7 @@ onBeforeUnmount(() => document.removeEventListener('click', dismiss));
             dismiss();
           "
         >
-          删除任务配置…
+          {{ $tr('删除任务配置…') }}
         </button>
       </div></Teleport
     >

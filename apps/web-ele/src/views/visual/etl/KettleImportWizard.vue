@@ -617,22 +617,37 @@ defineExpose({ open, complete });
 <template>
   <el-dialog
     v-model="visible"
-    title="导入 Kettle"
+    :title="$tr('导入 Kettle')"
     width="min(1060px, 96vw)"
     :close-on-click-modal="false"
     class="kettle-wizard"
     @closed="aiWindow?.close()"
   >
     <el-steps :active="step" finish-status="success" align-center>
-      <el-step title="解析文件" description="安全识别连接和链路" />
-      <el-step title="导入数据源" description="匹配有权限的连接" />
-      <el-step title="实例与别名" description="选择具体库 / Schema" />
-      <el-step title="生成任务" description="逐条检查或 AI 修复" />
-      <el-step title="确认导入" description="仅追加到草稿" />
+      <el-step
+        :title="$tr('解析文件')"
+        :description="$tr('安全识别连接和链路')"
+      />
+      <el-step
+        :title="$tr('导入数据源')"
+        :description="$tr('匹配有权限的连接')"
+      />
+      <el-step
+        :title="$tr('实例与别名')"
+        :description="$tr('选择具体库 / Schema')"
+      />
+      <el-step
+        :title="$tr('生成任务')"
+        :description="$tr('逐条检查或 AI 修复')"
+      />
+      <el-step
+        :title="$tr('确认导入')"
+        :description="$tr('仅追加到草稿')"
+      />
     </el-steps>
     <div class="wizard-body">
       <template v-if="step === 0">
-        <p>不会连接文件中的生产地址，也不会导入账号或密码。</p>
+        <p>{{ $tr('不会连接文件中的生产地址，也不会导入账号或密码。') }}</p>
         <div v-for="file in files" :key="file.id" class="file-row">
           <strong>{{ file.file.name }}</strong
           ><el-tag
@@ -645,65 +660,77 @@ defineExpose({ open, complete });
             "
             >{{
               file.status === 'loading'
-                ? '解析中'
+                ? $tr('解析中')
                 : file.status === 'success'
-                  ? `${file.result?.tasks.length} 个任务`
-                  : '解析失败'
+                  ? `${file.result?.tasks.length} ${$tr('个任务')}`
+                  : $tr('解析失败')
             }}</el-tag
           ><span>{{ file.error }}</span
           ><el-button v-if="file.status === 'error'" @click="parseFile(file)"
-            >重试</el-button
+            >{{ $tr('重试') }}</el-button
           >
           <el-button v-if="file.status === 'error'" @click="fileHelp(file)">
-            AI 排查
+            {{ $tr('AI 排查') }}
           </el-button>
         </div>
         <p v-if="parseDone && files.some((file) => file.status === 'error')">
-          失败文件不会被导入，可重试；继续仅处理成功文件。
+          {{ $tr('失败文件不会被导入，可重试；继续仅处理成功文件。') }}
         </p>
       </template>
       <template v-else-if="step === 1">
         <div class="actions">
-          <span
-            >选择已有连接，或手动新建。文件里的库名只是提示，不会授予访问权限。</span
-          ><el-button @click="refreshConnections" :loading="busy"
-            >刷新目录</el-button
-          ><el-button type="primary" plain @click="createConnection()"
-            >新建连接</el-button
-          >
+          <span>{{
+            $tr(
+              '选择已有连接，或手动新建。文件里的库名只是提示，不会授予访问权限。',
+            )
+          }}</span
+          ><el-button @click="refreshConnections" :loading="busy">{{
+            $tr('刷新目录')
+          }}</el-button
+          ><el-button type="primary" plain @click="createConnection()">{{
+            $tr('新建连接')
+          }}</el-button>
         </div>
         <div v-for="row in sources" :key="row.ref" class="source-card">
           <div>
             <strong>{{ row.name }}</strong
-            ><small>{{ row.product }} · {{ row.hint || '未提供库名' }}</small>
+            ><small
+              >{{ row.product }} · {{ row.hint || $tr('未提供库名') }}</small
+            >
           </div>
           <el-select
             v-model="row.connectionId"
             filterable
-            placeholder="选择当前用户有权限的连接"
+            :placeholder="$tr('选择当前用户有权限的连接')"
             @change="changeConnection(row)"
             ><el-option
               v-for="connection in catalog"
               :key="connection.id"
               :value="String(connection.id)"
               :label="`${connection.name} · ${connection.dbType}`" /></el-select
-          ><el-button link @click="sourceHelp(row)">AI 协助匹配</el-button>
-          <el-button link @click="createConnection(row)">新建此连接</el-button>
+          ><el-button link @click="sourceHelp(row)">{{
+            $tr('AI 协助匹配')
+          }}</el-button>
+          <el-button link @click="createConnection(row)">{{
+            $tr('新建此连接')
+          }}</el-button>
           <el-checkbox
             v-if="differentFamily(row)"
             v-model="row.acceptDialectChange"
-            >确认跨数据库族迁移（需修复 SQL）</el-checkbox
+            >{{ $tr('确认跨数据库族迁移（需修复 SQL）') }}</el-checkbox
           >
         </div>
       </template>
       <template v-else-if="step === 2">
-        <p>每个实例设置清晰别名，后续任务直接使用。已有工作区别名可复用。</p>
+        <p>{{
+          $tr('每个实例设置清晰别名，后续任务直接使用。已有工作区别名可复用。')
+        }}</p>
         <div v-for="row in sources" :key="row.ref" class="instance-card">
           <strong>{{ row.name }}</strong
           ><el-select
             v-model="row.existingRef"
             clearable
-            placeholder="复用已有别名（可选）"
+            :placeholder="$tr('复用已有别名（可选）')"
             @change="useExisting(row)"
             ><el-option
               v-for="[ref, resource] in existingOptions(row)"
@@ -716,7 +743,7 @@ defineExpose({ open, complete });
             filterable
             :disabled="!!row.existingRef"
             :loading="row.busy"
-            placeholder="选择授权实例 / 数据库"
+            :placeholder="$tr('选择授权实例 / 数据库')"
             @change="loadSchemas(row)"
             ><el-option
               v-for="instance in row.instances"
@@ -729,7 +756,7 @@ defineExpose({ open, complete });
             v-model="row.schema"
             clearable
             :disabled="!!row.existingRef"
-            placeholder="Schema（默认）"
+            :placeholder="$tr('Schema（默认）')"
             ><el-option
               v-for="schema in row.schemas"
               :key="schema"
@@ -739,11 +766,11 @@ defineExpose({ open, complete });
           <el-input
             v-model="row.alias"
             :disabled="!!row.existingRef"
-            placeholder="实例别名"
+            :placeholder="$tr('实例别名')"
             maxlength="100"
           />
-          <el-button @click="loadInstances(row)">重新识别</el-button
-          ><el-button link @click="sourceHelp(row)">AI 排查</el-button
+          <el-button @click="loadInstances(row)">{{ $tr('重新识别') }}</el-button
+          ><el-button link @click="sourceHelp(row)">{{ $tr('AI 排查') }}</el-button
           ><el-alert
             v-if="row.error"
             :title="row.error"
@@ -755,32 +782,38 @@ defineExpose({ open, complete });
       <template v-else-if="step === 3">
         <div class="actions">
           <span
-            >{{ reports.length }} 个任务 · {{ readyCount }} 可转换 ·
+            >{{ reports.length }} {{ $tr('个任务') }} · {{ readyCount }}
+            {{ $tr('可转换') }} ·
             {{ reports.filter((task) => task.status === 'REVIEW').length }}
-            待修复 ·
+            {{ $tr('待修复') }} ·
             {{ reports.filter((task) => task.status === 'DISABLED').length }}
-            原流程停用</span
+            {{ $tr('原流程停用') }}</span
           ><el-button
             @click="
               selected = reports
                 .filter((task) => task.status === 'READY')
                 .map((task) => task.id)
             "
-            >选择可转换任务</el-button
-          ><el-button @click="selected = reports.map((task) => task.id)"
-            >全选（停用保留）</el-button
+            >{{ $tr('选择可转换任务') }}</el-button
+          ><el-button @click="selected = reports.map((task) => task.id)">{{
+            $tr('全选（停用保留）')
+          }}</el-button
           ><el-input
             v-model="search"
             clearable
-            placeholder="检索任务 / 文件"
+            :placeholder="$tr('检索任务 / 文件')"
             @input="page = 1"
           />
         </div>
         <p>
-          “可转换”仅表示配置语义已转换，仍需在实际数据库预检。待修复任务可选择导入，但会保持停用。
+          {{
+            $tr(
+              '“可转换”仅表示配置语义已转换，仍需在实际数据库预检。待修复任务可选择导入，但会保持停用。',
+            )
+          }}
         </p>
         <el-table :data="pageTasks" max-height="420"
-          ><el-table-column label="导入" width="65"
+          ><el-table-column :label="$tr('导入')" width="65"
             ><template #default="{ row }"
               ><el-checkbox
                 :model-value="selected.includes(row.id)"
@@ -791,9 +824,11 @@ defineExpose({ open, complete });
                 <p v-for="(issue, index) in row.issues" :key="index">
                   {{ issue }}
                 </p>
-                <p v-if="!row.issues.length">参数、字段和流程已确定性转换。</p>
+                <p v-if="!row.issues.length">
+                  {{ $tr('参数、字段和流程已确定性转换。') }}
+                </p>
                 <details>
-                  <summary>查看候选 JSON</summary>
+                  <summary>{{ $tr('查看候选 JSON') }}</summary>
                   <pre>{{
                     JSON.stringify(
                       taskDocument(row.id)?.document?.pipelines.find(
@@ -808,31 +843,31 @@ defineExpose({ open, complete });
             ></el-table-column
           ><el-table-column
             prop="name"
-            label="同步任务"
+            :label="$tr('同步任务')"
             min-width="200"
           /><el-table-column
             prop="nodeCount"
-            label="节点"
+            :label="$tr('节点')"
             width="65"
-          /><el-table-column label="状态" width="100"
+          /><el-table-column :label="$tr('状态')" width="100"
             ><template #default="{ row }"
               ><el-tag :type="row.status === 'READY' ? 'success' : 'warning'">{{
                 row.status === 'READY'
-                  ? '可转换'
+                  ? $tr('可转换')
                   : row.status === 'DISABLED'
-                    ? '原流程停用'
-                    : '待修复'
+                    ? $tr('原流程停用')
+                    : $tr('待修复')
               }}</el-tag></template
             ></el-table-column
           ><el-table-column
             prop="fileName"
-            label="来源文件"
+            :label="$tr('来源文件')"
             min-width="180"
-          /><el-table-column label="操作" width="115"
+          /><el-table-column :label="$tr('操作')" width="115"
             ><template #default="{ row }"
-              ><el-button link type="primary" @click="repair(row.id)"
-                >AI 检查 / 修复</el-button
-              ></template
+              ><el-button link type="primary" @click="repair(row.id)">{{
+                $tr('AI 检查 / 修复')
+              }}</el-button></template
             ></el-table-column
           ></el-table
         >
@@ -846,8 +881,8 @@ defineExpose({ open, complete });
       <template v-else>
         <el-result
           icon="success"
-          title="准备追加到工作区草稿"
-          :sub-title="`选中 ${selected.length} 个任务，匹配 ${sources.length} 个数据源。不覆盖已有任务，不保存、不运行。`"
+          :title="$tr('准备追加到工作区草稿')"
+          :sub-title="`${$tr('选中')} ${selected.length} ${$tr('个任务，匹配')} ${sources.length} ${$tr('个数据源。不覆盖已有任务，不保存、不运行。')}`"
         />
         <p
           v-if="
@@ -856,24 +891,25 @@ defineExpose({ open, complete });
             )
           "
         >
-          包含待修复任务：将保留为停用状态，修复前不能运行。
+          {{ $tr('包含待修复任务：将保留为停用状态，修复前不能运行。') }}
         </p>
       </template>
     </div>
     <template #footer
-      ><el-button @click="visible = false">取消</el-button
-      ><el-button v-if="step > 0" :disabled="busy" @click="step--"
-        >上一步</el-button
+      ><el-button @click="visible = false">{{ $tr('取消') }}</el-button
+      ><el-button v-if="step > 0" :disabled="busy" @click="step--">{{
+        $tr('上一步')
+      }}</el-button
       ><el-button
         v-if="step < 4"
         type="primary"
         :loading="busy"
         :disabled="!parseDone"
         @click="next"
-        >下一步</el-button
-      ><el-button v-else type="primary" :loading="busy" @click="apply"
-        >确认追加到草稿</el-button
-      ></template
+        >{{ $tr('下一步') }}</el-button
+      ><el-button v-else type="primary" :loading="busy" @click="apply">{{
+        $tr('确认追加到草稿')
+      }}</el-button></template
     >
   </el-dialog>
   <ConnectionDialog

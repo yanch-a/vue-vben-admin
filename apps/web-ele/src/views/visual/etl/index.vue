@@ -50,6 +50,7 @@ import TaskTabs from './TaskTabs.vue';
 import KettleImportWizard from './KettleImportWizard.vue';
 import WorkspaceSchedule from './WorkspaceSchedule.vue';
 import WorkspaceNotify from './WorkspaceNotify.vue';
+import { translateUiText } from '#/locales/ui-text';
 import { createEtlRequestGate } from './etlRequestGate';
 import {
   clearEtlLocalDraft,
@@ -84,10 +85,10 @@ const taskPosition = ref(
  */
 type ResultDock = 'right' | 'bottom' | 'hidden';
 type ResultDockKind = 'preview' | 'mapping';
-const RESULT_DOCK_OPTIONS: { value: ResultDock; label: string }[] = [
-  { value: 'right', label: '右侧' },
-  { value: 'bottom', label: '下方' },
-  { value: 'hidden', label: '不显示' },
+const RESULT_DOCK_OPTIONS: { value: ResultDock; labelKey: string }[] = [
+  { value: 'right', labelKey: '右侧' },
+  { value: 'bottom', labelKey: '下方' },
+  { value: 'hidden', labelKey: '不显示' },
 ];
 const PREVIEW_DOCK_KEY = 'lemon-etl-result-dock';
 const MAPPING_DOCK_KEY = 'lemon-etl-mapping-dock';
@@ -915,7 +916,9 @@ function addStep(type: 'database.query' | 'database.write') {
   if (!pipeline.value) return;
   const item: EtlNode = {
     id: etlId(type === 'database.query' ? 'query' : 'write'),
-    name: type === 'database.query' ? '查询步骤' : '写入步骤',
+    name: translateUiText(
+      type === 'database.query' ? '查询步骤' : '写入步骤',
+    ),
     type,
     typeVersion: 1,
     resourceRef: resources.value[0]?.[0],
@@ -1190,7 +1193,7 @@ async function cancelRun() {
   }
 }
 function statusLabel(status: string) {
-  return (
+  const label =
     (
       {
         PENDING: '等待',
@@ -1203,8 +1206,8 @@ function statusLabel(status: string) {
         CANCELLED: '已取消',
         INTERRUPTED: '中断 · 待核对',
       } as Record<string, string>
-    )[status] || status
-  );
+    )[status] || status;
+  return translateUiText(label);
 }
 async function openSources() {
   if (editorMode.value === 'json') {
@@ -1565,78 +1568,78 @@ onBeforeUnmount(() => {
         <div class="toolbar-nav">
           <el-button
             :icon="sidebarOpen ? Fold : Expand"
-            :title="sidebarOpen ? '隐藏工作区' : '展开工作区'"
+            :title="sidebarOpen ? $tr('隐藏工作区') : $tr('展开工作区')"
             @click="toggleSidebar"
           />
-          <strong>数据同步</strong>
+          <strong>{{ $tr('数据同步') }}</strong>
           <div v-if="activeWorkspace" class="source-chips">
             <button
               v-for="[key, source] in resources"
               :key="key"
               type="button"
               class="source-chip"
-              :title="`${source.displayName} · ${source.instance || '待绑定'}`"
+              :title="`${source.displayName} · ${source.instance || $tr('待绑定')}`"
               @click="openSources"
             >
               {{ source.displayName }}
             </button>
             <el-button v-if="!resources.length" link @click="openSources"
-              >添加数据源</el-button
+              >{{ $tr('添加数据源') }}</el-button
             >
           </div>
         </div>
         <div class="toolbar-actions">
-          <el-tag v-if="dirty" type="warning">未保存</el-tag>
+          <el-tag v-if="dirty" type="warning">{{ $tr('未保存') }}</el-tag>
           <el-button
             :disabled="!activeWorkspace"
             :loading="saving"
             @click="saveDraft"
-            >保存</el-button
+            >{{ $tr('保存') }}</el-button
           >
           <el-button :disabled="!activeWorkspace" @click="publish"
-            >发布</el-button
+            >{{ $tr('发布') }}</el-button
           >
           <el-button
             type="primary"
             :disabled="!pipeline || editorMode === 'json'"
             :loading="running"
             @click="runPipeline"
-            >运行</el-button
+            >{{ $tr('运行') }}</el-button
           >
           <el-button
             :icon="MagicStick"
             :disabled="!activeWorkspace"
             @click="openAi"
-            >AI 配置</el-button
+            >{{ $tr('AI 配置') }}</el-button
           >
           <el-dropdown
             trigger="click"
             :disabled="!activeWorkspace"
             @command="onMore"
           >
-            <el-button :disabled="!activeWorkspace">更多</el-button>
+            <el-button :disabled="!activeWorkspace">{{ $tr('更多') }}</el-button>
             <template #dropdown>
               <el-dropdown-menu>
-                <el-dropdown-item command="sources">数据源</el-dropdown-item>
+                <el-dropdown-item command="sources">{{ $tr('数据源') }}</el-dropdown-item>
                 <el-dropdown-item command="mode">{{
-                  editorMode === 'json' ? '返回步骤配置' : 'JSON'
+                  editorMode === 'json' ? $tr('返回步骤配置') : 'JSON'
                 }}</el-dropdown-item>
                 <el-dropdown-item command="import-json"
-                  >导入 Lemon JSON</el-dropdown-item
+                  >{{ $tr('导入 Lemon JSON') }}</el-dropdown-item
                 >
                 <el-dropdown-item command="import-kettle"
-                  >导入 Kettle</el-dropdown-item
+                  >{{ $tr('导入 Kettle') }}</el-dropdown-item
                 >
-                <el-dropdown-item command="export">导出 JSON</el-dropdown-item>
-                <el-dropdown-item command="runs">运行记录</el-dropdown-item>
-                <el-dropdown-item command="schedule">定时执行</el-dropdown-item>
-                <el-dropdown-item command="notify">消息通知</el-dropdown-item>
-                <el-dropdown-item command="rename">改名</el-dropdown-item>
+                <el-dropdown-item command="export">{{ $tr('导出 JSON') }}</el-dropdown-item>
+                <el-dropdown-item command="runs">{{ $tr('运行记录') }}</el-dropdown-item>
+                <el-dropdown-item command="schedule">{{ $tr('定时执行') }}</el-dropdown-item>
+                <el-dropdown-item command="notify">{{ $tr('消息通知') }}</el-dropdown-item>
+                <el-dropdown-item command="rename">{{ $tr('改名') }}</el-dropdown-item>
                 <el-dropdown-item v-if="dirty" command="abandon"
-                  >放弃本地未保存修改</el-dropdown-item
+                  >{{ $tr('放弃本地未保存修改') }}</el-dropdown-item
                 >
                 <el-dropdown-item command="delete" divided
-                  >删除工作区</el-dropdown-item
+                  >{{ $tr('删除工作区') }}</el-dropdown-item
                 >
               </el-dropdown-menu>
             </template>
@@ -1661,26 +1664,26 @@ onBeforeUnmount(() => {
         v-if="draftConflict"
         type="warning"
         :closable="false"
-        title="服务端版本已变化，本地草稿已保留，尚未覆盖服务端。"
+        :title="$tr('服务端版本已变化，本地草稿已保留，尚未覆盖服务端。')"
       >
-        <el-button @click="reloadConflictDraft">使用服务端版本</el-button>
-        <el-button @click="keepConflictDraft">保留本地继续编辑</el-button>
-        <el-button @click="exportLocalDraft">导出本地备份</el-button>
+        <el-button @click="reloadConflictDraft">{{ $tr('使用服务端版本') }}</el-button>
+        <el-button @click="keepConflictDraft">{{ $tr('保留本地继续编辑') }}</el-button>
+        <el-button @click="exportLocalDraft">{{ $tr('导出本地备份') }}</el-button>
       </el-alert>
       <el-button
         v-else-if="editorMode === 'json' && !jsonValid"
         @click="exportLocalDraft"
-        >导出未完成 JSON 备份</el-button
+        >{{ $tr('导出未完成 JSON 备份') }}</el-button
       >
       <div class="etl-body">
         <aside v-if="sidebarOpen" class="workspace-sidebar">
           <div class="sidebar-title">
-            <span>工作区</span>
+            <span>{{ $tr('工作区') }}</span>
             <el-button
               :icon="Plus"
               circle
               link
-              title="新建工作区"
+              :title="$tr('新建工作区')"
               @click="newVisible = true"
             />
           </div>
@@ -1702,19 +1705,19 @@ onBeforeUnmount(() => {
               >{{ workspaceDisplayName(workspace)
               }}{{ isWorkspaceDirty(workspace) ? ' *' : '' }}</strong
             >
-            <small>版本 {{ workspace.publishedVersion || 0 }}</small>
+            <small>{{ $tr('版本') }} {{ workspace.publishedVersion || 0 }}</small>
             <el-button
               v-if="String(workspace.id) === String(activeWorkspace?.id)"
               size="small"
               class="workspace-source-btn"
               @click.stop="openSources"
-              >数据源 ({{ resources.length }})</el-button
+              >{{ $tr('数据源') }} ({{ resources.length }})</el-button
             >
           </div>
           <el-empty
             v-if="!workspaces.length"
             :image-size="60"
-            description="还没有工作区"
+            :description="$tr('还没有工作区')"
           />
           <Teleport to="body">
             <div
@@ -1726,9 +1729,9 @@ onBeforeUnmount(() => {
               }"
               @click.stop
             >
-              <button @click="configureSchedule">定时执行配置</button>
-              <button @click="configureNotify">消息通知配置</button>
-              <button @click="renameWorkspace">改名</button>
+              <button @click="configureSchedule">{{ $tr('定时执行配置') }}</button>
+              <button @click="configureNotify">{{ $tr('消息通知配置') }}</button>
+              <button @click="renameWorkspace">{{ $tr('改名') }}</button>
               <button
                 v-if="
                   workspaces.some(
@@ -1739,10 +1742,10 @@ onBeforeUnmount(() => {
                 "
                 @click="abandonLocalDraft"
               >
-                放弃本地未保存修改
+                {{ $tr('放弃本地未保存修改') }}
               </button>
               <button class="danger" @click="deleteWorkspaceFromMenu">
-                删除工作区
+                {{ $tr('删除工作区') }}
               </button>
             </div>
           </Teleport>
@@ -1777,17 +1780,17 @@ onBeforeUnmount(() => {
               <div class="pipeline-header">
                 <el-input
                   v-model="pipeline.name"
-                  placeholder="同步任务名称"
+                  :placeholder="$tr('同步任务名称')"
                 /><el-switch
                   v-model="pipeline.enabled"
                   inline-prompt
-                  active-text="启用"
-                  inactive-text="停用"
+                  :active-text="$tr('启用')"
+                  :inactive-text="$tr('停用')"
                 /><el-button link type="danger" @click="removePipeline()"
-                  >删除任务</el-button
+                  >{{ $tr('删除任务') }}</el-button
                 >
               </div>
-              <div class="flow-strip" aria-label="步骤流水线">
+              <div class="flow-strip" :aria-label="$tr('步骤流水线')">
                 <div
                   v-for="(step, index) in pipeline.nodes"
                   :key="step.id"
@@ -1808,30 +1811,31 @@ onBeforeUnmount(() => {
                   >
                     <span class="step-number">{{ index + 1 }}</span>
                     <span class="flow-step-text">
-                      <strong>{{ step.name || stepTitle(step) }}</strong>
+                      <strong>{{
+                        $tr(step.name || stepTitle(step))
+                      }}</strong>
                       <small
-                        >{{ stepTitle(step)
-                        }}<template v-if="step.type !== 'transform.select'">
-                          · {{ sourceLabel(step.resourceRef) }}</template
+                        >{{ $tr(stepTitle(step)) }}<template v-if="step.type !== 'transform.select'">
+                          · {{ $tr(sourceLabel(step.resourceRef)) }}</template
                         ></small
                       >
                     </span>
                     <em v-if="selectedNodeId === step.id" class="step-current"
-                      >当前</em
+                      >{{ $tr('当前') }}</em
                     >
                   </button>
                 </div>
                 <el-dropdown @command="addStepCommand">
                   <el-button class="add-step-inline" :icon="Plus"
-                    >步骤</el-button
+                    >{{ $tr('步骤') }}</el-button
                   >
                   <template #dropdown>
                     <el-dropdown-menu>
                       <el-dropdown-item command="database.query"
-                        >查询步骤</el-dropdown-item
+                        >{{ $tr('查询步骤') }}</el-dropdown-item
                       >
                       <el-dropdown-item command="database.write"
-                        >写入步骤</el-dropdown-item
+                        >{{ $tr('写入步骤') }}</el-dropdown-item
                       >
                     </el-dropdown-menu>
                   </template>
@@ -1847,16 +1851,16 @@ onBeforeUnmount(() => {
                     <el-button
                       :icon="MoreFilled"
                       class="result-dock-trigger"
-                      :title="resultDockMenuTitle"
-                      :aria-label="resultDockMenuTitle"
+                      :title="$tr(resultDockMenuTitle)"
+                      :aria-label="$tr(resultDockMenuTitle)"
                     />
                   </template>
                   <div
                     class="dock-menu"
                     role="menu"
-                    :aria-label="`选择${resultDockMenuTitle}`"
+                    :aria-label="`${$tr('选择')}${resultDockMenuTitle}`"
                   >
-                    <div class="dock-menu__title">{{ resultDockMenuTitle }}</div>
+                    <div class="dock-menu__title">{{ $tr(resultDockMenuTitle) }}</div>
                     <div class="dock-icons" role="group">
                       <button
                         v-for="opt in RESULT_DOCK_OPTIONS"
@@ -1864,8 +1868,8 @@ onBeforeUnmount(() => {
                         type="button"
                         class="dock-icon"
                         :class="{ active: resultDock === opt.value }"
-                        :title="opt.label"
-                        :aria-label="opt.label"
+                        :title="$tr(opt.labelKey)"
+                        :aria-label="$tr(opt.labelKey)"
                         :aria-pressed="resultDock === opt.value"
                         role="menuitemradio"
                         @click="setResultDock(opt.value)"
@@ -1892,32 +1896,32 @@ onBeforeUnmount(() => {
                   <div class="step-header">
                     <el-input
                       v-model="node.name"
-                      placeholder="步骤名称"
-                    /><el-tag>{{ stepTitle(node) }}</el-tag
+                      :placeholder="$tr('步骤名称')"
+                    /><el-tag>{{ $tr(stepTitle(node)) }}</el-tag
                     ><el-button link type="danger" @click="removeStep"
-                      >删除</el-button
+                      >{{ $tr('删除') }}</el-button
                     >
                   </div>
                   <el-form label-position="top">
                     <el-form-item
                       v-if="node.type !== 'transform.select'"
-                      label="数据源"
+                      :label="$tr('数据源')"
                       class="form-row-inline source-row"
                       ><div class="inline-control">
                         <el-select
                           v-model="node.resourceRef"
                           filterable
-                          placeholder="选择工作区数据源别名"
+                          :placeholder="$tr('选择工作区数据源别名')"
                           ><el-option
                             v-for="[key, source] in resources"
                             :key="key"
-                            :label="`${source.displayName} · ${source.instance || '待绑定'}`"
+                            :label="`${source.displayName} · ${source.instance || $tr('待绑定')}`"
                             :value="key" /></el-select
                         ><el-button
                           link
                           class="source-settings"
                           @click="openSources"
-                          >管理数据源</el-button
+                          >{{ $tr('管理数据源') }}</el-button
                         >
                       </div></el-form-item
                     >
@@ -1926,7 +1930,7 @@ onBeforeUnmount(() => {
                         nodeResource?.family === 'SQLSERVER_LIKE' &&
                         nodeResource.schema
                       "
-                      title="SQL Server 查询请使用 schema.table 限定表名；写入会按所选 Schema 自动限定目标表。"
+                      :title="$tr('SQL Server 查询请使用 schema.table 限定表名；写入会按所选 Schema 自动限定目标表。')"
                       type="info"
                       :closable="false"
                     />
@@ -1941,12 +1945,12 @@ onBeforeUnmount(() => {
                         type="warning"
                         plain
                         @click="node.config.migrationWarnings = []"
-                        >我已核对差异，按当前配置执行</el-button
+                        >{{ $tr('我已核对差异，按当前配置执行') }}</el-button
                       >
                     </div>
                     <template v-if="node.type === 'database.query'">
                       <div class="sql-label">
-                        <span>查询 SQL · 可 JOIN 多张表</span>
+                        <span>{{ $tr('查询 SQL · 可 JOIN 多张表') }}</span>
                         <div class="sql-label-actions">
                           <el-button
                             link
@@ -1954,7 +1958,7 @@ onBeforeUnmount(() => {
                             :icon="VideoPlay"
                             :loading="previewing"
                             @click="preview"
-                            >预览</el-button
+                            >{{ $tr('预览') }}</el-button
                           >
                           <el-popover
                             placement="bottom"
@@ -1962,7 +1966,7 @@ onBeforeUnmount(() => {
                             trigger="click"
                             ><template #reference
                               ><el-button link :loading="catalogLoading"
-                                >可用表目录</el-button
+                                >{{ $tr('可用表目录') }}</el-button
                               ></template
                             >
                           <div class="table-catalog">
@@ -1970,11 +1974,10 @@ onBeforeUnmount(() => {
                               v-model="catalogSearch"
                               clearable
                               size="small"
-                              placeholder="筛选表名"
+                              :placeholder="$tr('筛选表名')"
                             />
                             <p class="help catalog-hint">
-                              点击表名：空编辑器生成含全部字段的 SELECT；已有
-                              SQL 则在光标处插入表名
+                              {{ $tr('点击表名：空编辑器生成含全部字段的 SELECT；已有 SQL 则在光标处插入表名') }}
                             </p>
                             <el-button
                               v-for="table in filteredCatalog"
@@ -1991,10 +1994,10 @@ onBeforeUnmount(() => {
                               }}</el-button
                             ><span v-if="!filteredCatalog.length">{{
                               catalogLoading
-                                ? '加载中…'
+                                ? $tr('加载中…')
                                 : catalogSearch.trim()
-                                  ? '无匹配表'
-                                  : '暂无可读表'
+                                  ? $tr('无匹配表')
+                                  : $tr('暂无可读表')
                             }}</span>
                           </div></el-popover
                           >
@@ -2009,27 +2012,26 @@ onBeforeUnmount(() => {
                         class="sql-editor"
                       />
                       <div class="section-title">
-                        <strong>查询参数</strong
+                        <strong>{{ $tr('查询参数') }}</strong
                         ><el-button link :icon="Plus" @click="addParameter"
-                          >添加参数</el-button
+                          >{{ $tr('添加参数') }}</el-button
                         >
                       </div>
                       <p class="help">
-                        SQL 使用 :参数名；可取上游第一行字段，或整列用于 IN
-                        (:参数名)。不需要手写引号。
+                        {{ $tr('SQL 使用 :参数名；可取上游第一行字段，或整列用于 IN (:参数名)。不需要手写引号。') }}
                       </p>
                       <div
                         v-for="(param, index) in node.config.parameters || []"
                         :key="index"
                         class="parameter-row"
                       >
-                        <el-input v-model="param.name" placeholder="参数名" />
+                        <el-input v-model="param.name" :placeholder="$tr('参数名')" />
                         <el-select
                           :model-value="param.stepId || FIXED_PARAM_SOURCE"
-                          placeholder="参数来源"
+                          :placeholder="$tr('参数来源')"
                           @update:model-value="onParamSource(param, $event)"
                           ><el-option
-                            label="固定值"
+                            :label="$tr('固定值')"
                             :value="FIXED_PARAM_SOURCE" /><el-option
                             v-for="upstream in previousQueries"
                             :key="upstream.id"
@@ -2042,7 +2044,7 @@ onBeforeUnmount(() => {
                           filterable
                           allow-create
                           default-first-option
-                          placeholder="上游字段"
+                          :placeholder="$tr('上游字段')"
                           ><el-option
                             v-for="column in queryColumns[param.stepId] || []"
                             :key="column"
@@ -2051,18 +2053,18 @@ onBeforeUnmount(() => {
                         ><el-input
                           v-else
                           v-model="param.value"
-                          placeholder="固定参数值"
+                          :placeholder="$tr('固定参数值')"
                         />
                         <el-select v-if="param.stepId" v-model="param.mode"
-                          ><el-option label="第一行" value="first" /><el-option
-                            label="整列列表"
+                          ><el-option :label="$tr('第一行')" value="first" /><el-option
+                            :label="$tr('整列列表')"
                             value="list"
                         /></el-select>
                         <el-button
                           link
                           type="danger"
                           @click="removeParameter(Number(index))"
-                          >删除</el-button
+                          >{{ $tr('删除') }}</el-button
                         >
                       </div>
                       <div class="preview-actions">
@@ -2072,12 +2074,12 @@ onBeforeUnmount(() => {
                           :max="50000"
                           :step="1000"
                         /><span class="help"
-                          >每页读取行数；总量不截断，右侧预览最多 100 行</span
+                          >{{ $tr('每页读取行数；总量不截断，右侧预览最多 100 行') }}</span
                         >
                       </div>
                     </template>
                     <template v-else-if="node.type === 'transform.select'">
-                      <el-form-item label="输入步骤"
+                      <el-form-item :label="$tr('输入步骤')"
                         ><el-select
                           v-model="node.config.inputStepId"
                           @change="dependencyChanged"
@@ -2089,7 +2091,7 @@ onBeforeUnmount(() => {
                       ></el-form-item>
                       <el-switch
                         v-model="node.config.keepUnspecified"
-                        active-text="保留未选择字段"
+                        :active-text="$tr('保留未选择字段')"
                       />
                       <div
                         v-for="(field, index) in node.config.fields || []"
@@ -2098,25 +2100,25 @@ onBeforeUnmount(() => {
                       >
                         <el-input
                           v-model="field.source"
-                          placeholder="原字段"
+                          :placeholder="$tr('原字段')"
                         /><span>→</span
                         ><el-input
                           v-model="field.target"
-                          placeholder="输出字段"
+                          :placeholder="$tr('输出字段')"
                         /><el-button
                           link
                           type="danger"
                           @click="node.config.fields.splice(index, 1)"
-                          >删除</el-button
+                          >{{ $tr('删除') }}</el-button
                         >
                       </div>
                       <el-button
                         @click="
                           node.config.fields.push({ source: '', target: '' })
                         "
-                        >添加字段</el-button
+                        >{{ $tr('添加字段') }}</el-button
                       >
-                      <el-form-item label="移除字段"
+                      <el-form-item :label="$tr('移除字段')"
                         ><el-select
                           v-model="node.config.removeFields"
                           multiple
@@ -2134,11 +2136,11 @@ onBeforeUnmount(() => {
                     >
                       <div class="write-grid">
                         <el-form-item
-                          label="输入查询结果"
+                          :label="$tr('输入查询结果')"
                           class="form-row-inline"
                           ><el-select
                             v-model="node.config.inputStepId"
-                            placeholder="选择上游查询步骤"
+                            :placeholder="$tr('选择上游查询步骤')"
                             @change="dependencyChanged"
                             ><el-option
                               v-for="upstream in previousQueries"
@@ -2149,7 +2151,7 @@ onBeforeUnmount(() => {
                               " /></el-select
                         ></el-form-item>
                         <el-form-item
-                          label="目标表（已有表）"
+                          :label="$tr('目标表（已有表）')"
                           class="form-row-inline"
                           ><el-select
                             v-model="node.config.table"
@@ -2157,7 +2159,7 @@ onBeforeUnmount(() => {
                             allow-create
                             default-first-option
                             :loading="catalogLoading"
-                            placeholder="选择或输入目标表"
+                            :placeholder="$tr('选择或输入目标表')"
                             ><el-option
                               v-for="table in catalog"
                               :key="table.qualifiedName || table.tableName"
@@ -2167,12 +2169,12 @@ onBeforeUnmount(() => {
                               " /></el-select
                         ></el-form-item>
                       </div>
-                      <el-form-item label="写入方式" class="form-row-inline"
+                      <el-form-item :label="$tr('写入方式')" class="form-row-inline"
                         ><el-radio-group v-model="node.config.mode"
                           ><el-radio-button value="append"
-                            >追加数据</el-radio-button
+                            >{{ $tr('追加数据') }}</el-radio-button
                           ><el-radio-button value="upsert"
-                            >按键更新 / 插入</el-radio-button
+                            >{{ $tr('按键更新 / 插入') }}</el-radio-button
                           ></el-radio-group
                         ></el-form-item
                       >
@@ -2181,7 +2183,7 @@ onBeforeUnmount(() => {
                           node.config.mode === 'upsert' ||
                           node.type === 'database.upsert'
                         "
-                        label="目标键字段（应有唯一约束）"
+                        :label="$tr('目标键字段（应有唯一约束）')"
                         class="form-row-inline"
                         ><el-select
                           v-model="node.config.keyColumns"
@@ -2189,7 +2191,7 @@ onBeforeUnmount(() => {
                           filterable
                           allow-create
                           default-first-option
-                          placeholder="例如：order_id"
+                          :placeholder="$tr('例如：order_id')"
                           ><el-option
                             v-for="mapping in node.config.mappings || []"
                             :key="mapping.target"
@@ -2201,16 +2203,16 @@ onBeforeUnmount(() => {
                           node.config.mode === 'upsert' ||
                           node.type === 'database.upsert'
                         "
-                        label="允许更新的字段"
+                        :label="$tr('允许更新的字段')"
                         class="form-row-inline"
-                        title="未设置时更新全部非键字段"
+                        :title="$tr('未设置时更新全部非键字段')"
                       >
                         <div class="inline-control">
                           <el-select
                             v-model="node.config.updateColumns"
                             multiple
                             filterable
-                            placeholder="未设置时更新全部非键字段"
+                            :placeholder="$tr('未设置时更新全部非键字段')"
                             ><el-option
                               v-for="mapping in node.config.mappings || []"
                               :key="mapping.target"
@@ -2221,17 +2223,17 @@ onBeforeUnmount(() => {
                             v-if="node.config.updateColumns !== undefined"
                             link
                             @click="delete node.config.updateColumns"
-                            >恢复更新全部</el-button
+                            >{{ $tr('恢复更新全部') }}</el-button
                           >
                         </div>
                         <small
                           v-if="node.config.updateColumns?.length === 0"
                           class="field-hint"
-                          >当前为空：已有行不更新，只插入缺失行。</small
+                          >{{ $tr('当前为空：已有行不更新，只插入缺失行。') }}</small
                         >
                       </el-form-item>
                       <el-form-item
-                        label="每批写入行数"
+                        :label="$tr('每批写入行数')"
                         class="form-row-inline batch-field"
                         ><el-input-number
                           v-model="node.config.batchSize"
@@ -2239,20 +2241,20 @@ onBeforeUnmount(() => {
                           :max="2000"
                           :step="50" /></el-form-item
                       ><el-alert
-                        title="写入步骤使用独立事务；失败会回滚当前步骤，已成功提交的前序步骤会保留。"
+                        :title="$tr('写入步骤使用独立事务；失败会回滚当前步骤，已成功提交的前序步骤会保留。')"
                         type="info"
                         :closable="false"
                       />
                     </template>
                     <el-alert
                       v-else
-                      title="此节点需要迁移为 SQL 查询或结果写入，请在 JSON 中检查原配置；执行器会明确提示未支持步骤。"
+                      :title="$tr('此节点需要迁移为 SQL 查询或结果写入，请在 JSON 中检查原配置；执行器会明确提示未支持步骤。')"
                       type="warning"
                       :closable="false"
                     />
                   </el-form>
                   <div class="dependency-strip">
-                    <span>执行依赖</span
+                    <span>{{ $tr('执行依赖') }}</span
                     ><el-tag
                       v-for="edge in pipeline.edges.filter(
                         (item) =>
@@ -2270,11 +2272,11 @@ onBeforeUnmount(() => {
                             item.target === node?.id && item.enabled !== false,
                         )
                       "
-                      >无上游，可独立查询</small
+                      >{{ $tr('无上游，可独立查询') }}</small
                     >
                   </div>
                 </section>
-                <aside class="step-result" aria-label="预览与字段映射">
+                <aside class="step-result" :aria-label="$tr('预览与字段映射')">
                   <template
                     v-if="
                       node.type === 'database.query' ||
@@ -2284,19 +2286,19 @@ onBeforeUnmount(() => {
                     <div class="section-title">
                       <strong>{{
                         previewResult
-                          ? `预览 ${previewResult.rowCount} 行`
-                          : '结果预览'
+                          ? $tr(`预览 ${previewResult.rowCount} 行`)
+                          : $tr('结果预览')
                       }}</strong>
                       <small v-if="previewResult">{{
                         previewResult.stale
-                          ? '旧预览 · 配置已修改'
+                          ? $tr('旧预览 · 配置已修改')
                           : previewResult.sampled
-                            ? '最多 100 行样本'
-                            : '结果预览'
+                            ? $tr('最多 100 行样本')
+                            : $tr('结果预览')
                       }}</small>
                     </div>
                     <p class="help">
-                      正式运行不截断总行数。这里只留样本，用来确认 SQL 和参数。
+                      {{ $tr('正式运行不截断总行数。这里只留样本，用来确认 SQL 和参数。') }}
                     </p>
                     <el-table
                       v-if="previewResult"
@@ -2314,7 +2316,7 @@ onBeforeUnmount(() => {
                     <el-empty
                       v-else
                       :image-size="72"
-                      description="点「预览」查看样本"
+                      :description="$tr('点「预览」查看样本')"
                     />
                   </template>
                   <template
@@ -2323,22 +2325,21 @@ onBeforeUnmount(() => {
                     "
                   >
                     <div class="section-title">
-                      <strong>字段映射</strong>
+                      <strong>{{ $tr('字段映射') }}</strong>
                       <div>
                         <el-button
                           link
                           :loading="previewing"
                           @click="previewInput"
-                          >加载字段</el-button
-                        ><el-button link @click="autoMapping">同名映射</el-button
+                          >{{ $tr('加载字段') }}</el-button
+                        ><el-button link @click="autoMapping">{{ $tr('同名映射') }}</el-button
                         ><el-button link :icon="Plus" @click="addMapping"
-                          >添加字段</el-button
+                          >{{ $tr('添加字段') }}</el-button
                         >
                       </div>
                     </div>
                     <p class="help">
-                      留空时按查询结果同名写入。SQL
-                      字段别名可以直接对应目标字段。
+                      {{ $tr('留空时按查询结果同名写入。SQL 字段别名可以直接对应目标字段。') }}
                     </p>
                     <div
                       v-for="(mapping, index) in node.config.mappings || []"
@@ -2350,7 +2351,7 @@ onBeforeUnmount(() => {
                         filterable
                         allow-create
                         default-first-option
-                        placeholder="查询结果字段"
+                        :placeholder="$tr('查询结果字段')"
                         ><el-option
                           v-for="column in inputColumns()"
                           :key="column"
@@ -2359,27 +2360,27 @@ onBeforeUnmount(() => {
                       ><span>→</span
                       ><el-input
                         v-model="mapping.target"
-                        placeholder="目标字段"
+                        :placeholder="$tr('目标字段')"
                       /><el-button
                         link
                         type="danger"
                         @click="node.config.mappings.splice(index, 1)"
-                        >删除</el-button
+                        >{{ $tr('删除') }}</el-button
                       >
                     </div>
                     <p
                       v-if="!(node.config.mappings || []).length"
                       class="help"
                     >
-                      还没有单独映射。点「加载字段」后可按同名填入，也可以保持留空。
+                      {{ $tr('还没有单独映射。点「加载字段」后可按同名填入，也可以保持留空。') }}
                     </p>
                     <section v-if="inputPreview" class="preview-panel">
                       <div class="section-title">
-                        <strong>输入样本 {{ inputPreview.rowCount }} 行</strong
+                        <strong>{{ $tr('输入样本') }} {{ inputPreview.rowCount }} {{ $tr('行') }}</strong
                         ><small>{{
                           inputPreview.stale
-                            ? '旧预览 · 配置已修改'
-                            : '最多 100 行样本'
+                            ? $tr('旧预览 · 配置已修改')
+                            : $tr('最多 100 行样本')
                         }}</small>
                       </div>
                       <el-table
@@ -2399,15 +2400,15 @@ onBeforeUnmount(() => {
                   <el-empty
                     v-else
                     :image-size="72"
-                    description="此步骤请在左侧或 JSON 中处理"
+                    :description="$tr('此步骤请在左侧或 JSON 中处理')"
                   />
                 </aside>
               </div>
-              <el-empty v-else description="添加一个查询步骤开始配置" />
+              <el-empty v-else :description="$tr('添加一个查询步骤开始配置')" />
             </template>
-            <el-empty v-else description="添加同步任务开始配置"
+            <el-empty v-else :description="$tr('添加同步任务开始配置')"
               ><el-button type="primary" @click="addPipeline()"
-                >新增任务</el-button
+                >{{ $tr('新增任务') }}</el-button
               ></el-empty
             >
             <div
@@ -2431,9 +2432,9 @@ onBeforeUnmount(() => {
           </section>
         </main>
         <main v-else class="empty-workspace">
-          <el-empty description="创建工作区，选好数据源后开始同步"
+          <el-empty :description="$tr('创建工作区，选好数据源后开始同步')"
             ><el-button type="primary" @click="newVisible = true"
-              >新建工作区</el-button
+              >{{ $tr('新建工作区') }}</el-button
             ></el-empty
           >
         </main>
@@ -2443,47 +2444,47 @@ onBeforeUnmount(() => {
     <WorkspaceNotify ref="notifyDialog" />
     <el-dialog
       v-model="newVisible"
-      title="新建工作区"
+      :title="$tr('新建工作区')"
       width="min(960px, 94vw)"
       :close-on-click-modal="false"
       ><el-form label-position="top"
         ><div class="write-grid">
-          <el-form-item label="工作区名称"
+          <el-form-item :label="$tr('工作区名称')"
             ><el-input
               v-model="newName"
               maxlength="100"
-              placeholder="例如：订单数仓同步" /></el-form-item
-          ><el-form-item label="说明（可选）"
+              :placeholder="$tr('例如：订单数仓同步')" /></el-form-item
+          ><el-form-item :label="$tr('说明（可选）')"
             ><el-input v-model="newDescription" maxlength="500"
           /></el-form-item>
         </div>
-        <el-form-item label="工作区数据源"
+        <el-form-item :label="$tr('工作区数据源')"
           ><WorkspaceSources
             v-model="newResources"
             :connections="connections"
             class="full-width" /></el-form-item></el-form
       ><template #footer
-        ><el-button @click="newVisible = false">取消</el-button
+        ><el-button @click="newVisible = false">{{ $tr('取消') }}</el-button
         ><el-button
           type="primary"
           :loading="createBusy"
           @click="createWorkspace"
-          >创建并配置步骤</el-button
+          >{{ $tr('创建并配置步骤') }}</el-button
         ></template
       ></el-dialog
     >
     <el-dialog
       v-model="sourcesVisible"
-      title="工作区数据源"
+      :title="$tr('工作区数据源')"
       width="min(960px, 94vw)"
       ><WorkspaceSources
         v-model="sourceDraft"
         :connections="connections"
         :used-refs="usedRefs"
       /><template #footer
-        ><el-button @click="sourcesVisible = false">取消</el-button
+        ><el-button @click="sourcesVisible = false">{{ $tr('取消') }}</el-button
         ><el-button type="primary" @click="applySources"
-          >应用</el-button
+          >{{ $tr('应用') }}</el-button
         ></template
       ></el-dialog
     >
@@ -2495,25 +2496,25 @@ onBeforeUnmount(() => {
     />
     <el-drawer
       v-model="runsVisible"
-      title="运行记录与步骤进度"
+      :title="$tr('运行记录与步骤进度')"
       class="etl-runs-drawer"
       size="min(800px, 96vw)"
-      ><el-button :icon="Refresh" @click="refreshRuns">刷新</el-button
+      ><el-button :icon="Refresh" @click="refreshRuns">{{ $tr('刷新') }}</el-button
       ><el-table
         :data="runs"
         highlight-current-row
         @current-change="selectedRun = $event || selectedRun"
-        ><el-table-column prop="pipelineName" label="任务" /><el-table-column
-          label="状态"
+        ><el-table-column prop="pipelineName" :label="$tr('任务')" /><el-table-column
+          :label="$tr('状态')"
           width="90"
           ><template #default="scope">{{
             statusLabel(scope.row.status)
           }}</template></el-table-column
-        ><el-table-column label="时间" width="180"
+        ><el-table-column :label="$tr('时间')" width="180"
           ><template #default="scope">{{
             new Date(scope.row.startedAt).toLocaleString()
           }}</template></el-table-column
-        ><el-table-column prop="revision" label="版本" width="65" /></el-table
+        ><el-table-column prop="revision" :label="$tr('版本')" width="65" /></el-table
       ><template v-if="selectedRun"
         ><div class="section-title">
           <strong>{{ selectedRun.message }}</strong
@@ -2522,29 +2523,29 @@ onBeforeUnmount(() => {
             type="danger"
             plain
             @click="cancelRun"
-            >取消任务</el-button
+            >{{ $tr('取消任务') }}</el-button
           >
         </div>
         <el-table :data="runSteps"
-          ><el-table-column label="步骤" min-width="140"
+          ><el-table-column :label="$tr('步骤')" min-width="140"
             ><template #default="scope">{{
               runNodeName(scope.row.nodeId)
             }}</template></el-table-column
-          ><el-table-column label="状态" width="90"
+          ><el-table-column :label="$tr('状态')" width="90"
             ><template #default="scope">{{
               statusLabel(scope.row.status)
             }}</template></el-table-column
           ><el-table-column
             prop="rows"
-            label="行数"
-            width="90" /><el-table-column prop="message" label="信息"
+            :label="$tr('行数')"
+            width="90" /><el-table-column prop="message" :label="$tr('信息')"
         /></el-table>
         <div class="section-title">
-          <strong>执行日志</strong
+          <strong>{{ $tr('执行日志') }}</strong
           ><el-select
             v-model="logNode"
             clearable
-            placeholder="全部任务与节点日志"
+            :placeholder="$tr('全部任务与节点日志')"
             @change="
               logPage = 1;
               refreshLogs();
@@ -2557,24 +2558,24 @@ onBeforeUnmount(() => {
           /></el-select>
         </div>
         <el-table v-loading="logsBusy" :data="runLogs" max-height="360">
-          <el-table-column label="时间" width="180"
+          <el-table-column :label="$tr('时间')" width="180"
             ><template #default="scope">{{
               new Date(scope.row.createdAt).toLocaleString()
             }}</template></el-table-column
           >
           <el-table-column
             prop="level"
-            label="级别"
+            :label="$tr('级别')"
             width="65"
-          /><el-table-column label="节点" min-width="120"
+          /><el-table-column :label="$tr('节点')" min-width="120"
             ><template #default="scope">{{
               runNodeName(scope.row.nodeId)
             }}</template></el-table-column
           ><el-table-column
             prop="rowCount"
-            label="累计行数"
+            :label="$tr('累计行数')"
             width="100"
-          /><el-table-column prop="message" label="事件" />
+          /><el-table-column prop="message" :label="$tr('事件')" />
         </el-table>
         <el-pagination
           v-model:current-page="logPage"

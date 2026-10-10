@@ -177,9 +177,9 @@ function onSqlAction(
         />
         <el-card v-if="item.msg.etlConfig" class="etl-proposal" shadow="never">
           <strong
-            >ETL 候选配置 ·
+            >{{ $tr('ETL 候选配置') }} ·
             {{ item.msg.etlConfig.workspace?.pipelines?.length || 0 }}
-            个任务</strong
+            {{ $tr('个任务') }}</strong
           >
           <p>{{ item.msg.etlConfig.explanation }}</p>
           <p
@@ -189,7 +189,7 @@ function onSqlAction(
             {{ warning }}
           </p>
           <details>
-            <summary>查看完整 JSON</summary>
+            <summary>{{ $tr('查看完整 JSON') }}</summary>
             <pre>{{
               JSON.stringify(item.msg.etlConfig.workspace, null, 2)
             }}</pre>
@@ -198,9 +198,9 @@ function onSqlAction(
             type="primary"
             :disabled="running"
             @click="emit('applyEtlConfig', item.msg.etlConfig)"
-            >检查并应用到草稿</el-button
+            >{{ $tr('检查并应用到草稿') }}</el-button
           >
-          <small>不会自动保存、发布或执行</small>
+          <small>{{ $tr('不会自动保存、发布或执行') }}</small>
         </el-card>
         <div v-if="item.msg.error" class="err">{{ item.msg.error }}</div>
         <div v-if="item.msg.role === 'assistant'" class="msg-state">
