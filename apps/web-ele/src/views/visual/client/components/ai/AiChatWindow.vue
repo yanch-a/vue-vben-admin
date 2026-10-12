@@ -46,6 +46,14 @@ const props = defineProps<{
   /** ETL 复用相同窗口与工具协议，但独立会话，不改变数据库客户端会话。 */
   etlMode?: boolean;
   beforeSend?: () => Promise<boolean>;
+  /**
+   * 返回当前连接 + 实例的表名清单，供输入框 @ 补全。
+   * 允许异步（未缓存时父组件可现拉一次）；缺省时不提供补全。
+   */
+  getTableNames?: (
+    dbConfigId: number | string,
+    instanceName: string,
+  ) => Promise<string[]> | string[];
 }>();
 
 const emit = defineEmits<{
@@ -98,6 +106,31 @@ const convDrawer = ref(false);
 const convs = ref<any[]>([]);
 const pendingContext = ref<Record<string, any>>({});
 const composerRef = ref<InstanceType<typeof AiComposer>>();
+/** 当前实例表名，用于 @ 补全；按连接+实例缓存，窗口打开或实例切换时刷新 */
+const tableNames = ref<string[]>([]);
+let tableNamesKey = '';
+
+async function refreshTableNames(force = false) {
+  const id = props.dbConfigId;
+  const inst = props.instanceName || '';
+  if (!props.getTableNames || id == null || id === '' || !inst) {
+    tableNames.value = [];
+    tableNamesKey = '';
+    return;
+  }
+  const key = `${id}::${inst}`;
+  if (!force && key === tableNamesKey && tableNames.value.length) return;
+  try {
+    const list = await props.getTableNames(id, inst);
+    // 期间实例可能又变了，丢弃过期结果
+    if (`${props.dbConfigId}::${props.instanceName || ''}` !== key) return;
+    tableNames.value = Array.isArray(list) ? list.filter(Boolean) : [];
+    tableNamesKey = key;
+  } catch {
+    tableNames.value = [];
+    tableNamesKey = '';
+  }
+}
 
 const {
   messages,
@@ -232,6 +265,7 @@ watch(
     pendingContext.value = {};
     isMaskedMode.value = defaultMaskedMode();
     maskCustomized.value = false;
+    if (state.visible) void refreshTableNames();
   },
 );
 
@@ -253,7 +287,7 @@ function onModelChange(v: any) {
   localStorage.setItem(MODEL_KEY, String(v));
 }
 
-async function send(text: string) {
+async function send(text: string, meta?: { mentionedTables?: string[] }) {
   try {
     if (props.beforeSend && !(await props.beforeSend())) {
       composerRef.value?.setText(text);
@@ -263,9 +297,13 @@ async function send(text: string) {
       typeof props.getExtraContext === 'function'
         ? props.getExtraContext()
         : {};
+    const mentionedTables = meta?.mentionedTables?.length
+      ? meta.mentionedTables
+      : undefined;
     sendChat(text, scene.value, {
       ...pendingContext.value,
       ...extra,
+      ...(mentionedTables ? { mentionedTables } : {}),
       ...(props.etlMode ? { skillIds: skillIds.value } : {}),
     });
   } catch (e: any) {
@@ -282,6 +320,7 @@ function exposeOpen(payload?: {
   skillIds?: string[];
 }) {
   open();
+  void refreshTableNames();
   if (payload?.scene) scene.value = payload.scene;
   if (payload?.skillIds && props.etlMode)
     skillIds.value = [...payload.skillIds];
@@ -467,6 +506,7 @@ onBeforeUnmount(() => {
         :etl-mode="etlMode"
         :has-selection="!!pendingContext.selectedSql"
         :has-error="!!pendingContext.lastError"
+        :table-names="tableNames"
         @send="send"
         @stop="stop"
         @clear-selection="pendingContext.selectedSql = ''"

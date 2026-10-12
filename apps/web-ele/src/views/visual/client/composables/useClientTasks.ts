@@ -1,11 +1,12 @@
 /**
- * 客户端后台任务：跨主机复制 + SQL 脚本 + 结构文档。
+ * 客户端后台任务：跨主机复制 + SQL 脚本 + 结构文档 + 整库备份。
  * 进行中写入 localStorage，刷新后角标还能显示；服务端 Redis 是权威源。
  * 有进行中就轮询：面板打开 5 秒一次，收起后台 20 秒一次。
  * 刚提交的任务会立刻拉一次详情，避免等第一个 interval。
  * 已完成只展示近 7 天。
  * @author yanch
  */
+import { useUserStore } from '@vben/stores';
 import { computed, effectScope, ref, watch } from 'vue';
 
 import {
@@ -25,17 +26,27 @@ import {
   listSqlScriptTasks,
   type SqlScriptTaskVO,
 } from '#/api/visual/sqlScript';
+import {
+  cancelDbBackupTask,
+  type DbBackupTaskVO,
+  getDbBackupTask,
+  listDbBackupTasks,
+} from '#/api/visual/dbBackup';
 import { getDesktopScopedStorageKey } from '#/desktop/runtime';
+import { backupFormat, taskPercent } from './clientTaskDisplay';
 
 export type ClientTaskKind =
   | 'COPY'
+  | 'DB_BACKUP'
   | 'SCHEMA_ANALYZE'
   | 'SCHEMA_GENERATE'
   | 'SCHEMA_INIT'
   | 'SQL_SCRIPT';
-export type ClientTaskSource = 'copy' | 'schema' | 'sqlScript';
+export type ClientTaskSource = 'copy' | 'dbBackup' | 'schema' | 'sqlScript';
 
 export interface ClientTask {
+  engine?: string;
+  phase?: string;
   cancelRequested?: boolean;
   copiedRows?: number;
   id: string;
@@ -52,13 +63,20 @@ export interface ClientTask {
   createTime: number;
   updateTime?: number;
   elapsedMs?: number;
+  /** 整库备份完成后的下载名 */
+  fileName?: string;
+  fileSize?: number;
+  zipped?: boolean;
+  downloadReady?: boolean;
   errors: string[];
   /** 后端错误总数（列表可能截断 errors） */
   errorTotal?: number;
 }
 
 // 任务 ID 属于具体后台，Electron 切换服务端后不能继续轮询旧任务。
-const CACHE_KEY = getDesktopScopedStorageKey('vc:client-running-tasks');
+let taskOwner = '';
+let ownerGeneration = 0;
+function cacheKey() { return getDesktopScopedStorageKey(`vc:client-running-tasks:u:${taskOwner}`); }
 /** 面板可见时的轮询间隔 */
 const POLL_VISIBLE_MS = 5_000;
 /** 面板收起后后台继续刷，间隔放宽 */
@@ -128,7 +146,7 @@ function fromCopy(raw: DbCopyTaskVO): ClientTask {
     source: 'copy',
     kind: 'COPY',
     title: copyTitle(raw),
-    subtitle: raw.mode === 'structure' ? '仅结构' : '结构 + 数据',
+    subtitle: raw.mode === 'structure' ? '仅结构' : raw.mode === 'data' ? '仅追加数据' : '结构 + 数据',
     status: normalizeStatus(raw.status),
     total: raw.totalObjects || 0,
     done: raw.processedObjects || 0,
@@ -148,6 +166,8 @@ function fromSqlScript(raw: SqlScriptTaskVO): ClientTask {
   const file = raw.fileName || 'SQL 脚本';
   const inst = raw.instanceName || '';
   return {
+    cancelRequested: raw.cancelRequested,
+    engine: raw.engine,
     id: raw.taskId,
     source: 'sqlScript',
     kind: 'SQL_SCRIPT',
@@ -165,6 +185,35 @@ function fromSqlScript(raw: SqlScriptTaskVO): ClientTask {
     elapsedMs: raw.elapsedMs,
     errors: Array.isArray(raw.errors) ? raw.errors.map(String) : [],
     errorTotal: raw.errorTotal || (raw.errors || []).length,
+  };
+}
+
+function fromDbBackup(raw: DbBackupTaskVO): ClientTask {
+  const engine = raw.engine === 'NATIVE' ? '官方客户端' : 'Java 导出';
+  const packed = backupFormat(raw.fileName, raw.zipped);
+  return {
+    cancelRequested: raw.cancelRequested,
+    engine: raw.engine,
+    phase: raw.phase,
+    id: raw.taskId,
+    source: 'dbBackup',
+    kind: 'DB_BACKUP',
+    title: `备份 ${raw.instanceName || '数据库'}`,
+    subtitle: [engine, packed, raw.dbName].filter(Boolean).join(' · '),
+    status: normalizeStatus(raw.status),
+    total: raw.total || 0,
+    done: raw.done || 0,
+    current: raw.currentTable,
+    message: raw.message,
+    createTime: raw.createTime || 0,
+    updateTime: raw.updateTime,
+    elapsedMs: raw.elapsedMs,
+    fileName: raw.fileName,
+    fileSize: raw.fileSize,
+    zipped: raw.zipped,
+    downloadReady: raw.downloadReady,
+    errors: Array.isArray(raw.errors) ? raw.errors.map(String) : [],
+    errorTotal: raw.errors?.length || 0,
   };
 }
 
@@ -199,7 +248,7 @@ function upsert(task: ClientTask) {
 function persistRunning() {
   try {
     const running = tasks.value.filter((t) => isActive(t.status));
-    localStorage.setItem(CACHE_KEY, JSON.stringify(running));
+    localStorage.setItem(cacheKey(), JSON.stringify(running));
   } catch {
     /* 隐私模式等写不进就忽略 */
   }
@@ -207,7 +256,7 @@ function persistRunning() {
 
 function restoreCache() {
   try {
-    const raw = localStorage.getItem(CACHE_KEY);
+    const raw = localStorage.getItem(cacheKey());
     if (!raw) return;
     const list = JSON.parse(raw);
     if (!Array.isArray(list)) return;
@@ -239,31 +288,35 @@ export function useClientTasks() {
   const hasRunning = computed(() => runningCount.value > 0);
 
   function percent(t: ClientTask) {
-    if (!t.total) return t.status === 'SUCCESS' ? 100 : 0;
-    return Math.min(100, Math.round((t.done / t.total) * 100));
+    return taskPercent(t);
   }
 
   /** 刷新全部任务；定时轮询传 false，避免后台异常弹窗。 */
   async function refreshAll(showErrorMessage = true) {
+    if (!taskOwner) return;
+    const generation = ownerGeneration;
     // 上一轮没结束就跳过，避免 setInterval 叠请求；超时 abort 会打爆后端 ClientAbortException
     if (refreshing.value) return;
     refreshing.value = true;
     try {
       await doRefreshAll(showErrorMessage);
     } finally {
-      refreshing.value = false;
+      if (generation === ownerGeneration) refreshing.value = false;
     }
   }
 
   async function doRefreshAll(showErrorMessage: boolean) {
+    const generation = ownerGeneration;
     const wasRunningKeys = new Set(
       tasks.value.filter((t) => isActive(t.status)).map((t) => `${t.source}:${t.id}`),
     );
-    const [copyRes, schemaRes, scriptRes] = await Promise.allSettled([
+    const [copyRes, schemaRes, scriptRes, backupRes] = await Promise.allSettled([
       listDbCopyTasks(showErrorMessage),
       schemaDocTaskList(showErrorMessage),
       listSqlScriptTasks(showErrorMessage),
+      listDbBackupTasks(showErrorMessage),
     ]);
+    if (generation !== ownerGeneration) return;
     const next: ClientTask[] = [];
     const failedSources = new Set<ClientTaskSource>();
     if (copyRes.status === 'fulfilled') {
@@ -287,6 +340,13 @@ export function useClientTasks() {
     } else {
       failedSources.add('sqlScript');
     }
+    if (backupRes.status === 'fulfilled') {
+      for (const raw of unwrapList(backupRes.value)) {
+        if (raw?.taskId) next.push(fromDbBackup(raw));
+      }
+    } else {
+      failedSources.add('dbBackup');
+    }
     // 刚提交的任务列表可能还没带上，进行中即使不在列表里也先钉住，再 refreshOne。
     const seen = new Set(next.map((t) => `${t.source}:${t.id}`));
     const leftover = tasks.value.filter((t) => {
@@ -306,6 +366,7 @@ export function useClientTasks() {
       await Promise.all(
         activeLeftover.map((t) => refreshOne(t, showErrorMessage)),
       );
+      if (generation !== ownerGeneration) return;
       pruneCompleted();
       persistRunning();
     }
@@ -318,13 +379,17 @@ export function useClientTasks() {
   }
 
   async function refreshOne(task: ClientTask, showErrorMessage = true) {
+    const generation = ownerGeneration;
     try {
       const res: any =
         task.source === 'copy'
           ? await getDbCopyTask(task.id, showErrorMessage)
           : task.source === 'sqlScript'
             ? await getSqlScriptTask(task.id, showErrorMessage)
-            : await schemaDocTask(task.id, showErrorMessage);
+            : task.source === 'dbBackup'
+              ? await getDbBackupTask(task.id, showErrorMessage)
+              : await schemaDocTask(task.id, showErrorMessage);
+      if (generation !== ownerGeneration) return;
       const raw = unwrapOne(res);
       if (!raw) return;
       upsert(
@@ -332,11 +397,18 @@ export function useClientTasks() {
           ? fromCopy(raw)
           : task.source === 'sqlScript'
             ? fromSqlScript(raw)
-            : fromSchema(raw),
+            : task.source === 'dbBackup'
+              ? fromDbBackup(raw)
+              : fromSchema(raw),
       );
       persistRunning();
     } catch (e: any) {
+      if (generation !== ownerGeneration) return;
       const msg = String(e?.message || e?.msg || '');
+      if (/无权|403|forbidden/i.test(msg) || e?.response?.status === 403) {
+        tasks.value = tasks.value.filter((item) => !(item.id === task.id && item.source === task.source));
+        persistRunning(); return;
+      }
       // 过期/不存在：从进行中拿掉，避免本地占位永远 PENDING
       if (msg.includes('不存在') || msg.includes('过期')) {
         upsert({
@@ -427,6 +499,35 @@ export function useClientTasks() {
     void refreshOne(task).then(() => syncPolling());
   }
 
+  /**
+   * 整库备份提交后先钉在任务列表里。进度面板自己打开，这里不把后台面板顶出来。
+   */
+  function trackDbBackup(raw: DbBackupTaskVO) {
+    if (!raw?.taskId) return;
+    upsert(fromDbBackup(raw));
+    persistRunning();
+    void refreshOne({
+      id: raw.taskId,
+      source: 'dbBackup',
+      kind: 'DB_BACKUP',
+      title: '',
+      subtitle: '',
+      status: 'PENDING',
+      total: 0,
+      done: 0,
+      createTime: Date.now(),
+      errors: [],
+    }).then(() => syncPolling());
+  }
+
+  /** 进度面板轮询到的详情写回统一任务列表，最小化后后台面板能接着看。 */
+  function applyDbBackup(raw: DbBackupTaskVO) {
+    if (!raw?.taskId) return;
+    upsert(fromDbBackup(raw));
+    persistRunning();
+    syncPolling();
+  }
+
   /** SQL 脚本任务启动后立刻入列表并打开面板 */
   function trackSqlScript(raw: SqlScriptTaskVO) {
     if (!raw?.taskId) return;
@@ -471,17 +572,22 @@ export function useClientTasks() {
   }
 
   async function cancel(task: ClientTask) {
+    const generation = ownerGeneration;
     if (task.source === 'copy') {
       await cancelDbCopyTask(task.id);
     } else if (task.source === 'sqlScript') {
       await cancelSqlScriptTask(task.id);
+    } else if (task.source === 'dbBackup') {
+      await cancelDbBackupTask(task.id);
     } else {
       await cancelSchemaDocTask(task.id);
     }
+    if (generation !== ownerGeneration) return;
     // 取消是协作式的：数据库当前语句真正结束、事务回滚后，后端才会返回 CANCELLED。
     // 此处保留进行中状态，让轮询继续，避免界面先结束而后台仍在写数据。
     upsert({
       ...task,
+      cancelRequested: true,
       message: '正在取消，等待当前数据库操作结束',
     });
     persistRunning();
@@ -494,6 +600,7 @@ export function useClientTasks() {
 
   /** 页面进入先以服务端为准恢复任务；本地缓存只负责在请求返回前提供角标。 */
   async function bootstrap() {
+    if (!taskOwner) return;
     restoreCache();
     pruneCompleted();
     await refreshAll(false);
@@ -507,6 +614,13 @@ export function useClientTasks() {
   if (!panelWatchBound) {
     panelWatchBound = true;
     panelWatchScope.run(() => {
+      const userStore = useUserStore();
+      watch(() => String((userStore.userInfo as { userId?: number | string } | null)?.userId ?? ''), (owner) => {
+        if (owner === taskOwner) return;
+        ownerGeneration++; taskOwner = owner; tasks.value = []; refreshing.value = false;
+        stopPolling();
+        if (owner) void bootstrap();
+      }, { immediate: true });
       watch(panelVisible, (open) => {
         if (open) {
           void onPanelOpened();
@@ -533,6 +647,8 @@ export function useClientTasks() {
     refreshAll,
     trackCopy,
     trackSqlScript,
+    trackDbBackup,
+    applyDbBackup,
     trackSchema,
     cancel,
     openPanel,

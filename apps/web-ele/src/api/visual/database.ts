@@ -33,6 +33,7 @@ export function testConnectionDraft(data: {
   sshPort?: number | string
   sshUsername?: string
   sshPassword?: string
+  sshAuthMode?: 'key' | 'password'
   sshPrivateKey?: string
   sshPassphrase?: string
   aiEnabled?: number
@@ -263,6 +264,9 @@ export function executeDml(data: {
   dbConfigId: number | string
   instanceName?: string
   sql: string
+  source?: string
+  requireSingleRow?: boolean
+  sourceConnectionFingerprint?: string
 }) {
   return request({
     url: databaseUrl + 'executeDml',
@@ -376,7 +380,10 @@ export function executeDmlBatch(data: {
   dbConfigId: number | string
   instanceName?: string
   sqls: string[]
+  parameters?: { value: unknown; jdbcType?: number; typeName?: string }[][]
+  requireSingleRow?: boolean
   source?: string
+  sourceConnectionFingerprint?: string
 }) {
   return request({
     url: databaseUrl + 'executeDmlBatch',

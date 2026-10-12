@@ -4,9 +4,13 @@
  *
  * @author yanch
  */
+import { createResultValueWriter, resultValuePredicate, type ResultEditParameter } from './resultComparison';
+import { topLevelWords } from './sqlTopLevel';
 import { resolveDialectFamily, resolveSqlDialect } from '../dialect/sqlDialect';
 
 export interface TableRef {
+  /** SQL Server 三段限定名中的数据库。 */
+  catalog?: string;
   /** 两段名时的 schema；三段名时是中间段（SQL Server 的 schema） */
   schema?: string;
   table: string;
@@ -24,13 +28,14 @@ export interface ColPair {
 }
 
 const IDENT =
-  '(?:`([^`]+)`|"([^"]+)"|\\[([^\\]]+)\\]|([\\p{L}_][\\p{L}\\p{N}_$#]*))';
+  '(?:`((?:``|[^`])+)`|"((?:""|[^"])+)"|\\[((?:\\]\\]|[^\\]])+)\\]|([\\p{L}_][\\p{L}\\p{N}_$#]*))';
 
 const JOIN_MOD =
   /^(?:INNER|LEFT|RIGHT|FULL|CROSS|NATURAL|OUTER)$/i;
 
 function pickIdent(m: RegExpMatchArray, offset: number): string | undefined {
-  return m[offset] || m[offset + 1] || m[offset + 2] || m[offset + 3] || undefined;
+  const value = m[offset] || m[offset + 1] || m[offset + 2] || m[offset + 3];
+  return value?.replace(/``/g, '`').replace(/""/g, '"').replace(/\]\]/g, ']');
 }
 
 /** 抹注释和单引号字面量，保留 "ident" / `ident` */
@@ -70,7 +75,8 @@ function consumeQualifiedName(
 function partsToTableRef(parts: string[]): TableRef | null {
   if (!parts.length) return null;
   if (parts.length >= 3) {
-    return { schema: parts[parts.length - 2], table: parts[parts.length - 1]! };
+    if (parts.length > 3) return null; // 远程服务器四段名无法在本连接安全读取主键。
+    return { catalog: parts[0], schema: parts[1], table: parts[2]! };
   }
   if (parts.length === 2) {
     return { schema: parts[0], table: parts[1]! };
@@ -96,6 +102,13 @@ function splitFromTableChunks(fromPart: string): string[] {
   let i = 0;
   while (i < s.length) {
     const ch = s[i]!;
+    if (['"', '`', '[', "'"].includes(ch)) {
+      const start = i++; const close = ch === '[' ? ']' : ch;
+      while (i < s.length) {
+        if (s[i++] === close) { if (s[i] === close) i++; else break; }
+      }
+      buf += s.slice(start, i); continue;
+    }
     if (ch === '(') {
       depth++;
       buf += ch;
@@ -128,24 +141,21 @@ function splitFromTableChunks(fromPart: string): string[] {
 }
 
 function extractFromClause(sql: string): string | null {
-  const cleaned = stripSqlNoise(sql);
-  const m = cleaned.match(/\bFROM\b([\s\S]*)$/iu);
-  if (!m?.[1]) return null;
-  let from = m[1];
-  const cut = from.search(
-    /\b(?:WHERE|GROUP\s+BY|HAVING|ORDER\s+BY|LIMIT|UNION|OFFSET|FETCH|WINDOW|FOR\s+(?:UPDATE|SHARE)|INTERSECT|EXCEPT)\b/iu,
-  );
-  if (cut >= 0) from = from.slice(0, cut);
-  return from;
+  const words = topLevelWords(sql);
+  const select = words.findIndex((w) => w.word === 'SELECT');
+  if (select < 0) return null;
+  // UNION/DISTINCT/GROUP 的行没有唯一物理来源，结果保持只读。
+  if (words.slice(select + 1).some((w) => ['UNION', 'INTERSECT', 'EXCEPT', 'DISTINCT', 'GROUP', 'APPLY', 'PIVOT', 'UNPIVOT'].includes(w.word))) return null;
+  const from = words.slice(select + 1).find((w) => w.word === 'FROM');
+  if (!from) return null;
+  const end = words.find((w) => w.start > from.end && ['WHERE', 'GROUP', 'HAVING', 'ORDER', 'LIMIT', 'OFFSET', 'FETCH', 'WINDOW', 'FOR'].includes(w.word));
+  return sql.slice(from.end, end?.start ?? sql.length).replace(/;\s*$/, '');
 }
 
 function parseTableChunk(chunk: string): QueryTableRef | null {
   let s = stripJoinModifiers(chunk);
-  s = s.replace(/\b(?:ON|USING)\b[\s\S]*$/iu, '').trim();
-  s = s.replace(
-    /\b(?:WHERE|GROUP|HAVING|ORDER|LIMIT|UNION|OFFSET|FETCH)\b[\s\S]*$/iu,
-    '',
-  ).trim();
+
+
   if (!s || s.startsWith('(')) return null;
   const q = consumeQualifiedName(s);
   if (!q) return null;
@@ -153,7 +163,7 @@ function parseTableChunk(chunk: string): QueryTableRef | null {
   if (!ref?.table) return null;
   let alias: string | undefined;
   const aliasMatch = q.rest.match(
-    new RegExp(`^\\s+(?:AS\\s+)?(${IDENT})(?:\\s|$)`, 'iu'),
+    new RegExp(`^\\s+(?:AS\\s+)?${IDENT}(?:\\s|$)`, 'iu'),
   );
   if (aliasMatch) {
     const name = pickIdent(aliasMatch, 1);
@@ -176,8 +186,16 @@ export function parseQueryTables(sql: string): QueryTableRef[] {
   const seen = new Set<string>();
   for (const chunk of splitFromTableChunks(from)) {
     const t = parseTableChunk(chunk);
-    if (!t?.table) continue;
-    const key = `${(t.alias || '').toLowerCase()}::${(t.schema || '').toLowerCase()}::${t.table.toLowerCase()}`;
+    // 存在派生表时不能把剩下的一张物理表误当成整个结果的唯一来源。
+    if (!t?.table) return [];
+    const outerSelect = topLevelWords(sql).find((w) => w.word === 'SELECT');
+    const prefix = sql.slice(0, outerSelect?.start ?? 0);
+    // CTE 名是临时结果，不是可直接 UPDATE 的物理表。
+    if (/^\s*WITH\b/i.test(prefix)) {
+      const names = [...prefix.matchAll(/(?:WITH|,)\s*["`\[]?([\w$]+)["`\]]?\s*(?:\([^)]*\)\s*)?AS\s*\(/gi)].map((m) => m[1]);
+      if (names.some((name) => name === t.table)) return [];
+    }
+    const key = `${t.catalog || ''}::${t.alias || ''}::${t.schema || ''}::${t.table}`;
     if (seen.has(key)) continue;
     seen.add(key);
     out.push(t);
@@ -190,7 +208,7 @@ export function parseTableFromSql(sql: string): TableRef | null {
   const tables = parseQueryTables(sql);
   if (!tables.length) return null;
   const t = tables[0]!;
-  return { schema: t.schema, table: t.table };
+  return { catalog: t.catalog, schema: t.schema, table: t.table };
 }
 
 /** SELECT 列表一项：用于把结果列归属到某张表 */
@@ -208,7 +226,14 @@ function splitTopComma(s: string): string[] {
   const out: string[] = [];
   let buf = '';
   let depth = 0;
-  for (const ch of s) {
+  for (let i=0;i<s.length;i++) {
+    const ch=s[i]!;
+    // 引用标识符中的逗号/括号不参与 SELECT 列表切分。
+    if (['"','`','[',"'"].includes(ch)) {
+      const start=i;const close=ch==='['?']':ch;
+      while (++i<s.length) { if(s[i]===close) { if(s[i+1]===close)i++;else break; } }
+      buf+=s.slice(start,i+1);continue;
+    }
     if (ch === '(') {
       depth++;
       buf += ch;
@@ -227,32 +252,15 @@ function splitTopComma(s: string): string[] {
 }
 
 function extractSelectList(sql: string): string | null {
-  const cleaned = stripSqlNoise(sql);
-  const sel = cleaned.search(/\bSELECT\b/iu);
-  if (sel < 0) return null;
-  let i = sel + 6;
-  const skip = cleaned
-    .slice(i)
-    .match(
-      /^\s*(?:(?:DISTINCT|ALL)\s+)?(?:TOP\s*(?:\([^)]+\)|\d+)\s*(?:PERCENT\s+)?(?:WITH\s+TIES\s+)?)?/iu,
-    );
-  if (skip) i += skip[0].length;
-  const start = i;
-  let depth = 0;
-  while (i < cleaned.length) {
-    const ch = cleaned[i]!;
-    if (ch === '(') depth++;
-    else if (ch === ')') depth = Math.max(0, depth - 1);
-    else if (depth === 0 && /^FROM\b/iu.test(cleaned.slice(i))) {
-      return cleaned.slice(start, i).trim();
-    }
-    i++;
-  }
-  return null;
+  const words = topLevelWords(sql);
+  const select = words.find((w) => w.word === 'SELECT');
+  const from = words.find((w) => w.word === 'FROM' && w.start > (select?.end ?? Infinity));
+  if (!select || !from) return null;
+  return stripSqlNoise(sql.slice(select.end, from.start)).replace(/^\s*(?:DISTINCT|ALL)\s+/i, '').replace(/^\s*TOP\s*(?:\([^)]*\)|\d+)\s*(?:PERCENT\s*)?(?:WITH\s+TIES\s*)?/i, '').trim();
 }
 
 function trailingAlias(item: string): string | undefined {
-  const m = item.match(new RegExp(`\\s+(?:AS\\s+)?(${IDENT})\\s*$`, 'iu'));
+  const m = item.match(new RegExp(`\\s+(?:AS\\s+)?${IDENT}\\s*$`, 'iu'));
   if (!m) return undefined;
   const name = pickIdent(m, 1);
   if (!name || JOIN_MOD.test(name)) return undefined;
@@ -270,15 +278,12 @@ function parseSelectItem(item: string): SelectHint {
     const key = q?.parts[q.parts.length - 1];
     return { resultName: '*', starTable: key };
   }
-  if (/[()]/.test(t) || /\bCASE\b/i.test(t)) {
-    return { resultName: trailingAlias(t) || t, writable: false };
-  }
   const q = consumeQualifiedName(t);
   if (!q) {
     return { resultName: trailingAlias(t) || t, writable: false };
   }
   const aliasMatch = q.rest.match(
-    new RegExp(`^\\s+(?:AS\\s+)?(${IDENT})\\s*$`, 'iu'),
+    new RegExp(`^\\s+(?:AS\\s+)?${IDENT}\\s*$`, 'iu'),
   );
   const aliasName = aliasMatch ? pickIdent(aliasMatch, 1) : undefined;
   // 只允许完整的列引用或列引用加别名；剩余 token 说明这是表达式。
@@ -309,6 +314,33 @@ export function parseSelectHints(sql: string): SelectHint[] {
   return splitTopComma(list)
     .filter(Boolean)
     .map(parseSelectItem);
+}
+
+/** 按投影序号关联去重后的显示名称；星号扩展时采用原始标签，无法证明的表达式保持只读。@author yanch */
+export function resultProjectionHints(sql: string, columns: string[], metadata?: {label:string;sourceLabel?:string}[]): SelectHint[] {
+  const hints=parseSelectHints(sql);
+  if(hints.length===columns.length && !hints.some((hint)=>hint.starAll||hint.starTable)) {
+    return hints.map((hint,index)=>({...hint,resultName:columns[index]!}));
+  }
+  const explicit=hints.filter((hint)=>!hint.starAll&&!hint.starTable);
+  return [...hints.filter((hint)=>hint.starAll||hint.starTable),...columns.map((column)=>{
+    const label=metadata?.find((item)=>item.label===column)?.sourceLabel || column.split('.').at(-1)!;
+    const matches=explicit.filter((hint)=>identEq(hint.resultName,label));
+    if(matches.length>1)return {resultName:column,writable:false};
+    return matches[0]?{...matches[0],resultName:column}:{resultName:column};
+  })];
+}
+
+/**
+ * 比较真实物理字段；元数据存在 ID/id 等大小写同名列时必须精确匹配。
+ * 只有元数据能证明大小写折叠后唯一，才兼容驱动返回的大小写差异。
+ * @author yanch
+ */
+export function physicalColumnEquals(actual: string, expected: string, knownColumns: string[]): boolean {
+  if (actual === expected) return true;
+  const folded = expected.toLowerCase();
+  if (actual.toLowerCase() !== folded) return false;
+  return new Set(knownColumns.filter((name) => name.toLowerCase() === folded)).size <= 1;
 }
 
 export function identEq(a?: string | null, b?: string | null): boolean {
@@ -348,6 +380,7 @@ export function metadataInstanceName(
   dbType: string | undefined | null,
   currentInstance: string,
 ): string {
+  if (resolveDialectFamily(dbType) === 'SQLSERVER_LIKE' && ref.catalog) return ref.catalog;
   const qualified = (ref.schema || '').trim();
   if (resolveDialectFamily(dbType) === 'MYSQL_LIKE' && qualified) {
     return qualified;
@@ -360,7 +393,7 @@ export function quoteIdent(name: string, dbType = 'MY_SQL'): string {
 }
 
 export function quoteTable(ref: TableRef, dbType = 'MY_SQL'): string {
-  return resolveSqlDialect(dbType).qualifyTable(ref.schema, ref.table);
+  return [ref.catalog, ref.schema, ref.table].filter(Boolean).map((name) => quoteIdent(name!, dbType)).join('.');
 }
 
 /** SQL 字面量（按方言） */
@@ -373,8 +406,10 @@ function buildWhere(
   columns: string[],
   whereColumns: string[],
   dbType: string,
+  parameters?: ResultEditParameter[],
 ): string {
   const d = resolveSqlDialect(dbType);
+  const write = createResultValueWriter(dbType, parameters);
   const keys = (whereColumns.length ? whereColumns : columns).filter((c) =>
     Object.prototype.hasOwnProperty.call(row, c),
   );
@@ -387,7 +422,7 @@ function buildWhere(
       if (v === null || v === undefined) {
         return `${d.quoteIdent(col)} IS NULL`;
       }
-      return `${d.quoteIdent(col)} = ${d.literal(v)}`;
+      return resultValuePredicate(d.quoteIdent(col), v, dbType, write);
     })
     .join(' AND ');
 }
@@ -398,12 +433,14 @@ export function buildInsertSql(
   row: Record<string, any>,
   columns: string[],
   dbType = 'MY_SQL',
+  parameters?: ResultEditParameter[],
 ): string {
   const d = resolveSqlDialect(dbType);
+  const write = createResultValueWriter(dbType, parameters);
   const cols = columns.filter((c) => Object.prototype.hasOwnProperty.call(row, c));
   const colList = cols.map((c) => d.quoteIdent(c)).join(', ');
-  const valList = cols.map((c) => d.literal(row[c])).join(', ');
-  return `INSERT INTO ${d.qualifyTable(ref.schema, ref.table)} (${colList}) VALUES (${valList});`;
+  const valList = cols.map((c) => write(row[c])).join(', ');
+  return `INSERT INTO ${quoteTable(ref, dbType)} (${colList}) VALUES (${valList});`;
 }
 
 /**
@@ -432,16 +469,18 @@ export function buildUpdateSql(
   columns: string[],
   whereColumns: string[],
   dbType = 'MY_SQL',
+  parameters?: ResultEditParameter[],
 ): string {
   const d = resolveSqlDialect(dbType);
+  const write = createResultValueWriter(dbType, parameters);
   const setParts = columns
     .filter((c) => Object.prototype.hasOwnProperty.call(editedRow, c))
-    .map((c) => `${d.quoteIdent(c)} = ${d.literal(editedRow[c])}`);
+    .map((c) => `${d.quoteIdent(c)} = ${write(editedRow[c])}`);
   if (!setParts.length) {
     throw new Error('没有可更新的字段');
   }
-  const where = buildWhere(originalRow, columns, whereColumns, dbType);
-  return `UPDATE ${d.qualifyTable(ref.schema, ref.table)} SET ${setParts.join(', ')} WHERE ${where};`;
+  const where = buildWhere(originalRow, Object.keys(originalRow), [...new Set([...whereColumns, ...Object.keys(originalRow)])], dbType, parameters);
+  return `UPDATE ${quoteTable(ref, dbType)} SET ${setParts.join(', ')} WHERE ${where};`;
 }
 
 /**
@@ -454,13 +493,15 @@ export function buildUpdateSqlMapped(
   setPairs: ColPair[],
   wherePairs: ColPair[],
   dbType = 'MY_SQL',
+  parameters?: ResultEditParameter[],
 ): string {
   const d = resolveSqlDialect(dbType);
+  const write = createResultValueWriter(dbType, parameters);
   const setParts = setPairs
     .filter((p) => Object.prototype.hasOwnProperty.call(editedRow, p.resultCol))
     .map(
       (p) =>
-        `${d.quoteIdent(p.physical)} = ${d.literal(editedRow[p.resultCol])}`,
+        `${d.quoteIdent(p.physical)} = ${write(editedRow[p.resultCol])}`,
     );
   if (!setParts.length) {
     throw new Error('没有可更新的字段');
@@ -474,10 +515,10 @@ export function buildUpdateSqlMapped(
       if (v === null || v === undefined) {
         return `${d.quoteIdent(p.physical)} IS NULL`;
       }
-      return `${d.quoteIdent(p.physical)} = ${d.literal(v)}`;
+      return resultValuePredicate(d.quoteIdent(p.physical), v, dbType, write);
     })
     .join(' AND ');
-  return `UPDATE ${d.qualifyTable(ref.schema, ref.table)} SET ${setParts.join(', ')} WHERE ${where};`;
+  return `UPDATE ${quoteTable(ref, dbType)} SET ${setParts.join(', ')} WHERE ${where};`;
 }
 
 /** 生成 DELETE */
@@ -487,8 +528,8 @@ export function buildDeleteSql(
   columns: string[],
   whereColumns: string[],
   dbType = 'MY_SQL',
+  parameters?: ResultEditParameter[],
 ): string {
-  const d = resolveSqlDialect(dbType);
-  const where = buildWhere(row, columns, whereColumns, dbType);
-  return `DELETE FROM ${d.qualifyTable(ref.schema, ref.table)} WHERE ${where};`;
+  const where = buildWhere(row, columns, [...new Set([...whereColumns, ...columns])], dbType, parameters);
+  return `DELETE FROM ${quoteTable(ref, dbType)} WHERE ${where};`;
 }

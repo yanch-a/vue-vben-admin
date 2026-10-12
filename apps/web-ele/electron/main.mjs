@@ -2,6 +2,7 @@ import { readFile, stat } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { gzipSync } from 'node:zlib';
 
 import {
   app,
@@ -17,7 +18,8 @@ import {
 } from 'electron';
 
 import { ServerConfigStore } from './config-store.mjs';
-import { buildProxyTarget, RENDERER_API_PREFIX } from './server-url.mjs';
+import { RENDERER_API_PREFIX } from './server-url.mjs';
+import { createStreamingFetch, forwardApiRequest } from './api-proxy.mjs';
 
 const electronDirectory = path.dirname(fileURLToPath(import.meta.url));
 const rendererDirectory = path.resolve(electronDirectory, '..', 'dist');
@@ -27,6 +29,8 @@ const isSmokeTest = process.env.LEMON_DESKTOP_SMOKE_TEST === 'true';
 const isRendererSmokeTest =
   process.env.LEMON_DESKTOP_RENDERER_SMOKE_TEST === 'true';
 const isAnySmokeTest = isSmokeTest || isRendererSmokeTest;
+/** 显式使用 Chromium 的分块网络请求，不能由 net.fetch 再缓存整个上传体。 */
+const streamingApiFetch = createStreamingFetch((options) => net.request(options));
 /** 标签栏高度，需与 tabs/style.css 中的 40px 保持一致。 */
 const TAB_BAR_HEIGHT = 40;
 
@@ -114,21 +118,7 @@ async function proxyApiRequest(request, server) {
   }
 
   try {
-    const target = buildProxyTarget(server.url, request.url);
-    const headers = new Headers(request.headers);
-    // 目标站点应自行生成 Host/Content-Length；移除自定义协议来源，避免后端误判 CORS。
-    for (const name of ['content-length', 'host', 'origin', 'referer']) {
-      headers.delete(name);
-    }
-    const method = request.method.toUpperCase();
-    const body = ['GET', 'HEAD'].includes(method) ? undefined : await request.arrayBuffer();
-    return await net.fetch(target, {
-      body,
-      headers,
-      method,
-      redirect: 'follow',
-      signal: request.signal,
-    });
+    return await forwardApiRequest(request, server.url, streamingApiFetch);
   } catch (error) {
     console.error('[desktop] API 代理失败', error);
     return Response.json(
@@ -403,11 +393,16 @@ async function ensureMainWindow() {
     mainWindow.on(eventName, () => layoutServerViews());
   }
   mainWindow.on('closed', () => {
+    // BaseWindow 不拥有子视图的渲染进程；关闭所有标签和标签栏，避免关窗后保留后台页面。@author yanch
+    const views = [tabBarView, ...[...serverTabs.values()].map((tab) => tab.view)];
     mainWindow = null;
     tabBarView = null;
     serverTabs.clear();
     serversById.clear();
     activeTabId = null;
+    for (const view of views) {
+      if (view && !view.webContents.isDestroyed()) view.webContents.close();
+    }
   });
   layoutServerViews();
   await tabBarView.webContents.loadFile(tabPage);
@@ -501,9 +496,15 @@ async function closeServerTab(id) {
  */
 async function runRendererSmokeTest() {
   // 使用本机临时 HTTP 服务验证主进程 API 代理，避免依赖真实 Lemon 后台。
-  const smokeServer = createServer((_request, response) => {
-    response.writeHead(200, { 'Content-Type': 'application/json' });
-    response.end(JSON.stringify({ code: 200, data: {} }));
+  const smokeServer = createServer((request, response) => {
+    const reply = (data) => {
+      response.writeHead(200, { 'Content-Type': 'application/json', 'Content-Encoding': 'gzip' });
+      response.end(gzipSync(JSON.stringify({ code: 200, data })));
+    };
+    if (request.url === '/lmdb/stream-fixture') {
+      let bytes = 0; request.on('data', (chunk) => { bytes += chunk.length; });
+      request.on('end', () => reply({ bytes }));
+    } else reply({});
   });
   await new Promise((resolve, reject) => {
     smokeServer.once('error', reject);
@@ -539,6 +540,13 @@ async function runRendererSmokeTest() {
     const tabsReady = await tabBarView.webContents.executeJavaScript(
       `Boolean(document.querySelector('#add-server') && window.lemonServerTabs)`,
     );
+    // 验证 renderer -> 自定义协议 -> 分块网络请求，以及 gzip 响应不会被重复解压。
+    const proxyReady = await activeServerWebContents().executeJavaScript(`
+      (async () => {
+        const response = await fetch('/lmdb/stream-fixture', { method: 'POST', body: new Uint8Array(131072) });
+        return (await response.json()).data.bytes === 131072;
+      })()
+    `);
     // 再打开一个服务端，确认第一个标签的页面没有被销毁。
     const secondServer = {
       id: 'desktop-smoke-server-b',
@@ -573,10 +581,21 @@ async function runRendererSmokeTest() {
       firstStillMounted &&
       secondMounted;
     console.log(
-      `[desktop-smoke] renderer mounted: ${ready}; tabs: ${tabsReady}; multi: ${multiTabReady}`,
+      `[desktop-smoke] renderer mounted: ${ready}; tabs: ${tabsReady}; multi: ${multiTabReady}; stream/gzip: ${proxyReady}`,
     );
+      // 验证真实关窗会销毁全部渲染进程；成功路径按正常退出流程释放资源。@author yanch
+      const contents = [tabBarView.webContents, ...[...serverTabs.values()].map((tab) => tab.view.webContents)];
+      const destroyed = contents.map((content) => new Promise((resolve, reject) => {
+        if (content.isDestroyed()) { resolve(); return; }
+        const timer = setTimeout(() => reject(new Error('关闭主窗口后子视图未销毁')), 5000);
+        content.once('destroyed', () => { clearTimeout(timer); resolve(); });
+      }));
+      mainWindow.close();
+      await Promise.all(destroyed);
+      console.log(`[desktop-smoke] closed views destroyed: ${contents.every((content) => content.isDestroyed())}`);
     smokeServer.close();
-    app.exit(ready && tabsReady && multiTabReady ? 0 : 1);
+      if (ready && tabsReady && multiTabReady && proxyReady) app.quit();
+      else app.exit(1);
   } catch (error) {
     console.error('[desktop-smoke] renderer failed', error);
     smokeServer.close();
@@ -924,7 +943,8 @@ if (!hasSingleInstanceLock) {
   });
 
   app.on('window-all-closed', () => {
-    if (process.platform !== 'darwin') {
+    // 冒烟在关窗后还需检查销毁事件，由测试明确结束进程。
+    if (process.platform !== 'darwin' && !isAnySmokeTest) {
       app.quit();
     }
   });

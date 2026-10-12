@@ -86,11 +86,11 @@ function rowFilter(row: Record<string, any>, whereColumns: string[]): Record<str
   if (!Object.prototype.hasOwnProperty.call(row, '_id') || row._id == null) {
     throw new Error('MongoDB 结果缺少 _id；请保留 _id 投影后再编辑或删除文档');
   }
-  const keys = (whereColumns.length ? whereColumns : ['_id']).filter(
+  // _id 必须始终参与；其它查询原值用于冲突检测，$eq 禁止把文档值中的 $ne 等当查询操作符。
+  const keys = [...new Set(['_id', ...whereColumns, ...Object.keys(row)])].filter(
     (key) => Object.prototype.hasOwnProperty.call(row, key),
   );
-  if (!keys.length) throw new Error('无法构建 MongoDB 过滤条件：没有可用字段');
-  return Object.fromEntries(keys.map((key) => [key, row[key]]));
+  return Object.fromEntries(keys.map((key) => [key, { $eq: row[key] }]));
 }
 
 export function buildMongoInsertCommand(

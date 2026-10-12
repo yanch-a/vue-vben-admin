@@ -159,6 +159,8 @@ function onSqlAction(
           :explanation="item.msg.sql.explanation"
           :warnings="item.msg.sql.warnings"
           :write-operation="item.msg.sql.writeOperation"
+          :validation="item.msg.sql.validation"
+          :original-sql="item.msg.sql.originalSql"
           @insert="onSqlAction('insert', $event)"
           @replace="onSqlAction('replace', $event)"
           @run="onSqlAction('run', $event)"

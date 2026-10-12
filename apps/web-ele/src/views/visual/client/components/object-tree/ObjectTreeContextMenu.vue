@@ -14,6 +14,7 @@ export type TreeCtxAction =
   | 'createDatabase'
   | 'dropDatabase'
   | 'importData'
+  | 'exportInstanceSql'
   | 'runSqlScript'
   | 'exportTableSchemaExcel'
   | 'createTable'
@@ -127,7 +128,10 @@ function onAction(action: TreeCtxAction) {
           </div>
           <div class="divider" />
         </template>
-        <div class="item" @click="onAction('importData')">{{ $tr('导入数据（官方客户端）') }}</div>
+        <div class="item" @click="onAction('importData')">{{ $tr('导入数据库备份') }}</div>
+        <div class="item" @click="onAction('exportInstanceSql')">
+          {{ $tr('导出/备份') }}{{ instanceLabel }}
+        </div>
         <div class="item" @click="onAction('copyDbToHost')">
           {{ $tr('将') }}{{ instanceLabel }}{{ $tr('复制到不同主机') }}
         </div>

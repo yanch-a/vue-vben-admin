@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { parseEtlJson } from './etlSafeJson';
 /**
  * SQL ETL 操作台：工作区在左侧可收起列表，任务用可停靠标签栏。
  * 步骤排成流水线并标出当前步骤；结果预览可停靠右侧/下方或隐藏。JSON 与步骤共用同一份文档。
@@ -52,6 +53,11 @@ import WorkspaceSchedule from './WorkspaceSchedule.vue';
 import WorkspaceNotify from './WorkspaceNotify.vue';
 import { translateUiText } from '#/locales/ui-text';
 import { createEtlRequestGate } from './etlRequestGate';
+import { createEtlPreviewSession } from './etlPreviewSession';
+import EtlFieldRules from './EtlFieldRules.vue';
+import EtlOperatorEditor from './EtlOperatorEditor.vue';
+import { createFlexibleExamplePipeline, createOperatorConfig, ETL_OPERATORS, etlInputReferences, isEtlRowSource } from './etlOperators';
+import { createEtlSqlDraftGuard } from './etlSqlDraftGuard';
 import {
   clearEtlLocalDraft,
   etlDirtyIds,
@@ -175,6 +181,9 @@ const dirty = computed(
 /** 上次与服务端对齐时的 revision，本地稿过期判定用 */
 const savedRevision = ref(0);
 const workspaceRequests = createEtlRequestGate();
+const draftOperations = createEtlPreviewSession(() => JSON.stringify([workspaceRequests.stamp(), activePipelineId.value, selectedNodeId.value, doc.value, jsonText.value, editorMode.value]));
+const previewRequests = createEtlPreviewSession(() => JSON.stringify([workspaceRequests.stamp(), activePipelineId.value, doc.value]));
+const tableInsertRequests = createEtlSqlDraftGuard(() => JSON.stringify([workspaceRequests.stamp(), activePipelineId.value, selectedNodeId.value, node.value?.config.sql, nodeResource.value]));
 /** 服务端 revision 已前进时保留本地稿，用户明确选择刷新/保留/导出，不自动丢弃。 */
 const draftConflict = ref<EtlWorkspaceRow>();
 /** 打开/切换工作区期间暂停自动落盘，避免半成品覆盖缓存 */
@@ -199,7 +208,7 @@ const previousQueries = computed(() => {
   }
   return steps.filter(
     (item) =>
-      ['database.query', 'transform.select'].includes(item.type) &&
+      isEtlRowSource(item.type) &&
       item.enabled !== false &&
       !downstream.has(item.id),
   );
@@ -224,6 +233,15 @@ const stickyWarnings = computed(() =>
 );
 /** el-select 不能稳定选中空字符串，固定值用哨兵再写回 stepId=''。 */
 const FIXED_PARAM_SOURCE = '__fixed__';
+const VARIABLE_PARAM_SOURCE = '__variable__';
+const variableName = ref(''), variableValue = ref('');
+/** 工作区变量值通过 JDBC 绑定；这里新增文本值，复杂值可使用原有 JSON 编辑器。 */
+function addVariable() {
+  const name = variableName.value.trim();
+  if (!name || Object.hasOwn(doc.value.variables, name)) { ElMessage.warning('变量名不能为空或重复'); return; }
+  doc.value.variables = { ...doc.value.variables, [name]: variableValue.value };
+  variableName.value = ''; variableValue.value = '';
+}
 const catalog = ref<any[]>([]),
   catalogLoading = ref(false);
 const catalogSearch = ref('');
@@ -407,7 +425,7 @@ function stepTitle(step: EtlNode) {
       ? '结果写表'
       : step.type === 'transform.select'
         ? '字段选择 / 重命名'
-        : step.type;
+        : ETL_OPERATORS.find((operator) => operator.type === step.type)?.label || step.type;
 }
 function sourceLabel(ref?: string) {
   return doc.value.resources[ref || '']?.displayName || '请选择数据源';
@@ -509,7 +527,7 @@ async function openWorkspace(
   try {
     const detail = unbox<EtlWorkspaceRow>(await getEtlWorkspace(row.id));
     if (!workspaceRequests.current(request)) return false;
-    const document = normalizeSqlDocument(JSON.parse(detail.draftJson || '{}'));
+    const document = normalizeSqlDocument(parseEtlJson(detail.draftJson || '{}'));
     activeWorkspace.value = detail;
     doc.value = document;
     draftConflict.value = undefined;
@@ -532,11 +550,11 @@ async function openWorkspace(
       try {
         const rawMode = local.editorMode === 'json' ? 'json' : 'steps';
         try {
-          doc.value = normalizeSqlDocument(JSON.parse(local.draftJson || '{}'));
+          doc.value = normalizeSqlDocument(parseEtlJson(local.draftJson || '{}'));
         } catch {
           if (rawMode !== 'json') throw new Error('本地草稿格式无效');
           if (local.documentJson)
-            doc.value = normalizeSqlDocument(JSON.parse(local.documentJson));
+            doc.value = normalizeSqlDocument(parseEtlJson(local.documentJson));
         }
         activeWorkspace.value = {
           ...detail,
@@ -551,7 +569,7 @@ async function openWorkspace(
         if (rawMode === 'json') {
           jsonText.value = local.draftJson;
           try {
-            JSON.parse(jsonText.value);
+            parseEtlJson(jsonText.value);
             jsonValid.value = true;
           } catch {
             jsonValid.value = false;
@@ -615,7 +633,7 @@ async function prepare(): Promise<boolean> {
       return false;
     }
     try {
-      candidate = JSON.parse(jsonText.value);
+      candidate = parseEtlJson(jsonText.value);
     } catch {
       ElMessage.error('JSON 格式错误');
       return false;
@@ -901,10 +919,20 @@ function selectPipeline(id: string) {
   activePipelineId.value = id;
   selectedNodeId.value = pipeline.value?.nodes[0]?.id || '';
 }
+/** 示例只追加一个独立任务；JSON 草稿先应用，异步切换期间不得写到另一个工作区。 */
+async function addExamplePipeline() {
+  const workspace = activeWorkspace.value?.id;
+  if (editorMode.value === 'json') { await changeMode('steps'); if (editorMode.value === 'json' || activeWorkspace.value?.id !== workspace) return; }
+  const item = createFlexibleExamplePipeline(etlId('example'));
+  item.name = translateUiText(item.name); item.nodes.forEach((step) => { step.name = translateUiText(step.name || step.id); });
+  doc.value.pipelines.push(item); activePipelineId.value = item.id; selectedNodeId.value = item.nodes.at(-1)?.id || '';
+}
 async function removePipeline(id = activePipelineId.value) {
   if (!doc.value.pipelines.some((item) => item.id === id)) return;
+  const request = draftOperations.begin();
   try {
     await ElMessageBox.confirm('删除当前同步任务？', '删除任务');
+    if (!draftOperations.current(request)) return;
     doc.value.pipelines = doc.value.pipelines.filter((item) => item.id !== id);
     if (id === activePipelineId.value)
       selectPipeline(doc.value.pipelines[0]?.id || '');
@@ -912,12 +940,12 @@ async function removePipeline(id = activePipelineId.value) {
     /* 取消保留任务。 */
   }
 }
-function addStep(type: 'database.query' | 'database.write') {
+function addStep(type: 'database.query' | 'database.write' | 'transform.select') {
   if (!pipeline.value) return;
   const item: EtlNode = {
     id: etlId(type === 'database.query' ? 'query' : 'write'),
     name: translateUiText(
-      type === 'database.query' ? '查询步骤' : '写入步骤',
+      type === 'database.query' ? '查询步骤' : type === 'transform.select' ? '字段处理步骤' : '写入步骤',
     ),
     type,
     typeVersion: 1,
@@ -928,7 +956,7 @@ function addStep(type: 'database.query' | 'database.write') {
         : {
             inputStepId:
               pipeline.value.nodes
-                .filter((step) => step.type === 'database.query')
+                .filter((step) => isEtlRowSource(step.type))
                 .at(-1)?.id || '',
             table: '',
             mode: 'append',
@@ -937,21 +965,32 @@ function addStep(type: 'database.query' | 'database.write') {
             keyColumns: [],
           },
   };
+  if (type === 'transform.select') {
+    item.resourceRef = undefined;
+    item.config = { inputStepId: item.config.inputStepId || pipeline.value.nodes.filter((step) => isEtlRowSource(step.type)).at(-1)?.id || '', fields: [], keepUnspecified: true, removeFields: [] };
+  }
   pipeline.value.nodes.push(item);
   selectedNodeId.value = item.id;
   syncStepDependencies(pipeline.value, item);
 }
-/** 流水线末尾的下拉只接受查询或写入，避免把任意字符串写进步骤类型。 */
+/** 下拉只接受已经支持的查询、字段处理和写入节点。 */
 function addStepCommand(type: string) {
-  if (type === 'database.query' || type === 'database.write') addStep(type);
+  if (type === 'database.query' || type === 'database.write' || type === 'transform.select') { addStep(type); return; }
+  const operator = ETL_OPERATORS.find((item) => item.type === type);
+  if (!operator || !pipeline.value) return;
+  const input = pipeline.value.nodes.filter((item) => isEtlRowSource(item.type) && item.enabled !== false).at(-1)?.id || '';
+  const item: EtlNode = { id: etlId('transform'), name: translateUiText(operator.label), type, typeVersion: 1, config: createOperatorConfig(type, input) };
+  // 新建断言使用当前语言的默认提示；用户后续编辑的业务提示保持原文。
+  if (type === 'transform.assert') item.config.message = translateUiText(item.config.message);
+  pipeline.value.nodes.push(item); selectedNodeId.value = item.id; syncStepDependencies(pipeline.value, item);
 }
 async function removeStep() {
   if (!pipeline.value || !node.value) return;
   const id = node.value.id;
+  const request = draftOperations.begin();
   const referenced = pipeline.value.nodes.some(
     (item) =>
-      item.config.inputStepId === id ||
-      (item.config.parameters || []).some((param: any) => param.stepId === id),
+      etlInputReferences(item.config).includes(id),
   );
   if (referenced) {
     ElMessage.warning('后续步骤还在引用它，请先修改参数来源或写入输入');
@@ -959,6 +998,7 @@ async function removeStep() {
   }
   try {
     await ElMessageBox.confirm('删除当前步骤？', '删除步骤');
+    if (!draftOperations.current(request) || !pipeline.value?.nodes.some((item) => item.id === id)) return;
     pipeline.value.nodes = pipeline.value.nodes.filter(
       (item) => item.id !== id,
     );
@@ -988,11 +1028,11 @@ function addParameter() {
 /** 参数来源：固定值 ↔ 上游步骤；切换后重建依赖边。 */
 function onParamSource(param: Record<string, any>, value: string) {
   if (value === FIXED_PARAM_SOURCE) {
-    param.stepId = '';
-    param.column = '';
+    delete param.variable; param.stepId = ''; param.column = ''; param.value ??= '';
+  } else if (value === VARIABLE_PARAM_SOURCE) {
+    param.variable = Object.keys(doc.value.variables)[0] || ''; delete param.value; param.stepId = ''; param.column = '';
   } else {
-    param.stepId = value;
-    param.mode = param.mode || 'first';
+    delete param.variable; delete param.value; param.stepId = value; param.mode = param.mode || 'first';
   }
   dependencyChanged();
 }
@@ -1025,33 +1065,33 @@ async function previewInput() {
 async function previewQuery(id: string) {
   if (!pipeline.value) return;
   const request = workspaceRequests.stamp();
+  const previewRequest = previewRequests.begin();
+  const pipelineId = pipeline.value.id;
   previewing.value = true;
   syncJson();
   const base = JSON.stringify(doc.value);
+  const current = () => previewRequests.current(previewRequest) && workspaceRequests.current(request) && pipeline.value?.id === pipelineId;
   try {
-    const result = unbox<any>(
-      await previewEtlStep(jsonText.value, pipeline.value.id, id),
-    );
-    if (
-      !workspaceRequests.current(request) ||
-      base !== JSON.stringify(doc.value)
-    ) {
-      ElMessage.info('配置已修改，请重新预览');
-      return;
-    }
+    const result = unbox<any>(await previewEtlStep(jsonText.value, pipelineId, id));
+    if (!current()) return;
+    if (base !== JSON.stringify(doc.value)) { ElMessage.info('配置已修改，请重新预览'); return; }
     previews.value[id] = result;
-    queryColumns.value = {
-      ...queryColumns.value,
-      ...(result.upstreamColumns || {}),
-      [id]: result.columns,
-    };
-    ElMessage.success('查询执行成功');
+    queryColumns.value = { ...queryColumns.value, ...(result.upstreamColumns || {}), [id]: result.columns };
+    ElMessage.success('步骤预览成功');
   } catch (error) {
-    ElMessage.error(errorMessage(error));
+    if (current()) ElMessage.error(errorMessage(error));
   } finally {
-    previewing.value = false;
+    // 旧请求结束不能解除新请求的 loading，也不能把另一任务的同名步骤结果写入当前任务。
+    if (previewRequests.latest(previewRequest)) previewing.value = false;
   }
 }
+
+/** 任务内步骤 ID 可重复于另一任务，切换任务必须清理预览和字段目录并废弃在途请求。 */
+watch(activePipelineId, () => {
+  previewRequests.invalidate(); previewing.value = false;
+  previews.value = {}; queryColumns.value = {};
+}, { flush: 'sync' });
+
 function inputColumns() {
   return queryColumns.value[node.value?.config.inputStepId || ''] || [];
 }
@@ -1073,10 +1113,11 @@ watch(
   () =>
     JSON.stringify({
       resources: doc.value.resources,
+      variables: doc.value.variables,
       pipelines: doc.value.pipelines.map((item) => ({
         id: item.id,
         edges: item.edges,
-        queries: item.nodes.filter((step) => step.type === 'database.query'),
+        queries: item.nodes.filter((step) => isEtlRowSource(step.type)),
       })),
     }),
   () => {
@@ -1087,6 +1128,7 @@ watch(
       ]),
     );
     queryColumns.value = {};
+    previewRequests.invalidate(); previewing.value = false;
   },
 );
 
@@ -1235,6 +1277,8 @@ function applySources() {
 /** 异步对象目录绑定请求代次，避免快速切换步骤时旧请求覆盖新数据源的表。 */
 watch(
   () => [
+    activePipelineId.value,
+    workspaceRequests.stamp(),
     node.value?.id,
     nodeResource.value?.dbConfigId,
     nodeResource.value?.instance,
@@ -1242,6 +1286,8 @@ watch(
   ],
   async () => {
     const request = ++catalogRequest;
+    catalogLoading.value = false;
+    tableInsertRequests.invalidate(); catalogInserting.value = '';
     catalog.value = [];
     catalogSearch.value = '';
     const source = nodeResource.value;
@@ -1304,17 +1350,20 @@ function catalogMetaTableName(item: any) {
 
 /** 空 SQL 生成带全部字段的 SELECT；已有 SQL 时在光标处插入表名。 */
 async function insertTable(item: any) {
-  if (!node.value) return;
+  const target = node.value;
+  if (!target || target.type !== 'database.query') return;
   const name = catalogTableRef(item);
   if (!name) return;
-  const sql = String(node.value.config.sql || '');
+  const sql = String(target.config.sql || '');
   if (sql.trim()) {
     const input = sqlInput.value?.textarea;
     const start = input?.selectionStart ?? sql.length;
     const end = input?.selectionEnd ?? sql.length;
-    node.value.config.sql = sql.slice(0, start) + name + sql.slice(end);
+    target.config.sql = sql.slice(0, start) + name + sql.slice(end);
     return;
   }
+  const request = tableInsertRequests.capture(target);
+  const current = () => request.current() && node.value === target;
   const source = nodeResource.value;
   const metaKey = catalogMetaTableName(item);
   const insertKey = String(item.qualifiedName || item.tableName || metaKey);
@@ -1336,20 +1385,22 @@ async function insertTable(item: any) {
         )
         .filter(Boolean);
     }
+    if (!current()) return;
     if (columns.length) {
       const selectList = columns
         .map((column) => quoteIdent(column))
         .join(',\n  ');
-      node.value.config.sql = `SELECT\n  ${selectList}\nFROM ${name}`;
+      request.apply(`SELECT\n  ${selectList}\nFROM ${name}`);
     } else {
-      node.value.config.sql = `SELECT * FROM ${name}`;
+      request.apply(`SELECT * FROM ${name}`);
       ElMessage.warning('未能读取字段列表，已插入 SELECT *，请手工补全列');
     }
   } catch (error) {
-    node.value.config.sql = `SELECT * FROM ${name}`;
+    if (!current()) return;
+    request.apply(`SELECT * FROM ${name}`);
     ElMessage.warning(`读取字段失败，已插入 SELECT *：${errorMessage(error)}`);
   } finally {
-    catalogInserting.value = '';
+    if (request.latest()) catalogInserting.value = '';
   }
 }
 
@@ -1406,6 +1457,7 @@ async function importFile(event: Event, kettle = false) {
   const selectedFiles = Array.from(input.files || []);
   input.value = '';
   if (!file) return;
+  const request = draftOperations.begin();
   try {
     if (kettle) {
       if (!(await prepare())) return;
@@ -1415,15 +1467,17 @@ async function importFile(event: Event, kettle = false) {
     if (file.size > 2 * 1024 * 1024) throw new Error('JSON 文件不能超过 2MB');
     const text = await file.text(),
       result = unbox<any>(await validateEtlWorkspace(text));
+    if (!draftOperations.current(request)) return;
     if (!result.valid) throw new Error(result.errors[0]);
     await ElMessageBox.confirm(
       '导入整个 JSON 将替换当前工作区的任务和数据源配置；原保存版本在保存前不会改变。确认替换？',
       '导入完整工作区',
       { type: 'warning' },
     );
-    applyDocument(JSON.parse(text));
+    if (!draftOperations.current(request)) return;
+    applyDocument(parseEtlJson(text));
   } catch (error) {
-    if (error !== 'cancel' && error !== 'close')
+    if (draftOperations.current(request) && error !== 'cancel' && error !== 'close')
       ElMessage.error(errorMessage(error));
   }
 }
@@ -1489,10 +1543,12 @@ async function applyAi(candidate: {
 }) {
   if (!candidate?.workspace) return;
   if (!(await prepare())) return;
+  const request = draftOperations.begin();
   try {
     const result: any = unbox(
       await validateEtlWorkspace(JSON.stringify(candidate.workspace)),
     );
+    if (!draftOperations.current(request)) return;
     if (!result.valid) throw new Error((result.errors || []).join('；'));
     if (
       JSON.stringify(candidate.workspace.resources) !==
@@ -1506,9 +1562,10 @@ async function applyAi(candidate: {
       '应用候选配置',
       { type: 'warning', modalClass: 'ai-mask-confirm-overlay' },
     );
+    if (!draftOperations.current(request)) return;
     applyDocument(candidate.workspace);
   } catch (error) {
-    if (error !== 'cancel' && error !== 'close')
+    if (draftOperations.current(request) && error !== 'cancel' && error !== 'close')
       ElMessage.error(errorMessage(error));
   }
 }
@@ -1554,6 +1611,8 @@ onMounted(async () => {
 onBeforeUnmount(() => {
   flushActiveDraft();
   workspaceRequests.invalidate();
+  previewRequests.invalidate();
+  tableInsertRequests.invalidate(); draftOperations.invalidate(); catalogRequest++;
   if (cacheTimer) clearTimeout(cacheTimer);
   window.removeEventListener('beforeunload', beforeUnload);
   document.removeEventListener('click', dismissWorkspaceMenu);
@@ -1764,6 +1823,7 @@ onBeforeUnmount(() => {
             :position="taskPosition"
             @select="selectPipeline"
             @add="addPipeline"
+            @add-example="addExamplePipeline"
             @delete="removePipeline"
             @position="setTaskPosition"
           />
@@ -1815,7 +1875,7 @@ onBeforeUnmount(() => {
                         $tr(step.name || stepTitle(step))
                       }}</strong>
                       <small
-                        >{{ $tr(stepTitle(step)) }}<template v-if="step.type !== 'transform.select'">
+                        >{{ $tr(stepTitle(step)) }}<template v-if="step.type.startsWith('database.')">
                           · {{ $tr(sourceLabel(step.resourceRef)) }}</template
                         ></small
                       >
@@ -1825,7 +1885,7 @@ onBeforeUnmount(() => {
                     >
                   </button>
                 </div>
-                <el-dropdown @command="addStepCommand">
+                <el-dropdown trigger="click" @command="addStepCommand">
                   <el-button class="add-step-inline" :icon="Plus"
                     >{{ $tr('步骤') }}</el-button
                   >
@@ -1834,6 +1894,8 @@ onBeforeUnmount(() => {
                       <el-dropdown-item command="database.query"
                         >{{ $tr('查询步骤') }}</el-dropdown-item
                       >
+                      <el-dropdown-item command="transform.select">{{ $tr('字段处理步骤') }}</el-dropdown-item>
+                      <el-dropdown-item v-for="operator in ETL_OPERATORS" :key="operator.type" :command="operator.type">{{ $tr(operator.label) }}</el-dropdown-item>
                       <el-dropdown-item command="database.write"
                         >{{ $tr('写入步骤') }}</el-dropdown-item
                       >
@@ -1904,7 +1966,7 @@ onBeforeUnmount(() => {
                   </div>
                   <el-form label-position="top">
                     <el-form-item
-                      v-if="node.type !== 'transform.select'"
+                      v-if="node.type.startsWith('database.')"
                       :label="$tr('数据源')"
                       class="form-row-inline source-row"
                       ><div class="inline-control">
@@ -2027,12 +2089,12 @@ onBeforeUnmount(() => {
                       >
                         <el-input v-model="param.name" :placeholder="$tr('参数名')" />
                         <el-select
-                          :model-value="param.stepId || FIXED_PARAM_SOURCE"
+                          :model-value="param.stepId || (param.variable !== undefined ? VARIABLE_PARAM_SOURCE : FIXED_PARAM_SOURCE)"
                           :placeholder="$tr('参数来源')"
                           @update:model-value="onParamSource(param, $event)"
                           ><el-option
                             :label="$tr('固定值')"
-                            :value="FIXED_PARAM_SOURCE" /><el-option
+                            :value="FIXED_PARAM_SOURCE" /><el-option :label="$tr('工作区变量')" :value="VARIABLE_PARAM_SOURCE" /><el-option
                             v-for="upstream in previousQueries"
                             :key="upstream.id"
                             :value="upstream.id"
@@ -2050,7 +2112,7 @@ onBeforeUnmount(() => {
                             :key="column"
                             :label="column"
                             :value="column" /></el-select
-                        ><el-input
+                        ><el-select v-else-if="param.variable !== undefined" v-model="param.variable" :placeholder="$tr('选择工作区变量')"><el-option v-for="name in Object.keys(doc.variables)" :key="name" :value="name" :label="name" /></el-select><el-input
                           v-else
                           v-model="param.value"
                           :placeholder="$tr('固定参数值')"
@@ -2067,6 +2129,7 @@ onBeforeUnmount(() => {
                           >{{ $tr('删除') }}</el-button
                         >
                       </div>
+                      <el-collapse><el-collapse-item :title="$tr('工作区变量（多个步骤共享）')" name="variables"><div v-for="(value,name) in doc.variables" :key="name" class="mapping-row"><el-tag>{{ name }}</el-tag><el-input :model-value="typeof value === 'object' ? JSON.stringify(value) : String(value ?? '')" :aria-label="String(name)" @update:model-value="doc.variables = { ...doc.variables, [name]: $event }" /><el-button link type="danger" @click="delete doc.variables[name]">{{ $tr('删除') }}</el-button></div><div class="mapping-row"><el-input v-model="variableName" :placeholder="$tr('变量名')" /><el-input v-model="variableValue" :placeholder="$tr('文本值')" /><el-button @click="addVariable">{{ $tr('添加变量') }}</el-button></div><small>{{ $tr('表单编辑后保存文本值；数字、数组或布尔变量可在 JSON 编辑器中配置。') }}</small></el-collapse-item></el-collapse>
                       <div class="preview-actions">
                         <el-input-number
                           v-model="node.config.pageSize"
@@ -2077,6 +2140,10 @@ onBeforeUnmount(() => {
                           >{{ $tr('每页读取行数；总量不截断，右侧预览最多 100 行') }}</span
                         >
                       </div>
+                    </template>
+                    <template v-else-if="ETL_OPERATORS.some((operator) => operator.type === node?.type)">
+                      <EtlOperatorEditor :key="`${activePipelineId}:${node.id}`" :node="node" :upstream="previousQueries" :columns="queryColumns" @dependency-change="dependencyChanged" />
+                      <el-button :loading="previewing" @click="preview">{{ $tr('预览步骤结果') }}</el-button>
                     </template>
                     <template v-else-if="node.type === 'transform.select'">
                       <el-form-item :label="$tr('输入步骤')"
@@ -2096,7 +2163,7 @@ onBeforeUnmount(() => {
                       <div
                         v-for="(field, index) in node.config.fields || []"
                         :key="index"
-                        class="mapping-row"
+                        class="mapping-row field-processing-row"
                       >
                         <el-input
                           v-model="field.source"
@@ -2111,10 +2178,11 @@ onBeforeUnmount(() => {
                           @click="node.config.fields.splice(index, 1)"
                           >{{ $tr('删除') }}</el-button
                         >
+                        <EtlFieldRules :field="field" />
                       </div>
                       <el-button
                         @click="
-                          node.config.fields.push({ source: '', target: '' })
+                          (node.config.fields ||= []).push({ source: '', target: '', type: 'keep', trim: false, emptyToNull: false })
                         "
                         >{{ $tr('添加字段') }}</el-button
                       >
@@ -2279,8 +2347,7 @@ onBeforeUnmount(() => {
                 <aside class="step-result" :aria-label="$tr('预览与字段映射')">
                   <template
                     v-if="
-                      node.type === 'database.query' ||
-                      node.type === 'transform.select'
+                      isEtlRowSource(node.type)
                     "
                   >
                     <div class="section-title">
@@ -3089,6 +3156,8 @@ button.step-item.flow-step {
 .mapping-row > .el-input {
   flex: 1;
 }
+.field-processing-row { flex-wrap: wrap; }
+.field-processing-row > .el-input { min-width: 110px; }
 .batch-field {
   margin-top: 8px;
 }

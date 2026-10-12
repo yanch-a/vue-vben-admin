@@ -13,6 +13,7 @@ import {
   streamAgentChat,
   type AgentChatRequest,
   type AgentScene,
+  type ProposedSqlValidation,
 } from '#/api/ai/agent';
 
 export interface AiToolStep {
@@ -37,6 +38,10 @@ export interface AiMsg {
     warnings?: string[];
     writeOperation?: boolean;
     replaceSelection?: boolean;
+    /** 服务端预校验 / 影响评估结果 */
+    validation?: ProposedSqlValidation;
+    /** 发送时用户选中的 SQL，用于「与原 SQL 对比」 */
+    originalSql?: string;
   };
   /** propose_query_config 产物，结构对齐 restoreFromConfigVo */
   queryConfig?: {
@@ -167,6 +172,24 @@ function pickProposedSql(data: any): AiMsg['sql'] | undefined {
     warnings: Array.isArray(obj.warnings) ? obj.warnings : undefined,
     writeOperation: !!obj.writeOperation,
     replaceSelection: !!obj.replaceSelection,
+    validation: pickValidation(obj.validation),
+  };
+}
+
+/** 规范化 validation 载荷；status 非法时视为缺失 */
+function pickValidation(raw: any): ProposedSqlValidation | undefined {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const status = String(raw.status || '');
+  if (!['estimated', 'failed', 'passed', 'skipped'].includes(status)) {
+    return undefined;
+  }
+  const rows = Number(raw.estimatedRows);
+  return {
+    status: status as ProposedSqlValidation['status'],
+    method: raw.method === 'run_sql' || raw.method === 'explain' ? raw.method : undefined,
+    message: raw.message != null ? String(raw.message) : undefined,
+    reason: raw.reason != null ? String(raw.reason) : undefined,
+    estimatedRows: Number.isFinite(rows) ? rows : undefined,
   };
 }
 
@@ -302,6 +325,11 @@ function createAiChatStore(isolatedContext?: () => AiChatContext) {
             case 'sql.proposed': {
               const proposed = pickProposedSql(data);
               if (proposed) {
+                // 带上发送时选中的 SQL，卡片可做前后对比（内容相同时不保留）
+                const original = String(context?.selectedSql || '').trim();
+                if (original && original !== proposed.sql.trim()) {
+                  proposed.originalSql = original;
+                }
                 msg.sql = proposed;
                 touch();
               }

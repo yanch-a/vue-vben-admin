@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { parseEtlJson } from './etlSafeJson';
 /** 分步 Kettle 导入：解析→连接→实例/别名→逐任务→确认；不自动保存或运行。@author yanch */
 import { computed, nextTick, ref } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
@@ -133,7 +134,7 @@ async function parseFile(row: FileRow) {
     const response: any = await importKettleFile(row.file);
     const result = namespaceKettle(response.data ?? response, row.id);
     row.result = result;
-    row.document = JSON.parse(result.workspaceJson);
+    row.document = parseEtlJson(result.workspaceJson);
     row.status = 'success';
     for (const hint of result.connections) {
       const matches = catalog.value.filter(

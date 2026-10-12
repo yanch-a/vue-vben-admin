@@ -79,6 +79,7 @@ const props = defineProps<{
 const emit = defineEmits<{
   select: [string];
   add: [boolean];
+  addExample: [];
   delete: [string];
   position: [string];
 }>();
@@ -186,7 +187,7 @@ onBeforeUnmount(() => document.removeEventListener('click', dismiss));
     :aria-label="$tr('同步任务标签栏')"
   >
     <div class="tab-tools-start">
-      <el-dropdown class="add-dropdown" @command="emit('add', $event === 'conditional')">
+      <el-dropdown class="add-dropdown" trigger="click" @command="$event === 'example' ? emit('addExample') : emit('add', $event === 'conditional')">
         <el-button :icon="Plus" type="primary" class="add-btn">{{
           $tr('新增任务')
         }}</el-button>
@@ -198,6 +199,7 @@ onBeforeUnmount(() => document.removeEventListener('click', dismiss));
             <el-dropdown-item command="conditional">{{
               $tr('先从 B 取条件 → A 查询 → B 写入')
             }}</el-dropdown-item>
+            <el-dropdown-item command="example">{{ $tr('跨源转换示例（可直接运行）') }}</el-dropdown-item>
           </el-dropdown-menu></template
         >
       </el-dropdown>

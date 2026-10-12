@@ -38,6 +38,7 @@ type KeyTreeNode = {
   children?: KeyTreeNode[];
   id: string;
   isFolder: boolean;
+  javaSerializedKey?: boolean;
   key?: string;
   keyBase64?: string;
   label: string;
@@ -71,6 +72,7 @@ const keyTree = computed<KeyTreeNode[]>(() => {
       isFolder: false,
       key: item.key,
       keyBase64: item.keyBase64,
+      javaSerializedKey: Boolean(item.javaSerializedKey),
       label: parts[parts.length - 1] || item.key,
       ttlSeconds: item.ttlSeconds,
       type: item.type,
@@ -88,6 +90,12 @@ const selectedKey = ref('');
 const keyLoading = ref(false);
 const keyForm = reactive({ key: '', type: 'STRING', ttlSeconds: -1 as null | number, content: '' });
 const originalKey = ref('');
+/** 原始键字节的 Base64，二进制 / Java 序列化键必须用它操作，不能从展示文本重算。 */
+const originalKeyBase64 = ref('');
+const javaSerializedKey = ref(false);
+const javaSerializedValue = ref(false);
+const keyHint = ref('');
+const valueHint = ref('');
 const keyTruncated = ref(false);
 const savingKey = ref(false);
 
@@ -95,7 +103,12 @@ const connectionVisible = ref(false);
 const connectionSaving = ref(false);
 const connectionForm = reactive({
   id: undefined as any, connectionName: '', mode: 'STANDALONE', hostName: '127.0.0.1', port: 6379,
-  clusterNodes: '', username: '', password: '', tlsEnabled: 0, timeoutMs: 5000, databaseCount: 16, orderNum: 0, isPublic: 0,
+  clusterNodes: '', username: '', password: '', tlsEnabled: 0, timeoutMs: 5000, databaseCount: 16, orderNum: 0,
+  valueCharset: 'UTF-8', displayMode: 'TEXT', isPublic: 0,
+});
+const encodingLabel = computed(() => {
+  if (!active.value) return '';
+  return `${active.value.valueCharset || 'UTF-8'} · ${active.value.displayMode || 'TEXT'}`;
 });
 
 const command = ref('');
@@ -214,21 +227,56 @@ async function loadKeys() {
   }
 }
 
-async function selectKey(item: any) {
+/** 叶子节点点击：用槽位里的完整节点数据，并阻止与 node-click 重复触发。 */
+function onLeafKeyClick(item: KeyTreeNode, event: MouseEvent) {
   if (item.isFolder) return;
+  event.stopPropagation();
+  selectKey(item);
+}
+
+/**
+ * 从树节点或扫描列表解析原始 keyBase64。
+ * 乱码/二进制键的展示文本不能再 TextEncoder，否则字节对不上，服务端会报键不存在。
+ */
+function resolveKeyBase64(item: any): string {
+  if (item?.keyBase64) return String(item.keyBase64);
+  // ElTree 有时把业务字段挂在 data 上，兼容一层。
+  if (item?.data?.keyBase64) return String(item.data.keyBase64);
+  const displayKey = item?.key ?? item?.data?.key;
+  if (displayKey != null) {
+    const matched = keys.value.find((row) => row.keyBase64 && row.key === displayKey);
+    if (matched?.keyBase64) return String(matched.keyBase64);
+  }
+  return '';
+}
+
+async function selectKey(raw: any) {
+  const item = raw?.isFolder != null || raw?.keyBase64 || raw?.key ? raw : (raw?.data || raw);
+  if (!item || item.isFolder) return;
+  const requestedKeyBase64 = resolveKeyBase64(item);
+  if (!requestedKeyBase64) {
+    ElMessage.error('该键缺少原始字节标识（keyBase64），请刷新键列表后再点开；不要用乱码文本当键名查询');
+    return;
+  }
   const requestId = ++keyReadSeq;
   const connectionId = activeId.value;
   const selectedDatabase = database.value;
-  const requestedKeyBase64 = item.keyBase64 || toKeyBase64(item.key);
-  selectedKey.value = item.key; keyLoading.value = true;
+  selectedKey.value = item.key;
+  keyLoading.value = true;
   const stillCurrent = () => requestId === keyReadSeq
     && activeId.value === connectionId
     && database.value === selectedDatabase;
   try {
     const data = unbox(await getRedisKey(connectionId, selectedDatabase, requestedKeyBase64));
     if (!stillCurrent()) return;
-    originalKey.value = data.key; keyForm.key = data.key; keyForm.type = data.type; keyForm.ttlSeconds = data.ttlSeconds;
+    originalKey.value = data.key;
+    originalKeyBase64.value = data.keyBase64 || requestedKeyBase64;
+    keyForm.key = data.key; keyForm.type = data.type; keyForm.ttlSeconds = data.ttlSeconds;
     keyTruncated.value = Boolean(data.truncated);
+    javaSerializedKey.value = Boolean(data.javaSerializedKey);
+    javaSerializedValue.value = Boolean(data.javaSerializedValue);
+    keyHint.value = data.keyHint || '';
+    valueHint.value = data.valueHint || '';
     if (data.type === 'STRING') keyForm.content = data.value ?? '';
     else if (data.type === 'HASH') keyForm.content = JSON.stringify(data.entries || {}, null, 2);
     else if (data.type === 'ZSET') keyForm.content = JSON.stringify(data.scoredValues || {}, null, 2);
@@ -245,13 +293,27 @@ function newKey() {
   // 作废进行中的读键请求，避免切库后加载圈停不下来，或旧内容写回编辑区。
   keyReadSeq += 1;
   keyLoading.value = false;
-  selectedKey.value = ''; originalKey.value = '';
+  selectedKey.value = '';
+  originalKey.value = '';
+  originalKeyBase64.value = '';
+  javaSerializedKey.value = false;
+  javaSerializedValue.value = false;
+  keyHint.value = '';
+  valueHint.value = '';
   keyTruncated.value = false;
   Object.assign(keyForm, { key: '', type: 'STRING', ttlSeconds: -1, content: '' });
 }
 
 function buildKeyPayload(overwrite: boolean) {
-  const payload: any = { key: keyForm.key, type: keyForm.type, ttlSeconds: keyForm.ttlSeconds, overwrite };
+  const payload: any = {
+    key: keyForm.key,
+    type: keyForm.type,
+    ttlSeconds: keyForm.ttlSeconds,
+    overwrite,
+    // TEXT 模式下把展开后的 JDK 序列化字符串按原格式写回，避免破坏 Spring RedisTemplate 数据。
+    javaSerializedKey: javaSerializedKey.value && (active.value?.displayMode || 'TEXT') === 'TEXT',
+    javaSerializedValue: javaSerializedValue.value && (active.value?.displayMode || 'TEXT') === 'TEXT',
+  };
   if (keyForm.type === 'STRING') payload.value = keyForm.content;
   else if (keyForm.type === 'HASH') payload.entries = JSON.parse(keyForm.content || '{}');
   else if (keyForm.type === 'ZSET') payload.scoredValues = JSON.parse(keyForm.content || '{}');
@@ -263,16 +325,36 @@ async function persistKey() {
   if (!writable.value) return ElMessage.warning('公开连接为只读');
   if (!keyForm.key.trim()) return ElMessage.warning('键名不能为空');
   if (keyTruncated.value) return ElMessage.warning('当前集合只加载了部分内容，请使用命令行编辑，避免覆盖未显示的数据');
+  // 编辑已有键时必须持有原始 keyBase64；二进制/JDK 键不能用展示文本回算。
+  if (originalKey.value && !originalKeyBase64.value) {
+    return ElMessage.error('缺少原始键字节标识，请从左侧重新点开该键后再保存');
+  }
   savingKey.value = true;
   try {
     // 先完成 JSON 解析和前端校验，再执行重命名，避免格式错误造成“键已改名但保存失败”。
-    const payload = buildKeyPayload(Boolean(originalKey.value));
+    const payload = buildKeyPayload(Boolean(originalKeyBase64.value || originalKey.value));
     if (originalKey.value && originalKey.value !== keyForm.key) {
-      await updateRedisKeyMeta(activeId.value, database.value, toKeyBase64(originalKey.value), { newKey: keyForm.key, ttlSeconds: keyForm.ttlSeconds });
-      originalKey.value = keyForm.key;
+      const renamed = unbox(await updateRedisKeyMeta(activeId.value, database.value, originalKeyBase64.value, {
+        newKey: keyForm.key, ttlSeconds: keyForm.ttlSeconds,
+      }));
+      originalKey.value = renamed?.key ?? keyForm.key;
+      if (!renamed?.keyBase64) throw new Error('重命名成功但未返回 keyBase64，请刷新后重试');
+      originalKeyBase64.value = renamed.keyBase64;
+      javaSerializedKey.value = Boolean(renamed?.javaSerializedKey ?? javaSerializedKey.value);
     }
-    await saveRedisKey(activeId.value, database.value, payload);
-    ElMessage.success('键值已保存'); originalKey.value = keyForm.key;
+    const saved = unbox(await saveRedisKey(activeId.value, database.value, payload));
+    ElMessage.success('键值已保存');
+    originalKey.value = saved?.key ?? keyForm.key;
+    // 优先用服务端返回的原始字节；新建纯文本键才允许本地按展示文本编码。
+    originalKeyBase64.value = saved?.keyBase64 || originalKeyBase64.value
+      || ((active.value?.displayMode || 'TEXT') === 'TEXT' && !payload.javaSerializedKey
+        ? toKeyBase64(originalKey.value)
+        : '');
+    if (!originalKeyBase64.value) {
+      throw new Error('保存成功但未返回 keyBase64，请刷新键列表后重新打开');
+    }
+    javaSerializedKey.value = Boolean(saved?.javaSerializedKey);
+    javaSerializedValue.value = Boolean(saved?.javaSerializedValue);
     await Promise.all([loadKeys(), loadDatabaseStats()]);
   } catch (error: any) { ElMessage.error(error?.message || '内容格式错误，请检查 JSON'); }
   finally { savingKey.value = false; }
@@ -280,8 +362,12 @@ async function persistKey() {
 
 async function removeKey() {
   const key = originalKey.value || keyForm.key; if (!key) return;
+  if (!originalKeyBase64.value) {
+    return ElMessage.error('缺少原始键字节标识，请从左侧重新点开该键后再删除');
+  }
   await ElMessageBox.confirm(`确认删除键「${key}」？`, '删除 Redis 键', { type: 'warning' });
-  await deleteRedisKey(activeId.value, database.value, toKeyBase64(key)); ElMessage.success('已删除'); newKey();
+  await deleteRedisKey(activeId.value, database.value, originalKeyBase64.value);
+  ElMessage.success('已删除'); newKey();
   await Promise.all([loadKeys(), loadDatabaseStats()]);
 }
 
@@ -310,7 +396,9 @@ async function removeTreeNode(item: KeyTreeNode | null) {
     ElMessage.success(`已删除 ${result?.deleted ?? 0} 个键`);
   } else {
     await ElMessageBox.confirm(`确认删除键「${item.key}」？`, '删除 Redis 键', { type: 'warning' });
-    await deleteRedisKey(activeId.value, database.value, item.keyBase64 || toKeyBase64(item.key || ''));
+    const keyRef = resolveKeyBase64(item);
+    if (!keyRef) return ElMessage.error('无法定位该键的原始字节，请刷新后重试');
+    await deleteRedisKey(activeId.value, database.value, keyRef);
     ElMessage.success('已删除');
   }
   newKey();
@@ -318,15 +406,36 @@ async function removeTreeNode(item: KeyTreeNode | null) {
 }
 
 function resetConnection() {
-  Object.assign(connectionForm, { id: undefined, connectionName: '', mode: 'STANDALONE', hostName: '127.0.0.1', port: 6379, clusterNodes: '', username: '', password: '', tlsEnabled: 0, timeoutMs: 5000, databaseCount: 16, orderNum: 0, isPublic: 0 });
+  Object.assign(connectionForm, {
+    id: undefined, connectionName: '', mode: 'STANDALONE', hostName: '127.0.0.1', port: 6379,
+    clusterNodes: '', username: '', password: '', tlsEnabled: 0, timeoutMs: 5000, databaseCount: 16,
+    orderNum: 0, valueCharset: 'UTF-8', displayMode: 'TEXT', isPublic: 0,
+  });
 }
 function createConnection() { resetConnection(); connectionVisible.value = true; }
-function editConnection(item: any) { resetConnection(); Object.assign(connectionForm, item, { password: '' }); connectionVisible.value = true; }
+function editConnection(item: any) {
+  resetConnection();
+  Object.assign(connectionForm, item, {
+    password: '',
+    valueCharset: item?.valueCharset || 'UTF-8',
+    displayMode: item?.displayMode || 'TEXT',
+  });
+  connectionVisible.value = true;
+}
 async function persistConnection() {
   if (!connectionForm.connectionName.trim()) return ElMessage.warning('请输入连接名称');
   connectionSaving.value = true;
-  try { const saved = unbox(await saveRedisConnection({ ...connectionForm })); ElMessage.success('连接已保存'); connectionVisible.value = false; await loadConnections(saved?.id); }
-  finally { connectionSaving.value = false; }
+  try {
+    const saved = unbox(await saveRedisConnection({ ...connectionForm }));
+    ElMessage.success('连接已保存');
+    connectionVisible.value = false;
+    await loadConnections(saved?.id);
+    // 编码配置影响键值展示，保存后立刻按新规则重扫。
+    if (saved?.id === activeId.value) {
+      newKey();
+      await loadKeys();
+    }
+  } finally { connectionSaving.value = false; }
 }
 async function testConnection(item: any) { const result = unbox(await testRedisConnection(item.id)); ElMessage.success(`连接正常: ${result?.message || 'PONG'}`); }
 async function removeConnection(item: any) {
@@ -596,6 +705,7 @@ onBeforeUnmount(() => {
         </template>
         <ElSegmented v-model="mode" :options="[{ label: '键浏览器', value: 'browser' }, { label: '命令行', value: 'cli' }]" />
         <template v-if="active">
+          <ElTag size="small" effect="plain" class="encoding-tag" :title="$tr('连接级字符集与显示模式')">{{ encodingLabel }}</ElTag>
           <span class="connection-state">{{ active.mode === 'CLUSTER' ? 'Cluster' : `${active.hostName}:${active.port}` }}</span>
         </template>
       </header>
@@ -636,13 +746,18 @@ onBeforeUnmount(() => {
                 :data="keyTree"
                 node-key="id"
                 :expand-on-click-node="true"
-                @node-click="selectKey"
+                @node-click="(data: KeyTreeNode) => selectKey(data)"
                 @node-contextmenu="openKeyMenu"
               >
                 <template #default="{ data: item }">
-                  <span class="key-tree-node" :class="{ active: !item.isFolder && item.key === selectedKey }">
+                  <span
+                    class="key-tree-node"
+                    :class="{ active: !item.isFolder && item.key === selectedKey }"
+                    @click="onLeafKeyClick(item, $event)"
+                  >
                     <ElIcon><Folder v-if="item.isFolder" /><Key v-else /></ElIcon>
-                    <span class="key-tree-label">{{ item.label }}</span>
+                    <span class="key-tree-label" :title="item.keyBase64 ? `${item.key}\nkeyBase64: ${item.keyBase64}` : item.key">{{ item.label }}</span>
+                    <ElTag v-if="!item.isFolder && item.javaSerializedKey" size="small" type="warning" effect="plain">JDK</ElTag>
                     <ElTag v-if="!item.isFolder" size="small" effect="plain">{{ item.type }}</ElTag>
                     <small v-if="!item.isFolder">{{ item.ttlSeconds < 0 ? '永久' : `${item.ttlSeconds}s` }}</small>
                   </span>
@@ -655,6 +770,10 @@ onBeforeUnmount(() => {
 
           <main class="editor" v-loading="keyLoading">
             <div class="pane-head"><strong>{{ $tr(originalKey ? '编辑键' : '新建键') }}</strong><span v-if="!writable" class="readonly">{{ $tr('只读连接') }}</span><span v-else-if="keyTruncated" class="readonly">{{ $tr('内容未完整加载，不可覆盖保存') }}</span><ElButton v-if="originalKey && writable" type="danger" plain :icon="Delete" @click="removeKey">{{ $tr('删除') }}</ElButton><ElButton v-if="writable" type="primary" :loading="savingKey" :disabled="keyTruncated" @click="persistKey">{{ $tr('保存') }}</ElButton></div>
+            <p v-if="javaSerializedKey || javaSerializedValue || keyHint === 'BINARY' || valueHint === 'BINARY'" class="encoding-hint">
+              <template v-if="javaSerializedKey || javaSerializedValue">检测到 JDK 序列化字符串（AC ED 00 05）；TEXT 模式已展开可读内容，保存时会按原格式写回。</template>
+              <template v-else>当前内容更像二进制数据；建议把连接显示模式改为 Hex 或 Base64 后再编辑。</template>
+            </p>
             <ElForm label-position="top" class="key-form">
               <div class="key-meta"><ElFormItem :label="$tr('键名')"><ElInput v-model="keyForm.key" /></ElFormItem><ElFormItem :label="$tr('类型')"><ElSelect v-model="keyForm.type" :disabled="Boolean(originalKey)"><ElOption v-for="type in ['STRING','HASH','LIST','SET','ZSET']" :key="type" :label="type" :value="type" /></ElSelect></ElFormItem><ElFormItem :label="$tr('TTL 秒（-1 永久）')"><ElInputNumber v-model="keyForm.ttlSeconds" :min="-1" controls-position="right" /></ElFormItem></div>
               <ElFormItem :label="keyForm.type === 'STRING' ? '值' : keyForm.type === 'HASH' ? '字段 JSON 对象' : keyForm.type === 'ZSET' ? '成员与分数 JSON 对象' : '成员 JSON 数组'">
@@ -696,6 +815,23 @@ onBeforeUnmount(() => {
         <div v-if="connectionForm.mode === 'STANDALONE'" class="form-grid"><ElFormItem :label="$tr('主机')"><ElInput v-model="connectionForm.hostName" /></ElFormItem><ElFormItem :label="$tr('端口')"><ElInputNumber v-model="connectionForm.port" :min="1" :max="65535" controls-position="right" /></ElFormItem></div>
         <ElFormItem v-else :label="$tr('集群节点')"><ElInput v-model="connectionForm.clusterNodes" type="textarea" :rows="4" placeholder="redis-1:6379, redis-2:6379, redis-3:6379" /></ElFormItem>
         <div class="form-grid"><ElFormItem :label="$tr('ACL 用户名')"><ElInput v-model="connectionForm.username" :placeholder="$tr('可选')" /></ElFormItem><ElFormItem :label="connectionForm.id ? '密码（留空保持不变）' : '密码'"><ElInput v-model="connectionForm.password" type="password" show-password /></ElFormItem><ElFormItem :label="$tr('命令超时 ms')"><ElInputNumber v-model="connectionForm.timeoutMs" :min="500" :max="120000" controls-position="right" /></ElFormItem><ElFormItem v-if="connectionForm.mode === 'STANDALONE'" :label="$tr('DB 数量')"><ElInputNumber v-model="connectionForm.databaseCount" :min="1" :max="256" controls-position="right" /></ElFormItem><ElFormItem :label="$tr('排序值')"><ElInputNumber v-model="connectionForm.orderNum" :min="-99999" :max="99999" controls-position="right" /></ElFormItem></div>
+        <div class="form-grid">
+          <ElFormItem :label="$tr('字符集')">
+            <ElSelect v-model="connectionForm.valueCharset">
+              <ElOption label="UTF-8" value="UTF-8" />
+              <ElOption label="GBK" value="GBK" />
+              <ElOption label="GB18030" value="GB18030" />
+            </ElSelect>
+          </ElFormItem>
+          <ElFormItem :label="$tr('显示模式')">
+            <ElSelect v-model="connectionForm.displayMode">
+              <ElOption label="文本 TEXT" value="TEXT" />
+              <ElOption label="Hex" value="HEX" />
+              <ElOption label="Base64" value="BASE64" />
+            </ElSelect>
+          </ElFormItem>
+        </div>
+        <p class="encoding-help">{{ $tr('Spring RedisTemplate / JDK 序列化键在 TEXT 模式下会自动展开；查看原始字节请改用 Hex。') }}</p>
         <div class="switches"><ElCheckbox v-model="connectionForm.tlsEnabled" :true-value="1" :false-value="0">TLS</ElCheckbox><ElCheckbox v-model="connectionForm.isPublic" :true-value="1" :false-value="0">{{ $tr('公开为只读连接') }}</ElCheckbox></div>
       </ElForm>
       <template #footer><ElButton @click="connectionVisible = false">{{ $tr('取消') }}</ElButton><ElButton type="primary" :loading="connectionSaving" @click="persistConnection">{{ $tr('保存') }}</ElButton></template>
@@ -711,7 +847,10 @@ onBeforeUnmount(() => {
 .redis-page { height: 100%; min-height: 0; overflow: hidden; background: var(--el-bg-color); color: var(--el-text-color-primary); }
 .topbar { height: 52px; min-width: 0; display: flex; align-items: center; gap: 10px; padding: 0 12px; border-bottom: 1px solid var(--el-border-color); }
 .topbar h2 { margin: 0; font-size: 17px; letter-spacing: 0; white-space: nowrap; }
-.connection-state { min-width: 0; margin-left: auto; overflow: hidden; color: var(--el-text-color-secondary); text-overflow: ellipsis; white-space: nowrap; }
+.encoding-tag { margin-left: auto; }
+.connection-state { min-width: 0; overflow: hidden; color: var(--el-text-color-secondary); text-overflow: ellipsis; white-space: nowrap; }
+.encoding-hint,.encoding-help { margin: 0; padding: 8px 14px; color: var(--el-color-warning); background: var(--el-color-warning-light-9); font-size: 12px; line-height: 1.5; }
+.encoding-help { margin: 0 0 12px; border-radius: 4px; }
 .db-select { width: 180px; }
 .db-key-count { float: right; margin-left: 18px; color: var(--el-text-color-secondary); font-size: 12px; }
 .workspace { height: calc(100% - 53px); min-height: 0; display: grid; overflow: hidden; }

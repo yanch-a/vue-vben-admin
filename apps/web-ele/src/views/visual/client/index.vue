@@ -16,6 +16,7 @@ import {
   ref,
   watch,
 } from 'vue';
+// 路由离开守卫已停用，如需恢复请同时恢复 onBeforeRouteLeave 导入
 import { useRouter } from 'vue-router';
 
 import { executeDdl, executeDml, executeDmlBatch, executeSql, executeSqlBatch, cancelSql, explainPlan, exportSqlExcel, exportSqlInsert, exportTableSchemaExcel, getInstances, getObjectScript, getTableColumns, getTableDDL, getTableInfo, getTables } from '#/api/visual/database';
@@ -27,6 +28,11 @@ import {
   getSavedQueryById,
 } from '#/api/visual/savedQuery';
 import { getDbConfigById } from '#/api/visual/vq';
+import {
+  downloadDbBackupFile,
+  getDbBackupTask,
+  startDbBackup,
+} from '#/api/visual/dbBackup';
 import { Page } from '@vben/common-ui';
 
 import { ElMessage, ElMessageBox } from 'element-plus';
@@ -48,6 +54,8 @@ import EmptyWorkspace from './components/EmptyWorkspace.vue';
 import ObjectTree from './components/object-tree/ObjectTree.vue';
 import OracleObjectTree from './components/object-tree/OracleObjectTree.vue';
 import PostgreSqlObjectTree from './components/object-tree/PostgreSqlObjectTree.vue';
+import type { ResultEditParameter } from './utils/resultComparison';
+import { allResultStates, focusBatchResult, hasResultDraft, isResultSaving, putResultDraft } from './composables/resultDraftStore';
 import QueryTabs from './components/query/QueryTabs.vue';
 import ResultPanel from './components/query/ResultPanel.vue';
 import SqlEditor from './components/query/SqlEditor.vue';
@@ -58,6 +66,7 @@ import SqlScriptUploadDialog from './components/SqlScriptUploadDialog.vue';
 import NativeImportDialog from './components/NativeImportDialog.vue';
 import DatabaseToolDialog from './components/DatabaseToolDialog.vue';
 import ClientTaskPanel from './components/ClientTaskPanel.vue';
+import DbBackupProgressPanel from './components/DbBackupProgressPanel.vue';
 import SystemFunctionsDialog from './components/SystemFunctionsDialog.vue';
 import TableInfoDialog from './components/TableInfoDialog.vue';
 import TableDesignerDialog from './components/TableDesignerDialog.vue';
@@ -138,6 +147,7 @@ import {
   clearColumnCache,
   expandSessionChain,
   getCachedColumns,
+  getRememberedTables,
   isEditorSessionSql,
   isPreparedScriptSql,
   listSqlStatements,
@@ -170,6 +180,8 @@ const {
   refreshAll: refreshClientTasks,
   trackCopy,
   trackSqlScript,
+  trackDbBackup,
+  applyDbBackup,
   cancel: cancelClientTask,
   openPanel: openTaskPanel,
   togglePanel: toggleTaskPanel,
@@ -182,19 +194,19 @@ const {
   activeTab,
   addTab,
   closeTab: closeTabDirect,
-  closeAllTabs: closeAllTabsDirect,
-  closeOtherTabs: closeOtherTabsDirect,
   reorderTabs,
   openSqlInNewTab,
   markTabSaved,
 } = useQueryTabs(() => activeConnectionId.value);
 
 /** 关闭查询页签前统一保护未保存 SQL，避免单关、全关、关其它三条路径静默丢稿。 */
+const closingQueryTabs = new Set<string>();
+
 async function confirmDiscardQueryTabs(targets: typeof tabs.value) {
-  if (!targets.some((tab) => isQueryTabDirty(tab))) return true;
+  if (!targets.some((tab) => isQueryTabDirty(tab) || allResultStates(tab.result).some(hasResultDraft) || (tab === activeTab.value && resultPanelRef.value?.hasPendingEdits()))) return true;
   try {
     await ElMessageBox.confirm(
-      '要关闭的页签中有未保存 SQL，关闭后这些修改将丢失。是否继续？',
+      '要关闭的页签中有未保存 SQL 或结果编辑，关闭后这些修改将丢失。是否继续？',
       '未保存的查询',
       { type: 'warning', confirmButtonText: '继续关闭', cancelButtonText: '取消' },
     );
@@ -204,36 +216,95 @@ async function confirmDiscardQueryTabs(targets: typeof tabs.value) {
   }
 }
 
+/** 关闭前取消该批页签的查询；无法安全取消的写操作必须等待结束。 */
+async function cancelClosingQueryTabs(targets: typeof tabs.value): Promise<boolean> {
+  if (targets.some((tab) => closingQueryTabs.has(tab.id))) return false;
+  if (targets.some((tab) => allResultStates(tab.result).some(isResultSaving))) {
+    ElMessage.warning('结果正在保存，请等待完成后再关闭');
+    return false;
+  }
+  if (targets.some((tab) => tab.executing && !sqlRuns.has(tab.id))) {
+    ElMessage.warning('有操作正在执行，当前无法安全取消，请等待完成后再关闭');
+    return false;
+  }
+  targets.forEach((tab) => closingQueryTabs.add(tab.id));
+  try {
+    await Promise.all(targets.map(async (tab) => {
+      const run = sqlRuns.get(tab.id); if (!run) return;
+      await cancelSql({ requestId: run.requestId });
+      run.abort.abort();
+      if (sqlRuns.get(tab.id) === run) sqlRuns.delete(tab.id);
+    }));
+    if (targets.some((tab) => sqlRuns.has(tab.id) || allResultStates(tab.result).some(isResultSaving))) {
+      ElMessage.warning('查询状态已变化，页签已保留，请重新关闭'); return false;
+    }
+    return true;
+  } catch {
+    ElMessage.error('取消查询失败，页签已保留，请重试或等待查询结束');
+    return false;
+  } finally {
+    targets.forEach((tab) => closingQueryTabs.delete(tab.id));
+  }
+}
+
+/** 关闭单个页签，确认和取消都只针对最初选择的目标。 */
 async function closeTab(tabId: string) {
   const target = tabs.value.find((tab) => tab.id === tabId);
-  if (target && !(await confirmDiscardQueryTabs([target]))) return;
+  if (!target || !(await confirmDiscardQueryTabs([target])) || !(await cancelClosingQueryTabs([target]))) return;
   closeTabDirect(tabId);
 }
 
-/** 快捷键关闭当前查询：不弹未保存提示，直接丢掉当前页签 */
+/** 快捷键与点击关闭采用相同的草稿保护及取消策略。 */
 function closeActiveQueryTabNow() {
-  if (!activeTabId.value) return;
-  closeTabDirect(activeTabId.value);
+  if (activeTabId.value) void closeTab(activeTabId.value);
 }
 
 async function closeAllTabs() {
-  if (!(await confirmDiscardQueryTabs(tabs.value))) return;
-  closeAllTabsDirect();
+  const targets = tabs.value.slice();
+  if (!(await confirmDiscardQueryTabs(targets)) || !(await cancelClosingQueryTabs(targets))) return;
+  targets.forEach((tab) => closeTabDirect(tab.id));
 }
 
 async function closeOtherTabs(keepTabId: string) {
   const targets = tabs.value.filter((tab) => tab.id !== keepTabId);
-  if (!(await confirmDiscardQueryTabs(targets))) return;
-  closeOtherTabsDirect(keepTabId);
+  if (!(await confirmDiscardQueryTabs(targets)) || !(await cancelClosingQueryTabs(targets))) return;
+  targets.forEach((tab) => closeTabDirect(tab.id));
 }
 
-/** 关闭连接会一并隐藏其查询页签，因此同样检查该连接下的未保存 SQL。 */
+/** 关闭连接前保护所有查询，不因等待期间新增页签而静默丢稿。 */
 async function closeConnection(sessionId: number | string) {
-  const snapshot = getQueryTabsSnapshot();
-  const connectionTabs = snapshot.tabsByConnection[String(sessionId)] || [];
-  if (!(await confirmDiscardQueryTabs(connectionTabs))) return;
+  const targets = (getQueryTabsSnapshot().tabsByConnection[String(sessionId)] || []).slice();
+  if (!(await confirmDiscardQueryTabs(targets)) || !(await cancelClosingQueryTabs(targets))) return;
+  const current = getQueryTabsSnapshot().tabsByConnection[String(sessionId)] || [];
+  if (current.some((tab) => !targets.some((target) => target.id === tab.id))) {
+    ElMessage.warning('连接中的页签已变化，请重新关闭'); return;
+  }
   closeConnectionDirect(sessionId);
 }
+
+/** 收集全部连接中的页签，离开工作台不能只检查当前连接。 */
+function allWorkspaceQueryTabs() {
+  return Object.values(getQueryTabsSnapshot().tabsByConnection).flat();
+}
+
+/** 浏览器原生离开提示不存储结果数据，同时覆盖未保存行/SQL及执行中的请求。 */
+function protectWorkspaceUnload(event: BeforeUnloadEvent) {
+  if (!allWorkspaceQueryTabs().some((tab) => tab.executing || isQueryTabDirty(tab) || allResultStates(tab.result).some((result) => isResultSaving(result) || hasResultDraft(result)))
+      && !resultPanelRef.value?.hasPendingEdits() && !resultPanelRef.value?.isSaving()) return;
+  event.preventDefault(); event.returnValue = '';
+}
+
+onMounted(() => window.addEventListener('beforeunload', protectWorkspaceUnload));
+/*
+ * 切换到其他模块时的离开确认已停用：每次切换菜单都会弹窗，打断操作。
+ * 浏览器刷新/关闭页面仍由上方 beforeunload 保护。
+ * onBeforeRouteLeave(async () => {
+ *   if (resultPanelRef.value?.isSaving()) { ElMessage.warning('结果正在保存，请等待完成后离开'); return false; }
+ *   const targets = allWorkspaceQueryTabs();
+ *   if (!(await confirmDiscardQueryTabs(targets))) return false;
+ *   return cancelClosingQueryTabs(targets);
+ * });
+ */
 
 const { queryTabsPlacement, queryTabsLeftWidth, TABS_LEFT_MIN, TABS_LEFT_MAX } =
   useClientPreferences();
@@ -566,6 +637,7 @@ const tableDesigner = reactive({
   tableName: '',
   loading: false,
   saving: false,
+  executionError: '',
   info: null as any,
 });
 
@@ -584,12 +656,15 @@ const activeDialect = computed(() =>
 
 watch(
   () => activeConnection.value?.id,
-  async (id) => {
+  async (id, _oldId, onCleanup) => {
+    let stale = false;
+    onCleanup(() => { stale = true; });
     instanceOptions.value = [];
     clearColumnCache();
     if (id == null) return;
     try {
       const res: any = await getInstances(id);
+      if (stale) return;
       const trees = res?.data || res || [];
       const instances = trees[0]?.instances || [];
       instanceOptions.value = instances
@@ -603,6 +678,7 @@ watch(
           '';
       }
     } catch {
+      if (stale) return;
       instanceOptions.value = [];
     }
   },
@@ -633,7 +709,23 @@ const resultQueryTables = computed<QueryTableRef[]>(() => {
     const table = parseMongoCollectionForResult(sql);
     return table ? [table] : [];
   }
-  return parseQueryTables(sql);
+  const tables=parseQueryTables(sql);
+  const metadata=activeTab.value?.result?.columnMetadata || [];
+  const family=resolveSqlDialect(activeConnection.value?.dbType).family;
+  for(const table of tables) {
+    const namespaces=new Map(metadata.filter((column)=>column.table && column.table.toLowerCase()===table.table.toLowerCase())
+      .map((column)=>[JSON.stringify([column.catalog,column.schema,column.table]),column]));
+    // 未限定同名表对应多个物理命名空间时无法安全推断，保持只读。
+    if(!table.schema && namespaces.size>1)return [];
+    if(namespaces.size===1) {
+      const physical=[...namespaces.values()][0]!;
+      if(physical.table)table.table=physical.table;
+      if(physical.schema)table.schema=physical.schema;
+      if(family==='MYSQL_LIKE' && physical.catalog)table.schema=physical.catalog;
+      if(family==='SQLSERVER_LIKE' && physical.catalog)table.catalog=physical.catalog;
+    }
+  }
+  return tables;
 });
 
 function parseMongoCollectionForResult(sql: string): QueryTableRef | null {
@@ -643,7 +735,7 @@ function parseMongoCollectionForResult(sql: string): QueryTableRef | null {
 
 const resultTableRef = computed<TableRef | null>(() => {
   const t = resultQueryTables.value[0];
-  return t ? { schema: t.schema, table: t.table } : null;
+  return t ? { catalog: t.catalog, schema: t.schema, table: t.table } : null;
 });
 
 /** 结果表主键。MySQL 的 `库`.`表` 按 SQL 里的库查，其它方言仍用当前库。 */
@@ -657,8 +749,8 @@ const resultTableMetas = ref<ResultTableMeta[]>([]);
 async function fetchTableMeta(
   instanceName: string,
   tableName: string,
+  conn = activeConnection.value,
 ): Promise<{ columns: string[]; primaryKeys: string[] }> {
-  const conn = activeConnection.value;
   if (!conn) return { columns: [], primaryKeys: [] };
   let columns: string[] = [];
   let fromCols: string[] = [];
@@ -703,13 +795,16 @@ async function fetchTableMeta(
       keys,
     );
   }
+  if (!columns.length) throw new Error('无法确认表列和主键，已禁止结果回写');
   return { columns, primaryKeys: keys };
 }
 
+let metadataGeneration = 0;
 async function refreshResultPrimaryKeys() {
+  const generation = ++metadataGeneration;
   const tables = resultQueryTables.value;
   const conn = activeConnection.value;
-  const currentInstance = activeTab.value?.instanceName || conn?.schemaName || '';
+  const currentInstance = activeTab.value?.result?.sourceInstanceName || activeTab.value?.instanceName || conn?.schemaName || '';
   if (!tables.length || !conn) {
     resultTableMetas.value = [];
     resultPrimaryKeys.value = [];
@@ -725,16 +820,16 @@ async function refreshResultPrimaryKeys() {
         const metaName = metadataTableName(t, conn.dbType);
         if (!inst) {
           return {
-            ref: { schema: t.schema, table: t.table },
+            ref: { catalog: t.catalog, schema: t.schema, table: t.table },
             alias: t.alias,
             columns: [] as string[],
             primaryKeys: [] as string[],
           };
         }
         try {
-          const { columns, primaryKeys } = await fetchTableMeta(inst, metaName);
+          const { columns, primaryKeys } = await fetchTableMeta(inst, metaName, conn);
           return {
-            ref: { schema: t.schema, table: t.table },
+            ref: { catalog: t.catalog, schema: t.schema, table: t.table },
             alias: t.alias,
             columns,
             primaryKeys,
@@ -742,7 +837,7 @@ async function refreshResultPrimaryKeys() {
         } catch (e) {
           console.warn('读取联表元数据失败', t.table, e);
           return {
-            ref: { schema: t.schema, table: t.table },
+            ref: { catalog: t.catalog, schema: t.schema, table: t.table },
             alias: t.alias,
             columns: [] as string[],
             primaryKeys: [] as string[],
@@ -750,6 +845,7 @@ async function refreshResultPrimaryKeys() {
         }
       }),
     );
+    if (generation !== metadataGeneration) return;
     resultTableMetas.value = metas;
     resultPrimaryKeys.value = metas[0]?.primaryKeys || [];
   } catch (e) {
@@ -757,7 +853,7 @@ async function refreshResultPrimaryKeys() {
     resultTableMetas.value = [];
     resultPrimaryKeys.value = [];
   } finally {
-    resultPrimaryKeysReady.value = true;
+    if (generation === metadataGeneration) resultPrimaryKeysReady.value = resultTableMetas.value.every((meta) => meta.columns.length > 0);
   }
 }
 
@@ -1271,6 +1367,7 @@ async function openAlterTableDesigner(payload: {
     return;
   }
   tableDesigner.mode = 'alter';
+  tableDesigner.executionError = '';
   tableDesigner.instanceName = instanceName;
   tableDesigner.schemaName = payload.schemaName || '';
   tableDesigner.tableName = tableName;
@@ -1344,7 +1441,12 @@ async function onTreeContextAction(payload: {
   action: TreeCtxAction;
   node: any;
 }) {
-  const { action, node } = payload;
+  const action=payload.action;const node={...payload.node};
+  // 所有确认框和后续请求固定发起连接/方言；切页签不能把清空 A 改成清空 B。
+  const actionConnection=activeConnection.value?{...activeConnection.value}:null;
+  const actionDialect=resolveSqlDialect(actionConnection?.dbType);
+  const actionInstances=instanceOptions.value.slice();
+  const actionTabs=tabs.value.slice();
   const instanceName = node.instanceName || '';
   const tableName = node.name || node.tableName || '';
 
@@ -1374,7 +1476,7 @@ async function onTreeContextAction(payload: {
       }
       return;
     case 'importData':
-      if (!activeConnection.value) {
+      if (!actionConnection) {
         ElMessage.warning('请先打开数据库连接');
         return;
       }
@@ -1384,6 +1486,9 @@ async function onTreeContextAction(payload: {
       }
       nativeImportDialog.instanceName = instanceName;
       nativeImportDialog.visible = true;
+      return;
+    case 'exportInstanceSql':
+      await startInstanceBackup(instanceName);
       return;
     case 'copyDbToHost': {
       copyDb.instanceName = instanceName;
@@ -1411,15 +1516,15 @@ async function onTreeContextAction(payload: {
       await showTableInfo({ instanceName, tableName });
       return;
     case 'createDatabase':
-      if (!activeConnection.value) {
+      if (!actionConnection) {
         ElMessage.warning('请先打开数据库连接');
         return;
       }
       createDbDialog.connectInstance =
         instanceName ||
         activeTab.value?.instanceName ||
-        activeConnection.value.schemaName ||
-        instanceOptions.value[0] ||
+        actionConnection.schemaName ||
+        actionInstances[0] ||
         '';
       if (!createDbDialog.connectInstance) {
         ElMessage.warning(
@@ -1436,21 +1541,21 @@ async function onTreeContextAction(payload: {
           '删除确认',
           { type: 'warning', confirmButtonText: '删除', cancelButtonText: '取消' },
         );
-        if (!activeConnection.value) {
+        if (!actionConnection) {
           ElMessage.warning('请先打开数据库连接');
           return;
         }
-        const dropSql = activeDialect.value.dropDatabaseSql(instanceName);
+        const dropSql = actionDialect.dropDatabaseSql(instanceName);
         if (!dropSql || dropSql.trim().startsWith('--')) {
           ElMessage.warning(dropSql?.trim() || '当前数据库类型不支持在此删除实例');
           return;
         }
         const otherInst =
-          (activeConnection.value.schemaName &&
-          activeConnection.value.schemaName !== instanceName
-            ? activeConnection.value.schemaName
+          (actionConnection.schemaName &&
+          actionConnection.schemaName !== instanceName
+            ? actionConnection.schemaName
             : '') ||
-          instanceOptions.value.find((n) => n !== instanceName) ||
+          actionInstances.find((n) => n !== instanceName) ||
           '';
         if (!otherInst) {
           ElMessage.warning(
@@ -1459,14 +1564,14 @@ async function onTreeContextAction(payload: {
           return;
         }
         const res: any = await executeDdl({
-          dbConfigId: activeConnection.value.id,
+          dbConfigId: actionConnection.id,
           instanceName: otherInst,
           sql: dropSql,
         });
         const data = res?.data || res;
         ElMessage.success(data?.message || `已删除 ${instanceName}`);
         // 清理所有仍指向已删实例的查询 Tab
-        for (const t of tabs.value) {
+        for (const t of actionTabs) {
           if (t.instanceName === instanceName) {
             t.instanceName = otherInst;
           }
@@ -1479,7 +1584,7 @@ async function onTreeContextAction(payload: {
       }
       return;
     case 'runSqlScript':
-      if (!activeConnection.value) {
+      if (!actionConnection) {
         ElMessage.warning('请先打开数据库连接');
         return;
       }
@@ -1491,11 +1596,12 @@ async function onTreeContextAction(payload: {
       sqlScriptDialog.visible = true;
       return;
     case 'createTable':
-      if (!activeConnection.value) {
+      if (!actionConnection) {
         ElMessage.warning('请先打开数据库连接');
         return;
       }
       tableDesigner.mode = 'create';
+      tableDesigner.executionError = '';
       tableDesigner.instanceName = instanceName;
       tableDesigner.schemaName = node.schemaName || '';
       tableDesigner.tableName = 'new_table';
@@ -1503,7 +1609,7 @@ async function onTreeContextAction(payload: {
       tableDesigner.visible = true;
       return;
     case 'dropTable':
-      if (!activeConnection.value) {
+      if (!actionConnection) {
         ElMessage.warning('请先打开数据库连接');
         return;
       }
@@ -1513,14 +1619,14 @@ async function onTreeContextAction(payload: {
           '删除表',
           { type: 'warning', confirmButtonText: '删除', cancelButtonText: '取消' },
         );
-        const ident = resolveTableIdent(activeConnection.value.dbType, {
+        const ident = resolveTableIdent(actionConnection.dbType, {
           instanceName,
           schemaName: node.schemaName,
           tableName,
         });
-        const dropSql = activeDialect.value.dropTableSql(ident.schema, ident.table);
+        const dropSql = actionDialect.dropTableSql(ident.schema, ident.table);
         const res: any = await executeDdl({
-          dbConfigId: activeConnection.value.id,
+          dbConfigId: actionConnection.id,
           instanceName,
           sql: dropSql,
         });
@@ -1534,21 +1640,21 @@ async function onTreeContextAction(payload: {
       }
       return;
     case 'truncateTable':
-      if (!activeConnection.value) {
+      if (!actionConnection) {
         ElMessage.warning('请先打开数据库连接');
         return;
       }
       try {
-        const ident = resolveTableIdent(activeConnection.value.dbType, {
+        const ident = resolveTableIdent(actionConnection.dbType, {
           instanceName,
           schemaName: node.schemaName,
           tableName,
         });
-        const truncateSql = activeDialect.value.truncateTableSql(
+        const truncateSql = actionDialect.truncateTableSql(
           ident.schema,
           ident.table,
         );
-        const viaDml = !!activeDialect.value.truncateViaDml;
+        const viaDml = !!actionDialect.truncateViaDml;
         const how = viaDml
           ? '当前库不支持 TRUNCATE，将执行 DELETE FROM 清空全部行。'
           : '将执行 TRUNCATE TABLE，表结构保留。若存在外键引用可能失败。';
@@ -1559,12 +1665,12 @@ async function onTreeContextAction(payload: {
         );
         const res: any = viaDml
           ? await executeDml({
-              dbConfigId: activeConnection.value.id,
+              dbConfigId: actionConnection.id,
               instanceName,
               sql: truncateSql,
             })
           : await executeDdl({
-              dbConfigId: activeConnection.value.id,
+              dbConfigId: actionConnection.id,
               instanceName,
               sql: truncateSql,
             });
@@ -1586,7 +1692,7 @@ async function onTreeContextAction(payload: {
     case 'copyDdl': {
       try {
         const res: any = await getTableDDL(
-          activeConnection.value?.id,
+          actionConnection?.id,
           instanceName,
           tableName,
         );
@@ -1654,7 +1760,7 @@ async function onTreeContextAction(payload: {
         ElMessage.success('已重命名');
         objectTreeRef.value?.reloadQueries?.(instanceName);
         // 若已打开对应 Tab，同步标题
-        const tab = tabs.value.find(
+        const tab = actionTabs.find(
           (t) => String(t.savedQueryId) === String(node.savedQueryId),
         );
         if (tab) tab.title = newName;
@@ -1673,7 +1779,7 @@ async function onTreeContextAction(payload: {
         await deleteSavedQuery(node.savedQueryId);
         ElMessage.success('已删除');
         objectTreeRef.value?.reloadQueries?.(instanceName);
-        const tab = tabs.value.find(
+        const tab = actionTabs.find(
           (t) => String(t.savedQueryId) === String(node.savedQueryId),
         );
         if (tab) {
@@ -1766,23 +1872,33 @@ async function openProgramObjectScript(
  * 每条语句都继续走后端受控 DDL 权限与审计，不绕过原有安全边界。
  */
 async function saveTableDesign(result: TableDesignSqlResult) {
-  if (!activeConnection.value || tableDesigner.saving) return;
+  if (!activeConnection.value || tableDesigner.saving || tableDesigner.executionError || result.errors.length) return;
+  // 固定整个 DDL 计划的连接，避免异步执行期间切换连接后把后续语句发到其他主机。
+  const connectionId = activeConnection.value.id;
   tableDesigner.saving = true;
+  let completedStatements = 0;
   try {
     for (const sql of result.statements) {
       await executeDdl({
-        dbConfigId: activeConnection.value.id,
+        dbConfigId: connectionId,
         instanceName: tableDesigner.instanceName,
         permissionTableName:
           tableDesigner.mode === 'alter' ? tableDesigner.tableName : undefined,
         sql,
       });
+      completedStatements++;
     }
     ElMessage.success(tableDesigner.mode === 'create' ? '表创建成功' : '表结构修改成功');
     tableDesigner.visible = false;
     objectTreeRef.value?.reloadTables?.(tableDesigner.instanceName);
   } catch (e: any) {
-    ElMessage.error(e?.msg || e?.message || '保存表结构失败');
+    const reason = e?.msg || e?.message || '保存表结构失败';
+    if (completedStatements) {
+      // 多条 DDL 在部分产品会隐式提交，不能把整个创建计划从头重放。
+      tableDesigner.executionError = `已执行 ${completedStatements}/${result.statements.length} 条语句，后续执行失败：${reason}。请关闭弹窗，查看当前表结构后重新修改；已执行语句可能已提交。`;
+      objectTreeRef.value?.reloadTables?.(tableDesigner.instanceName);
+      ElMessage.error(tableDesigner.executionError);
+    } else ElMessage.error(reason);
   } finally {
     tableDesigner.saving = false;
   }
@@ -1800,9 +1916,127 @@ function onSqlScriptStarted(task: { taskId: string }) {
   trackSqlScript(task as any);
 }
 
+/** 整库备份进度框。最小化后任务仍在右上角后台任务里。 */
+const backupDialog = reactive({
+  visible: false,
+  taskId: '',
+});
+const backupDownloading = ref(false);
+let backupTimer: null | ReturnType<typeof setInterval> = null;
+
+const backupTask = computed(() => {
+  const id = backupDialog.taskId;
+  if (!id) return null;
+  return (
+    runningTasks.value.find((task) => task.source === 'dbBackup' && task.id === id) ||
+    doneTasks.value.find((task) => task.source === 'dbBackup' && task.id === id) ||
+    null
+  );
+});
+
+function stopBackupPoll() {
+  if (backupTimer) {
+    clearInterval(backupTimer);
+    backupTimer = null;
+  }
+}
+
+async function pollBackupTask() {
+  if (!backupDialog.taskId) return;
+  try {
+    const res: any = await getDbBackupTask(backupDialog.taskId, false);
+    const raw = res?.data ?? res;
+    if (raw?.taskId) applyDbBackup(raw);
+  } catch {
+    /* 轮询失败不打断进度框 */
+  }
+}
+
+watch(
+  () => backupDialog.visible,
+  (open) => {
+    stopBackupPoll();
+    if (!open || !backupDialog.taskId) return;
+    void pollBackupTask();
+    backupTimer = setInterval(() => {
+      void pollBackupTask();
+    }, 1500);
+  },
+);
+
+/** 右键「导出/备份库为 SQL 文件」：提交后台任务并打开进度框。 */
+async function startInstanceBackup(instanceName: string) {
+  if (!activeConnection.value) {
+    ElMessage.warning('请先打开数据库连接');
+    return;
+  }
+  if (!instanceName) {
+    ElMessage.warning(`请先选择${instanceLabel.value}`);
+    return;
+  }
+  try {
+    const res: any = await startDbBackup({
+      dbConfigId: activeConnection.value.id,
+      instanceName,
+    });
+    const task = res?.data ?? res;
+    if (!task?.taskId) {
+      ElMessage.error(task?.msg || '没有拿到备份任务');
+      return;
+    }
+    trackDbBackup(task);
+    backupDialog.taskId = task.taskId;
+    backupDialog.visible = true;
+  } catch (e: any) {
+    ElMessage.error(e?.msg || e?.message || '启动备份失败');
+  }
+}
+
+function minimizeBackup() {
+  const status = backupTask.value?.status;
+  const running = status === 'PENDING' || status === 'RUNNING';
+  backupDialog.visible = false;
+  openTaskPanel(running ? 'running' : 'done');
+}
+
+async function cancelBackupFromDialog() {
+  if (!backupTask.value) return;
+  try {
+    await cancelClientTask(backupTask.value);
+    ElMessage.success('已请求取消');
+    await pollBackupTask();
+  } catch (e: any) {
+    ElMessage.error(e?.msg || e?.message || '取消失败');
+  }
+}
+
+async function downloadBackupTask(task: { id: string; fileName?: string }) {
+  if (!task?.id || backupDownloading.value) return;
+  backupDownloading.value = true;
+  try {
+    const res: any = await downloadDbBackupFile(task.id);
+    const blob = unwrapFileBlob(res);
+    if (!blob) {
+      ElMessage.error('下载失败：未收到文件');
+      return;
+    }
+    const err = await readBlobErrorMessage(blob);
+    if (err) {
+      ElMessage.error(err);
+      return;
+    }
+    await downloadBlobAsFile(blob, task.fileName || 'backup.sql');
+  } catch (e: any) {
+    ElMessage.error(e?.msg || e?.message || '下载失败');
+  } finally {
+    backupDownloading.value = false;
+  }
+}
+
 /** 当前正在执行的自由 SQL（用于停止） */
-let sqlRunAbort: AbortController | null = null;
-let sqlRunRequestId: string | null = null;
+/** 每个查询页签拥有独立的取消句柄，多标签并行执行不会互相覆盖。 */
+const resultPanelRef = ref<InstanceType<typeof ResultPanel> | null>(null);
+const sqlRuns = new Map<string, { requestId: string; abort: AbortController }>();
 
 function newSqlRequestId() {
   return `sql-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
@@ -1844,12 +2078,16 @@ function mapBatchResultSet(item: any, index: number): QueryResultSet {
   const columns = item?.columns || [];
   const rows = markRaw(item?.rows || []);
   return {
+    sourceInstanceName: item?.sourceInstanceName,
+    readOnlyReason: item?.readOnlyReason,
+    sourceConnectionFingerprint: item?.sourceConnectionFingerprint,
     index: item?.index ?? index + 1,
     sql: String(item?.sql || ''),
     kind: item?.kind,
     success: item?.success !== false && !item?.error,
     columns,
     columnTables: item?.columnTables || [],
+    columnMetadata: item?.columnMetadata || [],
     rows,
     rowCount: item?.rowCount ?? rows.length ?? 0,
     affectedRows: item?.affectedRows,
@@ -1863,18 +2101,22 @@ function mapBatchResultSet(item: any, index: number): QueryResultSet {
 /** 聚焦某一条分步结果，导出、表格编辑和主键解析都跟着这条 SQL */
 function onFocusResultSet(index: number) {
   const tab = activeTab.value;
-  const sets = tab?.result?.sets;
-  const set = sets?.[index];
-  if (!tab?.result || !set) return;
-  tab.result.activeSet = index;
-  tab.result.sourceSql = set.sql;
-  tab.result.columns = set.columns;
-  tab.result.columnTables = set.columnTables;
-  tab.result.rows = set.rows;
-  tab.result.rowCount = set.rowCount;
-  tab.result.elapsedMs = set.elapsedMs;
-  tab.result.message = set.message;
-  tab.result.error = set.error;
+  if (!tab?.result || tab.executing) return;
+  tab.result = focusBatchResult(tab.result, index);
+}
+
+/** 重跑整个查询前也保护其它分步结果的草稿；刷新单条结果则保留其它结果。 */
+async function confirmReplaceBatchDrafts(tab: typeof activeTab.value) {
+  const current = tab?.result;
+  if (!current) return true;
+  const hidden = allResultStates(current).filter((result) => result !== current);
+  if (hidden.some(isResultSaving)) { ElMessage.warning('其它分步结果正在保存，请等待完成'); return false; }
+  if (!hidden.some(hasResultDraft)) return true;
+  try {
+    await ElMessageBox.confirm('重新执行将丢弃其它分步结果中的未保存修改，是否继续？', '未保存的分步结果', { type: 'warning', confirmButtonText: '丢弃并继续', cancelButtonText: '取消' });
+    if (tab?.result !== current) return false;
+    hidden.forEach((result) => putResultDraft(result, null)); return true;
+  } catch { return false; }
 }
 
 /**
@@ -1883,21 +2125,25 @@ function onFocusResultSet(index: number) {
  */
 async function runSqlBatch(sql: string, source: string) {
   if (!activeConnection.value || !activeTab.value) return;
+  const conn = { ...activeConnection.value };
+  const tab = activeTab.value;
+  if (!(await confirmReplaceBatchDrafts(tab)) || activeTab.value !== tab) return;
+  const instanceName = tab.instanceName;
   if (!(await confirmSqlBatch(sql))) return;
+  if (tab.executing || closingQueryTabs.has(tab.id)) return;
   const requestId = newSqlRequestId();
   const abort = new AbortController();
-  sqlRunAbort = abort;
-  sqlRunRequestId = requestId;
-  activeTab.value.executing = true;
-  activeTab.value.resultVisible = true;
-  activeTab.value.resultTab = 'result';
+  sqlRuns.set(tab.id, { requestId, abort });
+  tab.executing = true;
+  tab.resultVisible = true;
+  tab.resultTab = 'result';
   if (resultHeight.value < 280) resultHeight.value = 360;
   const t0 = performance.now();
   try {
     const res: any = await executeSqlBatch(
       {
-        dbConfigId: activeConnection.value.id,
-        instanceName: activeTab.value.instanceName,
+        dbConfigId: conn.id,
+        instanceName,
         sql,
         maxRows: visualClientConfig.defaultQueryMaxRows,
         requestId,
@@ -1914,9 +2160,12 @@ async function runSqlBatch(sql: string, source: string) {
     const preferred = sets.findIndex((set: QueryResultSet) => set.columns.length > 0);
     const activeSet = preferred >= 0 ? preferred : 0;
     const current = sets[activeSet]!;
-    activeTab.value.result = {
+    tab.result = {
       columns: current.columns,
       columnTables: current.columnTables,
+      columnMetadata: current.columnMetadata,
+      readOnlyReason: current.readOnlyReason,
+      sourceConnectionFingerprint: current.sourceConnectionFingerprint,
       rows: current.rows,
       rowCount: current.rowCount,
       elapsedMs: data?.elapsedMs ?? current.elapsedMs,
@@ -1924,14 +2173,15 @@ async function runSqlBatch(sql: string, source: string) {
       message: data?.message || current.message,
       error: sets.length > 1 ? undefined : current.error,
       sourceSql: current.sql,
+      sourceInstanceName: current.sourceInstanceName || instanceName,
       sets: sets.length > 1 ? sets : undefined,
       activeSet: sets.length > 1 ? activeSet : undefined,
     };
-    activeTab.value.resultTab = current.columns.length || sets.length > 1 ? 'result' : 'messages';
+    tab.resultTab = current.columns.length || sets.length > 1 ? 'result' : 'messages';
     if (sets.length === 1 && current.error) {
-      activeTab.value.result.error = current.error;
-      activeTab.value.result.message = current.error;
-      activeTab.value.resultTab = 'messages';
+      tab.result.error = current.error;
+      tab.result.message = current.error;
+      tab.resultTab = 'messages';
     }
     const summary = String(data?.message || '');
     if (data?.stopped || sets.some((set: QueryResultSet) => !set.success)) {
@@ -1941,22 +2191,22 @@ async function runSqlBatch(sql: string, source: string) {
     }
     const ddl = [...sets].reverse().find((set: QueryResultSet) => set.success && set.kind === 'ddl');
     if (ddl) {
-      if (isMongoDbType(activeConnection.value?.dbType)) {
+      if (isMongoDbType(conn?.dbType)) {
         objectTreeRef.value?.reload?.();
       } else {
-        refreshObjectTreeAfterDdl(ddl.sql, activeTab.value.instanceName || '');
+        refreshObjectTreeAfterDdl(ddl.sql, tab.instanceName || '');
       }
     }
     const feedbackSql = sets.find((set: QueryResultSet) => set.success && set.kind === 'query')?.sql;
     if (feedbackSql) void feedbackSchemaDocSilent(feedbackSql);
     const batchOk = !data?.stopped && !sets.some((set: QueryResultSet) => !set.success);
-    recordExecutedSql(sql, batchOk);
+    recordExecutedSql(sql, batchOk, conn, instanceName);
   } catch (e: any) {
     const clientElapsedMs = Math.round(performance.now() - t0);
     const cancelled = abort.signal.aborted || /查询已取消|canceled|cancelled/i.test(String(e?.msg || e?.message || ''));
     const errText = cancelled ? '查询已取消' : pickErrorMsg(e, '执行失败');
-    if (!cancelled) recordExecutedSql(sql, false);
-    activeTab.value.result = {
+    if (!cancelled) recordExecutedSql(sql, false, conn, instanceName);
+    tab.result = {
       columns: [],
       rows: [],
       rowCount: 0,
@@ -1964,56 +2214,61 @@ async function runSqlBatch(sql: string, source: string) {
       message: errText,
       clientElapsedMs,
       sourceSql: sql,
+      sourceInstanceName: instanceName,
     };
-    activeTab.value.resultTab = 'messages';
+    tab.resultTab = 'messages';
   } finally {
-    if (sqlRunRequestId === requestId) {
-      sqlRunAbort = null;
-      sqlRunRequestId = null;
-    }
-    activeTab.value.executing = false;
+    if (sqlRuns.get(tab.id)?.requestId === requestId) sqlRuns.delete(tab.id);
+    tab.executing = false;
   }
 }
 
 /** 执行当前光标所在语句（或选中片段）；不重置用户已调好的结果区高度 */
 async function runSql(opts?: { sql?: string; source?: string }) {
   if (!activeConnection.value || !activeTab.value) return;
-  if (activeTab.value.executing) {
+  const conn = { ...activeConnection.value };
+  const tab = activeTab.value;
+  if (!(await confirmReplaceBatchDrafts(tab)) || activeTab.value !== tab) return;
+  const instanceName = tab.instanceName;
+  if (tab.executing) {
     ElMessage.warning('当前查询正在执行，请先停止或等待完成');
     return;
   }
-  if (!activeTab.value.instanceName) {
+  if (!tab.instanceName) {
     ElMessage.warning(`请先选择${instanceLabel.value}实例`);
     return;
   }
   let sql =
     opts?.sql?.trim() ||
     sqlEditorRef.value?.getExecutableSql?.()?.trim() ||
-    activeTab.value.sql?.trim() ||
+    tab.sql?.trim() ||
     '';
   if (!sql) {
     ElMessage.warning('请输入 SQL，或将光标放到要执行的语句上');
     return;
   }
+  if (resultPanelRef.value && !(await resultPanelRef.value.confirmLeaveSheet('重新执行查询'))) return;
+  if (activeTab.value !== tab) return;
+  if (tab.executing || closingQueryTabs.has(tab.id)) return;
   const source = opts?.source || 'manual';
   // 没框选时，光标落在 SET @变量 或 PREPARE 上要带上前后依赖的语句。
   // 用户自己选中一段时按选区执行，不把选区外面的 SQL 加进来。
   if (
     !opts?.sql?.trim()
     && !sqlEditorRef.value?.hasUserSelection?.()
-    && !isMongoDbType(activeConnection.value.dbType)
+    && !isMongoDbType(conn.dbType)
   ) {
-    const fullText = sqlEditorRef.value?.getValue?.() || activeTab.value.sql || sql;
+    const fullText = sqlEditorRef.value?.getValue?.() || tab.sql || sql;
     sql = expandSessionChain(fullText, sql, sqlEditorRef.value?.getCursorOffset?.());
   }
 
   // 多条语句，或单独的 SET / PREPARE，都走分步执行。分步执行共用一个连接，变量才不会丢。
-  if (shouldExecuteAsBatch(sql) || (!isMongoDbType(activeConnection.value.dbType) && isEditorSessionSql(sql))) {
+  if (shouldExecuteAsBatch(sql) || (!isMongoDbType(conn.dbType) && isEditorSessionSql(sql))) {
     await runSqlBatch(sql, source);
     return;
   }
 
-  if (isMongoDbType(activeConnection.value.dbType)) {
+  if (isMongoDbType(conn.dbType)) {
     const kind = mongoCommandKind(sql);
     if (kind === 'unknown') {
       ElMessage.warning('无法识别 MongoDB 命令，请使用 db.collection.find/aggregate/insert/update/delete 等 mongosh 语法');
@@ -2045,20 +2300,20 @@ async function runSql(opts?: { sql?: string; source?: string }) {
     return;
   }
 
+  if (closingQueryTabs.has(tab.id)) return;
   const requestId = newSqlRequestId();
   const abort = new AbortController();
-  sqlRunAbort = abort;
-  sqlRunRequestId = requestId;
-  activeTab.value.executing = true;
-  activeTab.value.resultVisible = true;
-  activeTab.value.resultTab = 'result';
+  sqlRuns.set(tab.id, { requestId, abort });
+  tab.executing = true;
+  tab.resultVisible = true;
+  tab.resultTab = 'result';
   if (resultHeight.value < 160) resultHeight.value = 220;
   const t0 = performance.now();
   try {
     const res: any = await executeSql(
       {
-        dbConfigId: activeConnection.value.id,
-        instanceName: activeTab.value.instanceName,
+        dbConfigId: conn.id,
+        instanceName,
         sql,
         maxRows: visualClientConfig.defaultQueryMaxRows,
         requestId,
@@ -2069,23 +2324,26 @@ async function runSql(opts?: { sql?: string; source?: string }) {
     const clientElapsedMs = Math.round(performance.now() - t0);
     const data = res?.data || res;
     // markRaw：避免对成百上千行做深层响应式代理，减轻结果表卡顿
-    activeTab.value.result = {
+    tab.result = {
       columns: data.columns || [],
       columnTables: data.columnTables || [],
+      columnMetadata: data.columnMetadata || [],
+      sourceConnectionFingerprint: data.sourceConnectionFingerprint,
       rows: markRaw(data.rows || []),
       rowCount: data.rowCount || 0,
       elapsedMs: data.elapsedMs,
       clientElapsedMs,
       message: data.message,
       sourceSql: sql,
+      sourceInstanceName: instanceName,
     };
-    activeTab.value.resultTab = 'result';
-    void feedbackSchemaDocSilent(sql);
-    recordExecutedSql(sql, true);
+    tab.resultTab = 'result';
+    void feedbackSchemaDocSilent(sql, conn, instanceName);
+    recordExecutedSql(sql, true, conn, instanceName);
   } catch (e: any) {
     const clientElapsedMs = Math.round(performance.now() - t0);
     if (abort.signal.aborted || /查询已取消|canceled|cancelled/i.test(String(e?.msg || e?.message || ''))) {
-      activeTab.value.result = {
+      tab.result = {
         columns: [],
         rows: [],
         rowCount: 0,
@@ -2093,12 +2351,13 @@ async function runSql(opts?: { sql?: string; source?: string }) {
         message: '查询已取消',
         clientElapsedMs,
         sourceSql: sql,
+      sourceInstanceName: instanceName,
       };
-      activeTab.value.resultTab = 'messages';
+      tab.resultTab = 'messages';
     } else {
       // 业务失败（含 SQL 语法错误）写入 Messages，避免只弹 toast / 空白结果
       const errText = pickErrorMsg(e, '执行失败');
-      activeTab.value.result = {
+      tab.result = {
         columns: [],
         rows: [],
         rowCount: 0,
@@ -2106,23 +2365,19 @@ async function runSql(opts?: { sql?: string; source?: string }) {
         message: errText,
         clientElapsedMs,
         sourceSql: sql,
+      sourceInstanceName: instanceName,
       };
-      activeTab.value.resultTab = 'messages';
-      recordExecutedSql(sql, false);
+      tab.resultTab = 'messages';
+      recordExecutedSql(sql, false, conn, instanceName);
     }
   } finally {
-    if (sqlRunRequestId === requestId) {
-      sqlRunAbort = null;
-      sqlRunRequestId = null;
-    }
-    activeTab.value.executing = false;
+    if (sqlRuns.get(tab.id)?.requestId === requestId) sqlRuns.delete(tab.id);
+    tab.executing = false;
   }
 }
 
 /** 执行成功后把 JOIN 反馈给 Schema 文档（失败静默） */
-function feedbackSchemaDocSilent(sql: string) {
-  const conn = activeConnection.value;
-  const inst = activeTab.value?.instanceName;
+function feedbackSchemaDocSilent(sql: string, conn = activeConnection.value, inst = activeTab.value?.instanceName) {
   if (!conn?.id || !inst || !sql) return;
   feedbackSchemaDoc({
     dbConfigId: conn.id,
@@ -2137,6 +2392,9 @@ async function runControlledDdl(
   opts?: { skipConfirm?: boolean; forceConfirm?: boolean },
 ) {
   if (!activeConnection.value || !activeTab.value) return;
+  const conn = { ...activeConnection.value };
+  const tab = activeTab.value;
+  const instanceName = tab.instanceName;
   if (!opts?.skipConfirm && (opts?.forceConfirm || isDestructiveDdl(sql))) {
     const head = String(sql || '').replace(/\/\*[\s\S]*?\*\//g, ' ').trim();
     const tip = /^\s*TRUNCATE\b/i.test(head)
@@ -2148,13 +2406,14 @@ async function runControlledDdl(
           : describeSqlWriteRisk(sql);
     if (!(await confirmSqlWrite(sql, { message: tip }))) return;
   }
-  activeTab.value.executing = true;
-  activeTab.value.resultVisible = true;
+  if (tab.executing || closingQueryTabs.has(tab.id)) return;
+  tab.executing = true;
+  tab.resultVisible = true;
   const t0 = performance.now();
   try {
     const res: any = await executeDdl({
-      dbConfigId: activeConnection.value.id,
-      instanceName: activeTab.value.instanceName,
+      dbConfigId: conn.id,
+      instanceName,
       sql,
     });
     const clientElapsedMs = Math.round(performance.now() - t0);
@@ -2162,7 +2421,7 @@ async function runControlledDdl(
     const msg =
       data?.message ||
       `DDL/CALL OK${data?.affectedRows != null ? `, ${data.affectedRows} row(s)` : ''}`;
-    activeTab.value.result = {
+    tab.result = {
       columns: [],
       rows: [],
       rowCount: 0,
@@ -2170,20 +2429,21 @@ async function runControlledDdl(
       clientElapsedMs,
       message: msg,
       sourceSql: sql,
+      sourceInstanceName: instanceName,
     };
-    activeTab.value.resultTab = 'messages';
+    tab.resultTab = 'messages';
     ElMessage.success(msg);
-    recordExecutedSql(sql, true);
-    if (isMongoDbType(activeConnection.value?.dbType)) {
+    recordExecutedSql(sql, true, conn, instanceName);
+    if (isMongoDbType(conn?.dbType)) {
       objectTreeRef.value?.reload?.();
     } else {
-      refreshObjectTreeAfterDdl(sql, activeTab.value.instanceName || '');
+      refreshObjectTreeAfterDdl(sql, tab.instanceName || '');
     }
   } catch (e: any) {
     const clientElapsedMs = Math.round(performance.now() - t0);
     const errText = pickErrorMsg(e, '执行 DDL 失败');
-    recordExecutedSql(sql, false);
-    activeTab.value.result = {
+    recordExecutedSql(sql, false, conn, instanceName);
+    tab.result = {
       columns: [],
       rows: [],
       rowCount: 0,
@@ -2191,10 +2451,11 @@ async function runControlledDdl(
       message: errText,
       clientElapsedMs,
       sourceSql: sql,
+      sourceInstanceName: instanceName,
     };
-    activeTab.value.resultTab = 'messages';
+    tab.resultTab = 'messages';
   } finally {
-    activeTab.value.executing = false;
+    tab.executing = false;
   }
 }
 
@@ -2204,16 +2465,20 @@ async function runControlledDdl(
  */
 async function runFreeDml(sql: string, _source?: string, opts?: { skipConfirm?: boolean }) {
   if (!activeConnection.value || !activeTab.value) return;
+  const conn = { ...activeConnection.value };
+  const tab = activeTab.value;
+  const instanceName = tab.instanceName;
   if (!opts?.skipConfirm) {
     if (!(await confirmSqlWrite(sql))) return;
   }
-  activeTab.value.executing = true;
-  activeTab.value.resultVisible = true;
+  if (tab.executing || closingQueryTabs.has(tab.id)) return;
+  tab.executing = true;
+  tab.resultVisible = true;
   const t0 = performance.now();
   try {
     const res: any = await executeDml({
-      dbConfigId: activeConnection.value.id,
-      instanceName: activeTab.value.instanceName,
+      dbConfigId: conn.id,
+      instanceName,
       sql,
     });
     const clientElapsedMs = Math.round(performance.now() - t0);
@@ -2221,7 +2486,7 @@ async function runFreeDml(sql: string, _source?: string, opts?: { skipConfirm?: 
     const msg =
       data?.message ||
       `DML OK, ${data?.affectedRows ?? '?'} row(s) affected`;
-    activeTab.value.result = {
+    tab.result = {
       columns: [],
       rows: [],
       rowCount: 0,
@@ -2229,15 +2494,16 @@ async function runFreeDml(sql: string, _source?: string, opts?: { skipConfirm?: 
       clientElapsedMs,
       message: msg,
       sourceSql: sql,
+      sourceInstanceName: instanceName,
     };
-    activeTab.value.resultTab = 'messages';
+    tab.resultTab = 'messages';
     ElMessage.success(msg);
-    recordExecutedSql(sql, true);
+    recordExecutedSql(sql, true, conn, instanceName);
   } catch (e: any) {
     const clientElapsedMs = Math.round(performance.now() - t0);
     const errText = pickErrorMsg(e, 'DML 执行失败');
-    recordExecutedSql(sql, false);
-    activeTab.value.result = {
+    recordExecutedSql(sql, false, conn, instanceName);
+    tab.result = {
       columns: [],
       rows: [],
       rowCount: 0,
@@ -2245,10 +2511,11 @@ async function runFreeDml(sql: string, _source?: string, opts?: { skipConfirm?: 
       message: errText,
       clientElapsedMs,
       sourceSql: sql,
+      sourceInstanceName: instanceName,
     };
-    activeTab.value.resultTab = 'messages';
+    tab.resultTab = 'messages';
   } finally {
-    activeTab.value.executing = false;
+    tab.executing = false;
   }
 }
 
@@ -2290,8 +2557,9 @@ function refreshObjectTreeAfterDdl(sql: string, instanceName: string) {
 /** 停止当前自由 SQL：先通知后端 cancel/kill，再 abort HTTP */
 async function stopSql() {
   if (!activeTab.value?.executing) return;
-  const requestId = sqlRunRequestId;
-  const abort = sqlRunAbort;
+  const run = sqlRuns.get(activeTab.value.id);
+  if (!run) { ElMessage.info('该操作暂不支持取消，请等待执行完成'); return; }
+  const { requestId, abort } = run;
   try {
     if (requestId) {
       await cancelSql({ requestId });
@@ -2383,10 +2651,10 @@ async function runExplain(opts?: {
     confirmProd = true;
   }
 
+  if (closingQueryTabs.has(tab.id)) return;
   const requestId = newSqlRequestId();
   const abort = new AbortController();
-  sqlRunAbort = abort;
-  sqlRunRequestId = requestId;
+  sqlRuns.set(tab.id, { requestId, abort });
   tab.executing = true;
   tab.plan = { sql, loading: true, analyze, result: null };
   tab.resultVisible = true;
@@ -2427,13 +2695,10 @@ async function runExplain(opts?: {
       error: cancelled ? '查询已取消' : pickErrorMsg(e, '获取执行计划失败'),
     };
   } finally {
-    if (sqlRunRequestId === requestId) {
-      sqlRunAbort = null;
-      sqlRunRequestId = null;
-    }
+    if (sqlRuns.get(tab.id)?.requestId === requestId) sqlRuns.delete(tab.id);
     tab.executing = false;
   }
-  if (confirmMessage != null) {
+  if (confirmMessage != null && activeTab.value === tab && activeConnection.value?.id === conn.id) {
     if (await confirmProdAnalyze(confirmMessage || undefined)) {
       await runExplain({ analyze: true, confirmProd: true, sql });
     } else if (tab.plan) {
@@ -2735,6 +3000,9 @@ async function persistActiveQuery(opts: {
   queryName: string;
 }): Promise<boolean> {
   if (!activeConnection.value || !activeTab.value) return false;
+  const conn = { ...activeConnection.value };
+  const tab = activeTab.value;
+  const instanceName = tab.instanceName || conn.schemaName || '';
   const name = opts.queryName.trim();
   if (!name) {
     ElMessage.warning('请输入查询名称');
@@ -2742,46 +3010,46 @@ async function persistActiveQuery(opts: {
   }
   if (saveDialog.saving) return false;
 
-  const instanceName = activeTab.value.instanceName!;
-  const sqlText = activeTab.value.sql;
+  const schemaName = tab.schemaName;
+  const sqlText = tab.sql;
   saveDialog.saving = true;
   try {
     let doUpdate = false;
-    if (opts.preferUpdate && activeTab.value.savedQueryId != null) {
-      doUpdate = await checkSavedQueryMineExists(activeTab.value.savedQueryId);
+    if (opts.preferUpdate && tab.savedQueryId != null) {
+      doUpdate = await checkSavedQueryMineExists(tab.savedQueryId);
       if (!doUpdate) {
         // 库中已无此记录：清空关联，按新建处理，名称不变
-        activeTab.value.savedQueryId = undefined;
+        tab.savedQueryId = undefined;
       }
     }
 
-    if (doUpdate && activeTab.value.savedQueryId != null) {
+    if (doUpdate && tab.savedQueryId != null) {
       await editSavedQuery({
-        id: activeTab.value.savedQueryId,
+        id: tab.savedQueryId,
         queryName: name,
         sqlText,
-        dbConfigId: activeConnection.value.id,
+        dbConfigId: conn.id,
         instanceName,
-        schemaName: activeTab.value.schemaName,
+        schemaName,
       });
-      activeTab.value.title = name;
-      markTabSaved(activeTab.value);
+      tab.title = name;
+      markTabSaved(tab, sqlText);
       ElMessage.success('已更新保存');
     } else {
       const res: any = await addSavedQuery({
         queryName: name,
         sqlText,
-        dbConfigId: activeConnection.value.id,
+        dbConfigId: conn.id,
         instanceName,
-        schemaName: activeTab.value.schemaName,
+        schemaName,
       });
       const data = res?.data || res;
-      activeTab.value.savedQueryId = data?.id;
-      activeTab.value.title = name;
-      markTabSaved(activeTab.value);
+      tab.savedQueryId = data?.id;
+      tab.title = name;
+      markTabSaved(tab, sqlText);
       ElMessage.success('已保存');
     }
-    objectTreeRef.value?.reloadQueries?.(instanceName);
+    if (activeConnection.value?.id === conn.id) objectTreeRef.value?.reloadQueries?.(instanceName);
     return true;
   } catch (e: any) {
     ElMessage.error(e?.msg || e?.message || '保存失败');
@@ -2880,43 +3148,84 @@ async function confirmSaveQuery() {
 /**
  * 表格编辑按行 UPDATE：只执行、不刷新，失败时由结果区保住未保存脏行。
  */
-async function executeRowDml(sql: string) {
-  if (!activeConnection.value || !activeTab.value) {
+async function executeRowDml(sql: string, conn = activeConnection.value, instanceName = activeTab.value?.result?.sourceInstanceName || activeTab.value?.instanceName || activeConnection.value?.schemaName, fingerprint?: string) {
+  if (!conn) {
     throw new Error('无可用连接');
   }
   const res: any = await executeDml({
-    dbConfigId: activeConnection.value.id,
-    instanceName:
-      activeTab.value.instanceName || activeConnection.value.schemaName,
+    dbConfigId: conn.id,
+    instanceName,
     sql,
+    source: 'result-grid',
+    requireSingleRow: true,
+    sourceConnectionFingerprint: fingerprint,
   });
   return res?.data || res;
 }
 
-async function executeRowDmlBatch(sqls: string[]) {
-  if (!activeConnection.value || !activeTab.value) {
+async function executeRowDmlBatch(sqls: string[], conn = activeConnection.value, instanceName = activeTab.value?.result?.sourceInstanceName || activeTab.value?.instanceName || activeConnection.value?.schemaName, parameters?: ResultEditParameter[][], fingerprint?: string) {
+  if (!conn) {
     throw new Error('无可用连接');
   }
   const res: any = await executeDmlBatch({
-    dbConfigId: activeConnection.value.id,
-    instanceName:
-      activeTab.value.instanceName || activeConnection.value.schemaName,
+    dbConfigId: conn.id,
+    instanceName,
     sqls,
+    parameters,
     source: 'result-grid',
+    requireSingleRow: true,
+    sourceConnectionFingerprint: fingerprint,
   });
   return res?.data || res;
 }
 
+/** 给结果组件的函数捕获该次渲染的目标，异步逐行操作不能跟随当前连接切换。 */
+const resultRowDml = computed(() => {
+  const tab = activeTab.value;
+  const conn = activeConnection.value;
+  const instance = activeTab.value?.result?.sourceInstanceName || activeTab.value?.instanceName || conn?.schemaName;
+  const fingerprint=tab?.result?.sourceConnectionFingerprint;
+  return (sql: string) => {
+    if (tab && closingQueryTabs.has(tab.id)) throw new Error('页签正在关闭，不能开始写入');
+    return executeRowDml(sql, conn, instance, fingerprint);
+  };
+});
+const resultRowDmlBatch = computed(() => {
+  const tab = activeTab.value;
+  const conn = activeConnection.value;
+  const instance = activeTab.value?.result?.sourceInstanceName || activeTab.value?.instanceName || conn?.schemaName;
+  const fingerprint=tab?.result?.sourceConnectionFingerprint;
+  return (sqls: string[], parameters?: ResultEditParameter[][]) => {
+    if (tab && closingQueryTabs.has(tab.id)) throw new Error('页签正在关闭，不能开始写入');
+    return executeRowDmlBatch(sqls, conn, instance, parameters, fingerprint);
+  };
+});
+
 /** 表格编辑全部保存成功后，按原 SELECT 重查 */
 async function onRefreshResult() {
-  if (!activeTab.value) return;
-  const sourceSql = activeTab.value.result?.sourceSql?.trim();
+  if (!activeConnection.value || !activeTab.value) return;
+  const conn = { ...activeConnection.value };
+  const tab = activeTab.value;
+  const previous = tab.result;
+  const sourceSql = tab.result?.sourceSql?.trim();
   if (!sourceSql) return;
-  activeTab.value.executing = true;
+  if (closingQueryTabs.has(tab.id)) return;
+  if (resultPanelRef.value && !(await resultPanelRef.value.confirmLeaveSheet('刷新结果'))) return;
+  if (activeTab.value !== tab) return;
+  tab.executing = true;
   try {
-    await refreshQueryResult(sourceSql);
+    await refreshQueryResult(sourceSql, conn, tab);
+    if (previous?.sets && tab.result) {
+      // 只刷新聚焦的语句，其它分步结果与编辑草稿保持原身份。
+      const sets = previous.sets.slice(); const index = previous.activeSet ?? 0;
+      const old = sets[index];
+      if (old) sets[index] = { ...old, columns: tab.result.columns, columnTables: tab.result.columnTables,
+        columnMetadata: tab.result.columnMetadata, rows: tab.result.rows, rowCount: tab.result.rowCount,
+        elapsedMs: tab.result.elapsedMs, message: tab.result.message, error: tab.result.error };
+      tab.result.sets = sets; tab.result.activeSet = index;
+    }
   } finally {
-    activeTab.value.executing = false;
+    tab.executing = false;
   }
 }
 
@@ -2926,74 +3235,82 @@ async function onRefreshResult() {
  */
 async function onRunDml(dmlSql: string) {
   if (!activeConnection.value || !activeTab.value) return;
-  activeTab.value.executing = true;
+  const conn = { ...activeConnection.value };
+  const tab = activeTab.value;
+
+  tab.executing = true;
   try {
-    const res: any = await executeDml({
-      dbConfigId: activeConnection.value.id,
+    const res: any = await (isMongoDbType(conn.dbType) ? executeDml({
+      dbConfigId: conn.id,
       // 切库用当前对象树实例，不能把 FROM schema.table 的 schema 当成库名
       instanceName:
-        activeTab.value.instanceName || activeConnection.value.schemaName,
+        tab.result?.sourceInstanceName || tab.instanceName || conn.schemaName,
       sql: dmlSql,
-    });
+      source: 'result-grid',requireSingleRow:true,sourceConnectionFingerprint:tab.result?.sourceConnectionFingerprint,
+    }) : executeDmlBatch({ dbConfigId: conn.id, instanceName: tab.result?.sourceInstanceName || tab.instanceName || conn.schemaName, sqls: [dmlSql], requireSingleRow: true, source: 'result-grid',sourceConnectionFingerprint:tab.result?.sourceConnectionFingerprint }));
     const data = res?.data || res;
     ElMessage.success(data?.message || '执行成功');
     // 用产生结果的原 SELECT 刷新，避免覆盖用户正在编辑的 SQL
-    const sourceSql = activeTab.value.result?.sourceSql?.trim();
+    const sourceSql = tab.result?.sourceSql?.trim();
     if (sourceSql) {
-      await refreshQueryResult(sourceSql);
-    } else if (activeTab.value.result) {
-      activeTab.value.result.message =
+      await refreshQueryResult(sourceSql, conn, tab);
+    } else if (tab.result) {
+      tab.result.message =
         data?.message ||
         `DML OK, ${data?.affectedRows ?? '?'} row(s) affected`;
-      activeTab.value.result.error = undefined;
-      activeTab.value.resultTab = 'messages';
+      tab.result.error = undefined;
+      tab.resultTab = 'messages';
     }
   } catch (e: any) {
     const errText = pickErrorMsg(e, 'DML 执行失败');
     ElMessage.error(errText);
-    if (activeTab.value.result) {
-      activeTab.value.result.error = errText;
-      activeTab.value.resultTab = 'messages';
+    if (tab.result) {
+      tab.result.error = errText;
+      tab.resultTab = 'messages';
     }
   } finally {
-    activeTab.value.executing = false;
+    tab.executing = false;
   }
 }
 
 /** 按指定 SQL 刷新结果区（不改动编辑器内容） */
-async function refreshQueryResult(sql: string) {
-  if (!activeConnection.value || !activeTab.value) return;
-  if (!activeTab.value.instanceName) return;
+async function refreshQueryResult(sql: string, conn = activeConnection.value, tab = activeTab.value) {
+  if (!conn || !tab) return;
+  const instanceName = tab.result?.sourceInstanceName || tab.instanceName;
+  if (!tab.instanceName) return;
   const t0 = performance.now();
   try {
     const res: any = await executeSql({
-      dbConfigId: activeConnection.value.id,
-      instanceName: activeTab.value.instanceName,
+      dbConfigId: conn.id,
+      instanceName,
       sql,
       maxRows: visualClientConfig.defaultQueryMaxRows,
     });
     const clientElapsedMs = Math.round(performance.now() - t0);
     const data = res?.data || res;
-    activeTab.value.result = {
+    tab.result = {
       columns: data.columns || [],
       columnTables: data.columnTables || [],
+      columnMetadata: data.columnMetadata || [],
+      sourceConnectionFingerprint: data.sourceConnectionFingerprint,
       rows: markRaw(data.rows || []),
       rowCount: data.rowCount || 0,
       elapsedMs: data.elapsedMs,
       clientElapsedMs,
       message: data.message,
       sourceSql: sql,
+      sourceInstanceName: instanceName,
     };
-    activeTab.value.resultTab = 'result';
+    tab.resultTab = 'result';
   } catch (e: any) {
     const clientElapsedMs = Math.round(performance.now() - t0);
     const errText = pickErrorMsg(e, '刷新结果失败');
-    if (activeTab.value.result) {
-      activeTab.value.result.error = errText;
-      activeTab.value.result.clientElapsedMs = clientElapsedMs;
-      activeTab.value.resultTab = 'messages';
+    if (tab.result) {
+      tab.result.error = errText;
+      tab.result.clientElapsedMs = clientElapsedMs;
+      tab.resultTab = 'messages';
     } else {
-      activeTab.value.result = {
+      tab.result = {
         columns: [],
         rows: [],
         rowCount: 0,
@@ -3001,8 +3318,9 @@ async function refreshQueryResult(sql: string) {
         message: errText,
         clientElapsedMs,
         sourceSql: sql,
+      sourceInstanceName: instanceName,
       };
-      activeTab.value.resultTab = 'messages';
+      tab.resultTab = 'messages';
     }
   }
 }
@@ -3236,6 +3554,25 @@ function openAiAssistant(payload?: {
   });
 }
 
+/**
+ * AI 输入框 @ 补全的数据源：优先用对象树 / 编辑器已缓存的表清单，没有时拉一次并写入缓存。
+ * 只在当前激活连接上生效，避免 AI 窗口拿到别的连接的表。
+ */
+async function getAiTableNames(
+  dbConfigId: number | string,
+  instanceName: string,
+): Promise<string[]> {
+  const conn = activeConnection.value;
+  if (!conn || String(conn.id) !== String(dbConfigId) || !instanceName) return [];
+  const cached = getRememberedTables(dbConfigId, instanceName);
+  if (cached.length) return cached.map((t) => t.tableName);
+  try {
+    return await loadEditorTables(instanceName);
+  } catch {
+    return [];
+  }
+}
+
 function onAskAiFromEditor(payload: { selectedSql: string; editorSql: string }) {
   openAiAssistant({ scene: 'sql', context: payload });
 }
@@ -3347,13 +3684,13 @@ function onShowExecutedSql(sessionId: number | string) {
 }
 
 /** 把用户在编辑器里执行的语句记到当前连接，最多 200 条 */
-function recordExecutedSql(sql: string, success: boolean) {
-  const id = activeConnection.value?.id;
+function recordExecutedSql(sql: string, success: boolean, conn = activeConnection.value, instanceName = activeTab.value?.instanceName) {
+  const id = conn?.id;
   if (id == null || !String(sql || '').trim()) return;
   rememberExecutedSql({
     dbConfigId: id,
     instanceName:
-      activeTab.value?.instanceName || activeConnection.value?.schemaName || '',
+      instanceName || conn?.schemaName || '',
     sql,
     success,
   });
@@ -3400,8 +3737,15 @@ watch(
 );
 
 onBeforeUnmount(() => {
+  for (const { requestId, abort } of sqlRuns.values()) {
+    void cancelSql({ requestId }).catch(() => {});
+    abort.abort();
+  }
+  sqlRuns.clear();
+  stopBackupPoll();
   unbindClientFontScope?.();
   window.removeEventListener('keydown', onGlobalKeydown, true);
+  window.removeEventListener('beforeunload', protectWorkspaceUnload);
   offDesktopSessionExport?.();
   offDesktopSessionImport?.();
   offDesktopSessionExport = undefined;
@@ -3697,6 +4041,7 @@ onBeforeUnmount(() => {
             :style="{ height: resultHeight + 'px', flex: '0 0 auto' }"
           >
             <ResultPanel
+              ref="resultPanelRef"
               :visible="true"
               :active-tab="activeTab.resultTab"
               :result="activeTab.result"
@@ -3710,8 +4055,8 @@ onBeforeUnmount(() => {
               :ensure-primary-keys="ensureResultPrimaryKeys"
               @update:visible="(v) => (activeTab!.resultVisible = v)"
               @update:active-tab="(v) => (activeTab!.resultTab = v)"
-              :execute-row-dml="executeRowDml"
-              :execute-row-dml-batch="executeRowDmlBatch"
+              :execute-row-dml="resultRowDml"
+              :execute-row-dml-batch="resultRowDmlBatch"
               @run-dml="onRunDml"
               @refresh-result="onRefreshResult"
               @export-excel="onExportExcel"
@@ -3744,6 +4089,7 @@ onBeforeUnmount(() => {
       :instance-name="activeTab?.instanceName"
       :conn-label="activeConnection?.dbName"
       :ai-allow-sample-data="activeConnection?.aiAllowSampleData"
+      :get-table-names="getAiTableNames"
       @insert-sql="onAiInsertSql"
       @replace-sql="onAiReplaceSql"
       @run-sql="onAiRunSql"
@@ -3811,6 +4157,7 @@ onBeforeUnmount(() => {
       :info="tableDesigner.info"
       :loading="tableDesigner.loading"
       :saving="tableDesigner.saving"
+      :execution-error="tableDesigner.executionError"
       @save="saveTableDesign"
     />
 
@@ -3831,7 +4178,17 @@ onBeforeUnmount(() => {
       :done="doneTasks"
       :refreshing="tasksRefreshing"
       @cancel="onCancelClientTask"
+      @download="downloadBackupTask"
       @refresh="refreshClientTasks"
+    />
+
+    <DbBackupProgressPanel
+      v-model="backupDialog.visible"
+      :task="backupTask"
+      :downloading="backupDownloading"
+      @minimize="minimizeBackup"
+      @cancel="cancelBackupFromDialog"
+      @download="backupTask && downloadBackupTask(backupTask)"
     />
 
     <ElDialog

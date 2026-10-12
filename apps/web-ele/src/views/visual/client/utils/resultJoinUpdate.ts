@@ -7,11 +7,13 @@
  *
  * @author yanch
  */
+import type { ResultEditParameter } from './resultComparison';
 import type { DirtyRowEdit } from './resultSheetValue';
 import {
   buildUpdateSqlMapped,
   identEq,
-  parseSelectHints,
+  resultProjectionHints,
+  physicalColumnEquals,
   type ColPair,
   type SelectHint,
   type TableRef,
@@ -39,6 +41,10 @@ function matchTableIndex(
   key?: string | null,
 ): number {
   if (!key) return -1;
+  const exactAliases=tables.map((table,index)=>table.alias===key?index:-1).filter((index)=>index>=0);
+  if(exactAliases.length===1)return exactAliases[0]!;
+  const exactTables=tables.map((table,index)=>table.ref.table===key?index:-1).filter((index)=>index>=0);
+  if(exactTables.length===1)return exactTables[0]!;
   const aliasHits: number[] = [];
   const tableHits: number[] = [];
   tables.forEach((t, i) => {
@@ -67,19 +73,18 @@ function splitQualifiedResultCol(
 }
 
 function tableHasColumn(table: ResultTableMeta, col: string): boolean {
-  return (table.columns || []).some((c) => identEq(c, col));
+  return (table.columns || []).some((c) => physicalColumnEquals(c, col, table.columns));
 }
 
 function pickHint(
   resultCol: string,
   hints: SelectHint[],
 ): SelectHint | undefined {
-  return hints.find(
-    (h) =>
-      !h.starAll &&
-      !h.starTable &&
-      identEq(h.resultName, resultCol),
-  );
+  const selectable = hints.filter((h) => !h.starAll && !h.starTable);
+  const exact = selectable.find((h) => h.resultName === resultCol);
+  if (exact) return exact;
+  const folded = selectable.filter((h) => identEq(h.resultName, resultCol));
+  return folded.length === 1 ? folded[0] : undefined;
 }
 
 /**
@@ -116,6 +121,7 @@ export function resolveResultColumnOwner(
       }
       return { tableIndex: idx, physicalCol: physical };
     }
+    if (tableKey) return 'unknown';
     if (!tableKey && jdbcIdx >= 0 && tableHasColumn(tables[jdbcIdx]!, physical)) {
       return { tableIndex: jdbcIdx, physicalCol: physical };
     }
@@ -167,20 +173,6 @@ export function resolveResultColumnOwner(
   return 'unknown';
 }
 
-function resultColByName(resultCols: string[], name: string): string | undefined {
-  return resultCols.find((c) => identEq(c, name));
-}
-
-function otherTablesHavePkName(
-  tables: ResultTableMeta[],
-  tableIndex: number,
-  pk: string,
-): boolean {
-  return tables.some(
-    (t, i) => i !== tableIndex && (t.primaryKeys || []).some((k) => identEq(k, pk)),
-  );
-}
-
 /**
  * 在结果列里找某表主键。同名 id 时必须能靠别名/表前缀/JDBC 表名区分。
  */
@@ -206,6 +198,10 @@ export function findTablePkBindings(
       columnTables,
     );
     if (!found) return null;
+    const hint = pickHint(found, hints);
+    const physical = hint?.column || splitQualifiedResultCol(found).column;
+    const caseVariants = new Set(table.columns.filter((name) => identEq(name, pk)));
+    if (caseVariants.size > 1 && !physicalColumnEquals(physical, pk, table.columns)) return null;
     pairs.push({ physical: pk, resultCol: found });
   }
   return pairs;
@@ -220,66 +216,12 @@ function findPkResultCol(
   tables: ResultTableMeta[],
   columnTables?: string[],
 ): string | undefined {
-  const keys: string[] = [];
-  if (table.alias) {
-    keys.push(`${table.alias}.${pk}`, `${table.alias}_${pk}`);
-  }
-  keys.push(`${table.ref.table}.${pk}`, `${table.ref.table}_${pk}`);
-  for (const k of keys) {
-    const hit = resultColByName(resultCols, k);
-    if (hit) return hit;
-  }
-
-  for (let i = 0; i < resultCols.length; i++) {
-    const col = resultCols[i]!;
-    const hint = pickHint(col, hints);
-    // 表达式别名即使恰好叫 id，也不能作为真实主键定位行。
-    if (hint?.writable === false) continue;
-    if (hint?.column && identEq(hint.column, pk)) {
-      const idx = matchTableIndex(tables, hint.tableKey);
-      if (idx === tableIndex) return col;
-    }
-    const q = splitQualifiedResultCol(col);
-    if (identEq(q.column, pk) && matchTableIndex(tables, q.tableKey) === tableIndex) {
-      return col;
-    }
-    const jdbc = columnTables?.[i];
-    if (jdbc && identEq(q.column, pk) && matchTableIndex(tables, jdbc) === tableIndex) {
-      return col;
-    }
-  }
-
-  const writableResultCols = resultCols.filter((c) => {
-    const hint = pickHint(c, hints);
-    return hint?.writable !== false;
-  });
-  const bare = writableResultCols.filter(
-    (c) => identEq(splitQualifiedResultCol(c).column, pk)
-      && !splitQualifiedResultCol(c).tableKey,
-  );
-  const exactBare = writableResultCols.filter((c) => identEq(c, pk));
-  const candidates = exactBare.length ? exactBare : bare;
-  if (candidates.length === 1) {
-    const col = candidates[0]!;
-    const idx = resultCols.findIndex((c) => c === col);
-    const jdbc = idx >= 0 ? columnTables?.[idx] : undefined;
-    if (jdbc && matchTableIndex(tables, jdbc) === tableIndex) return col;
-    if (jdbc && matchTableIndex(tables, jdbc) >= 0 && matchTableIndex(tables, jdbc) !== tableIndex) {
-      return undefined;
-    }
-    if (!otherTablesHavePkName(tables, tableIndex, pk)) return col;
-    const othersQualified = tables.some((t, i) => {
-      if (i === tableIndex) return false;
-      if (!(t.primaryKeys || []).some((k) => identEq(k, pk))) return false;
-      const prefix = [t.alias, t.ref.table].filter(Boolean) as string[];
-      return prefix.some(
-        (p) =>
-          resultColByName(resultCols, `${p}.${pk}`) ||
-          resultColByName(resultCols, `${p}_${pk}`),
-      );
-    });
-    if (othersQualified) return col;
-    return undefined;
+  // 只认可 SQL 列来源或无歧义的 JDBC/物理列信息，不从 b_id 等显示名称猜主键。
+  for (let index=0;index<resultCols.length;index++) {
+    const col=resultCols[index]!;
+    const owner=resolveResultColumnOwner(col,tables,hints,columnTables?.[index]);
+    if(owner!=='unknown' && owner!=='ambiguous' && owner.tableIndex===tableIndex
+        && physicalColumnEquals(owner.physicalCol,pk,table.columns)) return col;
   }
   return undefined;
 }
@@ -291,69 +233,88 @@ function ownerError(col: string, owner: ColOwner): string {
   return `列 ${col} 无法归属到联表中的某张表，不能更新`;
 }
 
-export function buildJoinUpdateSqls(
-  item: Pick<DirtyRowEdit, 'original' | 'edited' | 'changedColumns'>,
+/** 每个查询结果编译一次来源、主键及原值比较列，保存多行时复用。 */
+export function compileJoinUpdatePlan(
   tables: ResultTableMeta[],
   resultCols: string[],
   sourceSql: string,
   dbType: string,
   columnTables?: string[],
-): string[] {
+): (item: Pick<DirtyRowEdit, 'original' | 'edited' | 'changedColumns'>, parameters?: ResultEditParameter[][]) => string[] {
   if (!tables.length) {
     throw new Error('无法识别联表，请检查 FROM / JOIN');
   }
-  const hints = parseSelectHints(sourceSql);
-  const byTable = new Map<number, ColPair[]>();
+  const hints = resultProjectionHints(sourceSql, resultCols);
+  const owners = new Map(resultCols.map((col, index) => [col, resolveResultColumnOwner(col, tables, hints, columnTables?.[index])]));
+  const keys = tables.map((table, index) => findTablePkBindings(table, index, resultCols, hints, tables, columnTables));
+  const comparisons = keys.map((key, tableIndex) => {
+    const pairs = key?.map((pair) => ({ ...pair }));
+    if (!pairs?.length) return pairs;
+    for (const col of resultCols) {
+      const owner = owners.get(col) || 'unknown';
+      if (owner !== 'ambiguous' && owner !== 'unknown' && owner.tableIndex === tableIndex
+          && !pairs.some((pair) => pair.physical === owner.physicalCol)) {
+        pairs.push({ physical: owner.physicalCol, resultCol: col });
+      }
+    }
+    return pairs;
+  });
+  return (item, parameters) => {
+    const byTable = new Map<number, ColPair[]>();
 
-  for (const col of item.changedColumns) {
-    const idx = resultCols.findIndex((c) => identEq(c, col));
-    const jdbc = idx >= 0 ? columnTables?.[idx] : undefined;
-    const owner = resolveResultColumnOwner(col, tables, hints, jdbc);
-    if (owner === 'ambiguous' || owner === 'unknown') {
-      throw new Error(ownerError(col, owner));
+    for (const col of item.changedColumns) {
+      const owner = owners.get(col) || 'unknown';
+      if (owner === 'ambiguous' || owner === 'unknown') {
+        throw new Error(ownerError(col, owner));
+      }
+      const list = byTable.get(owner.tableIndex) || [];
+      list.push({ physical: owner.physicalCol, resultCol: col });
+      byTable.set(owner.tableIndex, list);
     }
-    const list = byTable.get(owner.tableIndex) || [];
-    list.push({ physical: owner.physicalCol, resultCol: col });
-    byTable.set(owner.tableIndex, list);
-  }
 
-  const sqls: string[] = [];
-  for (const [tableIndex, setPairs] of byTable) {
-    const table = tables[tableIndex]!;
-    const name = tableDisplayName(table);
-    if (!table.primaryKeys?.length) {
-      throw new Error(
-        `表 ${name} 没有主键。联表结果只能按主键更新，请改用单表查询`,
+    const sqls: string[] = [];
+    for (const [tableIndex, setPairs] of byTable) {
+      const table = tables[tableIndex]!;
+      const name = tableDisplayName(table);
+      if (!table.primaryKeys?.length) {
+        throw new Error(
+          `表 ${name} 没有主键。联表结果只能按主键更新，请改用单表查询`,
+        );
+      }
+      const wherePairs = comparisons[tableIndex];
+      if (!wherePairs?.length) {
+        throw new Error(
+          `修改 ${name} 的字段时，结果中必须带上该表主键（${table.primaryKeys.join(', ')}）。同名主键请写成 ${table.alias || table.ref.table}.id 或 id AS ${table.alias || table.ref.table}_id`,
+        );
+      }
+      const bound: ResultEditParameter[] = [];
+      sqls.push(
+        buildUpdateSqlMapped(
+          table.ref,
+          item.original as Record<string, any>,
+          item.edited as Record<string, any>,
+          setPairs,
+          wherePairs,
+          dbType,
+          parameters ? bound : undefined,
+        ),
       );
+      parameters?.push(bound);
     }
-    const wherePairs = findTablePkBindings(
-      table,
-      tableIndex,
-      resultCols,
-      hints,
-      tables,
-      columnTables,
-    );
-    if (!wherePairs?.length) {
-      throw new Error(
-        `修改 ${name} 的字段时，结果中必须带上该表主键（${table.primaryKeys.join(', ')}）。同名主键请写成 ${table.alias || table.ref.table}.id 或 id AS ${table.alias || table.ref.table}_id`,
-      );
+    if (!sqls.length) {
+      throw new Error('没有可更新的字段');
     }
-    sqls.push(
-      buildUpdateSqlMapped(
-        table.ref,
-        item.original as Record<string, any>,
-        item.edited as Record<string, any>,
-        setPairs,
-        wherePairs,
-        dbType,
-      ),
-    );
-  }
-  if (!sqls.length) {
-    throw new Error('没有可更新的字段');
-  }
-  return sqls;
+    return sqls;
+  };
+}
+
+/** 兼容单次生成接口；表格批量保存使用 compileJoinUpdatePlan 复用解析结果。 */
+export function buildJoinUpdateSqls(
+  item: Pick<DirtyRowEdit, 'original' | 'edited' | 'changedColumns'>,
+  tables: ResultTableMeta[], resultCols: string[], sourceSql: string, dbType: string,
+  columnTables?: string[], parameters?: ResultEditParameter[][],
+): string[] {
+  return compileJoinUpdatePlan(tables, resultCols, sourceSql, dbType, columnTables)(item, parameters);
 }
 
 /** 拷贝 UPDATE：每个能定位主键的表各生成一条（SET 该表已归属列） */
@@ -365,7 +326,7 @@ export function buildJoinCopyUpdateSqls(
   dbType: string,
   columnTables?: string[],
 ): string[] {
-  const hints = parseSelectHints(sourceSql);
+  const hints = resultProjectionHints(sourceSql, resultCols);
   const mapped: string[] = [];
   for (const col of resultCols) {
     const idx = resultCols.indexOf(col);

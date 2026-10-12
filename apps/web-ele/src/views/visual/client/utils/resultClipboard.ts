@@ -12,7 +12,9 @@ function escapeTsvCell(value: unknown): string {
   if (value === null || value === undefined) {
     return '';
   }
-  const text = String(value);
+  const text = value && typeof value === 'object' && '__lemonBinary' in value
+    ? String((value as { __lemonBinary: unknown }).__lemonBinary)
+    : typeof value === 'object' ? JSON.stringify(value) : String(value);
   // Excel 粘贴：含 tab / 换行 / 双引号时需用双引号包裹，内部 " → ""
   if (/[\t\r\n"]/.test(text)) {
     return `"${text.replace(/"/g, '""')}"`;

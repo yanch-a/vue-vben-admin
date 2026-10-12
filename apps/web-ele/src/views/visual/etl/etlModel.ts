@@ -12,6 +12,8 @@ import type {
   EtlWorkspaceDocument,
 } from '#/api/visual/etl';
 import { translateUiText } from '#/locales/ui-text';
+import { parseEtlJson } from './etlSafeJson';
+import { createOperatorConfig, ETL_OPERATORS, etlInputReferences } from './etlOperators';
 
 /** 生成适合作为 JSON 稳定 ID 的短 ID。 */
 export function etlId(prefix: string): string {
@@ -49,14 +51,14 @@ export function createSimplePipeline(
           instance: '',
           targetSchema: '',
           mode: 'both',
-          dropIfExists: true,
+          dropIfExists: false,
           batchSize: 500,
-          continueOnError: true,
+          continueOnError: false,
         },
       },
     ],
     edges: [edge(sourceId, targetId)],
-    execution: { maxParallelism: 1, timeoutSeconds: 3600 },
+    execution: { maxParallelism: 1, timeoutSeconds: 0 },
   };
 }
 
@@ -173,7 +175,7 @@ export function removeNodeFromGraph(
 export function cloneDocument(
   document: EtlWorkspaceDocument,
 ): EtlWorkspaceDocument {
-  return JSON.parse(JSON.stringify(document));
+  return parseEtlJson(JSON.stringify(document));
 }
 
 /** 补齐历史/导入文档的编辑默认值，不改节点 ID、SQL、显式配置或手工连线。 */
@@ -194,6 +196,11 @@ export function normalizeSqlDocument(
         node.config.batchSize ??= 2000;
         node.config.mappings ??= [];
         node.config.keyColumns ??= [];
+      } else if (ETL_OPERATORS.some((item) => item.type === node.type)) {
+        const defaults = createOperatorConfig(node.type);
+        // 非空内嵌数据可由执行器推断列；不能在重新打开工作区时塞入 id/name 覆盖实际结构。
+        if (node.type === 'source.inline' && node.config.rows?.length && !Object.hasOwn(node.config, 'columns')) delete defaults.columns;
+        node.config = { ...defaults, ...node.config };
       } else if (node.type === 'transform.select') {
         node.config.fields ??= [];
         node.config.removeFields ??= [];
@@ -308,12 +315,7 @@ export function syncStepDependencies(
   pipeline: EtlPipeline,
   node: EtlNode,
 ): void {
-  const refs = new Set<string>(
-    (node.config.parameters || [])
-      .map((param: any) => param.stepId)
-      .filter(Boolean),
-  );
-  if (node.config.inputStepId) refs.add(node.config.inputStepId);
+  const refs = new Set(etlInputReferences(node.config));
   pipeline.edges = pipeline.edges.filter(
     (item) => item.target !== node.id || !item.generated,
   );

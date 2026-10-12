@@ -241,7 +241,7 @@ function handles(withEditor: boolean): PersistHandles & {
       result: null,
     },
   ];
-  const snapshot = {
+  const snapshot: { tabsByConnection: Record<string, QueryTab[]>; activeTabByConnection: Record<string, string> } = {
     tabsByConnection: withEditor
       ? { 'sess-1': tabs }
       : ({} as Record<string, QueryTab[]>),

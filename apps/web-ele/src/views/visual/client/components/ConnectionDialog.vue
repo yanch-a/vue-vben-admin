@@ -314,7 +314,7 @@ function fillForm(row: any) {
     env: row.env || '',
     envLabel: row.envLabel || '',
   });
-  sshAuthMode.value = row.sshPrivateKey ? 'key' : 'password';
+  sshAuthMode.value = row.sshAuthMode === 'key' || row.sshPrivateKey ? 'key' : 'password';
 }
 
 /**

@@ -12,14 +12,26 @@ export function getRedisInfo(id: number | string) { return request({ url: url + 
 export function scanRedisKeys(id: number | string, database: number, pattern: string) {
   return request({ url: url + id + '/keys', method: 'get', params: { database, pattern, count: 500 }, timeout: 0, showErrorMessage: false });
 }
+/** 按原始键字节读取；乱码/二进制键不要用展示文本重算 Base64。 */
 export function getRedisKey(id: number | string, database: number, keyBase64: string) {
-  return request({ url: url + id + '/key', method: 'get', params: { database, keyBase64 }, showErrorMessage: false });
+  return request({
+    url: url + id + '/key/query',
+    method: 'post',
+    params: { database },
+    data: { keyBase64 },
+    showErrorMessage: false,
+  });
 }
 export function saveRedisKey(id: number | string, database: number, data: Record<string, any>) {
   return request({ url: url + id + '/key', method: 'post', params: { database }, data });
 }
 export function deleteRedisKey(id: number | string, database: number, keyBase64: string) {
-  return request({ url: url + id + '/key', method: 'delete', params: { database, keyBase64 } });
+  return request({
+    url: url + id + '/key',
+    method: 'delete',
+    params: { database },
+    data: { keyBase64 },
+  });
 }
 export function deleteRedisDirectory(id: number | string, database: number, prefixBase64: string) {
   return request({ url: url + id + '/keys', method: 'delete', params: { database, prefixBase64 }, timeout: 0 });

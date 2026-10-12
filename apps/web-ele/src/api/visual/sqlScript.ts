@@ -16,6 +16,7 @@ export interface SqlScriptTaskVO {
   instanceName?: string;
   fileName?: string;
   engine?: 'MANAGED' | 'NATIVE';
+  cancelRequested?: boolean;
   startedAt?: number;
   elapsedMs?: number;
   total: number;

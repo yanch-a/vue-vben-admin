@@ -56,6 +56,8 @@ export function sheetCellToText(cell: unknown): string {
 /** 写入 Univer 的展示文本：NULL → 空；其余 String() */
 export function toSheetText(value: unknown): string {
   if (isNullish(value)) return '';
+  if (value && typeof value === 'object' && '__lemonBinary' in value) return String((value as any).__lemonBinary);
+  if (value && typeof value === 'object' && !(value instanceof Date)) return JSON.stringify(value);
   if (value instanceof Date) return formatDateTime(value);
   if (typeof value === 'boolean') return value ? 'true' : 'false';
   return String(value);
@@ -70,8 +72,6 @@ function normalizeDateText(s: string): string {
   return s
     .trim()
     .replace('T', ' ')
-    .replace(/Z$/i, '')
-    .replace(/\.\d+$/, '')
     .replace(/\s+$/, '');
 }
 
@@ -90,6 +90,9 @@ function isNumericText(s: string): boolean {
  * 先比「我们写进去的文本」，再兼容 Univer 仍把文本读成 number/boolean/Date 的情况。
  */
 export function isSheetCellUnchanged(original: unknown, sheetCell: unknown): boolean {
+  if (original && typeof original === 'object' && '__lemonBinary' in original) {
+    return toSheetText(original).toLowerCase() === (sheetCell && typeof sheetCell === 'object' && '__lemonBinary' in sheetCell ? toSheetText(sheetCell) : sheetCellToText(sheetCell)).toLowerCase();
+  }
   if (isNullish(original)) {
     return isBlankSheetCell(sheetCell);
   }
@@ -141,11 +144,16 @@ export function isSheetCellUnchanged(original: unknown, sheetCell: unknown): boo
  * 未改过的列不要走这里，直接用原值。
  */
 export function coerceSheetValue(original: unknown, sheetCell: unknown): unknown {
+  if (original && typeof original === 'object' && '__lemonBinary' in original && isBlankSheetCell(sheetCell)) return { __lemonBinary: '' };
   if (isBlankSheetCell(sheetCell)) {
     // 原 NULL 清空仍为 NULL；原有值被清空 → 空串
     return isNullish(original) ? null : '';
   }
   const text = sheetCellToText(sheetCell);
+  if (original && typeof original === 'object' && '__lemonBinary' in original) {
+    if (!/^(?:[0-9a-fA-F]{2})*$/.test(text)) throw new Error('二进制值请输入完整的十六进制字节');
+    return { __lemonBinary: text };
+  }
   if (typeof original === 'number') {
     const n = Number(text.trim());
     return Number.isFinite(n) ? n : text;
@@ -167,6 +175,11 @@ export function coerceSheetValue(original: unknown, sheetCell: unknown): unknown
     const d = new Date(text);
     return Number.isNaN(d.getTime()) ? text : d;
   }
+  if (original && typeof original === 'object') {
+    // 数组/文档/Extended JSON 编辑仍需回传结构，不能把 BSON 类型标签保存成普通字符串。
+    try { return JSON.parse(text); }
+    catch { throw new Error('复合字段请输入合法 JSON，未保存当前修改'); }
+  }
   // 原 NULL 被填了内容：按文本写回，避免把 id 误推断成 number
   return text;
 }
@@ -176,6 +189,10 @@ export function sameDbValue(a: unknown, b: unknown): boolean {
   if (a === b) return true;
   if ((a === null || a === undefined) && (b === null || b === undefined)) {
     return true;
+  }
+  if (a && b && typeof a === 'object' && typeof b === 'object' && !(a instanceof Date) && !(b instanceof Date)) {
+    // 原生 JSON/BSON 结构复制后身份不同，但值未改不能被误标脏；字段顺序继续保留。
+    return JSON.stringify(a) === JSON.stringify(b);
   }
   return isSheetCellUnchanged(a, b);
 }

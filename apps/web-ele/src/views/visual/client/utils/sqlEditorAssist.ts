@@ -1590,7 +1590,7 @@ export function columnCacheKey(
   tableName: string,
 ) {
   // v2：旧缓存可能把主键漏成空（Jackson primary / isPrimary），换 key 强制重拉
-  return `v2::${dbConfigId}::${instanceName}::${tableName}`.toLowerCase();
+  return `v3::${dbConfigId}::${instanceName}::${tableName}`;
 }
 
 function pruneColumnCache() {

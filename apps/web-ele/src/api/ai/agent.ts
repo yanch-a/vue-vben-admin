@@ -45,7 +45,22 @@ export interface AgentChatRequest {
     /** ETL 场景传递当前完整草稿；使用字符串避免客户端 JSON 被请求库再次改写。 */
     etlWorkspace?: string;
     skillIds?: string[];
+    /** 用户在输入框用 @ 显式引用的表名，后端优先注入这些表的结构文档 */
+    mentionedTables?: string[];
   };
+}
+
+/** propose_sql 服务端校验结果，AiSqlCard 据此显示徽标 */
+export interface ProposedSqlValidation {
+  /** passed=已验证通过 estimated=写操作已估算影响行数 failed=校验未通过 skipped=未校验 */
+  status: 'estimated' | 'failed' | 'passed' | 'skipped';
+  /** run_sql=本轮真实执行过 explain=EXPLAIN 干跑 */
+  method?: 'explain' | 'run_sql';
+  /** 校验失败原因或跳过原因 */
+  message?: string;
+  reason?: string;
+  /** 优化器估算行数（只读为结果行数，写操作为影响行数） */
+  estimatedRows?: number;
 }
 
 /** 获取服务端允许按需加载的技能目录，不接收任意文件路径。 */

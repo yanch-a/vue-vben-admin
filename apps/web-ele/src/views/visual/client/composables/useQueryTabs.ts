@@ -14,6 +14,12 @@ import { notifyClientSessionChange } from './clientSessionNotify';
 
 /** 分步执行里的一条语句结果。查询带表格，DML/DDL 只有说明。 */
 export interface QueryResultSet {
+  /** 会话命名空间无法证明时禁止回写。 */
+  readOnlyReason?: string;
+  /** 产生结果的连接配置身份。 */
+  sourceConnectionFingerprint?: string;
+  /** 分步执行 USE 后本条结果实际所属实例。 */
+  sourceInstanceName?: string;
   index: number;
   sql: string;
   /** query / dml / ddl */
@@ -21,6 +27,7 @@ export interface QueryResultSet {
   success: boolean;
   columns: string[];
   columnTables?: string[];
+  columnMetadata?: { label: string; sourceLabel?: string; table?: string; schema?: string; catalog?: string; name: string; jdbcType: number; typeName: string; precision: number; scale: number }[];
   rows: Record<string, any>[];
   rowCount: number;
   affectedRows?: number;
@@ -32,9 +39,16 @@ export interface QueryResultSet {
 }
 
 export interface QueryResultState {
+  /** 服务端判定的只读原因。 */
+  readOnlyReason?: string;
+  /** 旧结果不能跟随同 ID 的连接配置换主机。 */
+  sourceConnectionFingerprint?: string;
+  /** 结果产生时的实例；结果回写不跟随编辑器后续切库。 */
+  sourceInstanceName?: string;
   columns: string[];
   /** 与 columns 等长：JDBC 表名，联表编辑用来把列归属到表 */
   columnTables?: string[];
+  columnMetadata?: { label: string; sourceLabel?: string; table?: string; schema?: string; catalog?: string; name: string; jdbcType: number; typeName: string; precision: number; scale: number }[];
   rows: Record<string, any>[];
   rowCount: number;
   /** 服务端 SQL 执行耗时（ms） */
@@ -279,9 +293,7 @@ export function useQueryTabs(connectionId: () => number | string | null) {
     const id = connectionId();
     if (id == null) return null;
     const list = ensureTabs(id);
-    if (list.length >= MAX_TABS) {
-      return null;
-    }
+
     // 若已有同 savedQueryId 的 Tab，直接激活；用库中最新内容覆盖并重置基线
     if (opts?.savedQueryId != null) {
       const exist = list.find(
@@ -291,10 +303,7 @@ export function useQueryTabs(connectionId: () => number | string | null) {
         if (opts?.activate !== false) {
           activeTabByConnection[connKey(id)] = exist.id;
         }
-        if (opts.sql != null) {
-          exist.sql = opts.sql;
-          exist.savedSqlBaseline = opts.sql;
-        }
+        // 已打开查询可能有未保存草稿；重复打开只激活，不能覆盖编辑内容。
         exist.title = opts.title || exist.title;
         exist.instanceName = opts.instanceName || exist.instanceName;
         exist.schemaName = opts.schemaName || exist.schemaName;
@@ -304,6 +313,7 @@ export function useQueryTabs(connectionId: () => number | string | null) {
         return exist;
       }
     }
+    if (list.length >= MAX_TABS) return null;
     const tab = createTab(
       opts?.title,
       opts?.sql || '',
@@ -416,8 +426,8 @@ export function useQueryTabs(connectionId: () => number | string | null) {
     reorderTabs,
     openSqlInNewTab,
     /** 保存成功后调用：把当前 SQL 记为已同步基线，并退出一次性态 */
-    markTabSaved(tab: QueryTab) {
-      tab.savedSqlBaseline = tab.sql;
+    markTabSaved(tab: QueryTab, submittedSql = tab.sql) {
+      tab.savedSqlBaseline = submittedSql;
       tab.ephemeral = undefined;
       notifyClientSessionChange();
     },

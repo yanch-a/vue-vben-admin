@@ -1,12 +1,32 @@
 <script lang="ts" setup>
 /**
- * 输入框 + 场景。scene 随 send 进入 AgentChatRequest，后端 PromptBuilder 按场景加收尾规则。
+ * 输入框 + 场景 + 快捷指令 + @表名 补全。
+ * - scene 随 send 进入 AgentChatRequest，后端 PromptBuilder 按场景加收尾规则。
+ * - 输入 @ 弹出当前实例的表名候选，选中后以 `表名` 形式写入；发送时把显式引用的表一并上报
+ *   （context.mentionedTables），后端优先注入这些表的结构文档。
+ * - 快捷指令按上下文排序：有报错时「修复报错」置顶，有选中 SQL 时优化/解释/检查索引靠前。
+ * - Enter 发送，Shift+Enter 换行，Ctrl/⌘+Enter 也可发送；输入框为空时 ↑/↓ 回溯本窗口发过的消息。
  * @author yanch
  */
-import { computed, ref } from 'vue';
+import { computed, nextTick, ref, watch } from 'vue';
+
+import { ArrowDown } from '@element-plus/icons-vue';
 
 import type { AgentScene } from '#/api/ai/agent';
 import { translateUiText } from '#/locales/ui-text';
+
+import {
+  applyMention,
+  arrangeChips,
+  ETL_CHIPS,
+  extractMentionedTables,
+  findMentionToken,
+  matchTableMentions,
+  resolveTemplate,
+  SQL_CHIPS,
+  type ComposerChip,
+  type MentionToken,
+} from '../../utils/aiComposerAssist';
 
 defineOptions({ name: 'AiComposer' });
 
@@ -16,101 +36,175 @@ const props = defineProps<{
   hasSelection?: boolean;
   hasError?: boolean;
   etlMode?: boolean;
+  /** 当前实例的表名，用于 @ 补全；缺省或空数组时不弹候选 */
+  tableNames?: string[];
 }>();
 
 const emit = defineEmits<{
   'update:scene': [AgentScene];
-  send: [string];
+  /** 第二个参数为本次显式引用的表名（可能为空数组） */
+  send: [string, { mentionedTables: string[] }];
   stop: [];
   clearSelection: [];
   clearError: [];
 }>();
 
 const text = ref('');
+const inputRef = ref<any>();
 const scene = computed({
   get: () => props.scene,
   set: (v: AgentScene) => emit('update:scene', v),
 });
 
-/** 快捷芯片：label/tpl 存中文源文案，展示与填入时走 translateUiText。 */
-const chips = computed(() =>
-  props.etlMode
-    ? [
-        {
-          label: '创建数据同步',
-          scene: 'etl' as AgentScene,
-          tpl: '请根据工作区的真实表结构创建数据同步：',
-        },
-        {
-          label: '先取条件再同步',
-          scene: 'etl' as AgentScene,
-          tpl: '从 B 获取水位，作为 A 多表关联查询的条件，再更新插入 B，请先检查源和目标字段。',
-        },
-        {
-          label: '解释配置',
-          scene: 'etl' as AgentScene,
-          tpl: '请解释当前 ETL 配置及操作方法，不要修改配置。',
-        },
-        {
-          label: '排查和优化',
-          scene: 'etl' as AgentScene,
-          tpl: '请检查当前 ETL 的依赖、权限、字段映射及性能风险。',
-        },
-      ]
-    : [
-        {
-          label: '生成 SQL',
-          scene: 'sql' as AgentScene,
-          tpl: '请根据需求编写 SQL：',
-        },
-        {
-          label: '优化这段 SQL',
-          scene: 'sql' as AgentScene,
-          tpl: '请优化这段 SQL，并用 explain_sql 对比改写前后的执行计划。',
-        },
-        {
-          label: '解释这段 SQL',
-          scene: 'sql' as AgentScene,
-          tpl: '请解释这段 SQL 在做什么。',
-        },
-        {
-          label: '修复报错',
-          scene: 'sql' as AgentScene,
-          tpl: '请根据报错修复 SQL。',
-        },
-        {
-          label: '生成图表',
-          scene: 'chart' as AgentScene,
-          tpl: '请根据需求生成统计图表：',
-        },
-        {
-          label: '写表说明文档',
-          scene: 'schema_doc' as AgentScene,
-          tpl: '请为相关表补充结构说明文档。',
-        },
-      ],
+/** 快捷指令：按上下文排序后分成主行与「更多」 */
+const chipGroups = computed(() =>
+  arrangeChips(
+    props.etlMode ? ETL_CHIPS : SQL_CHIPS,
+    { hasError: props.hasError, hasSelection: props.hasSelection },
+    props.etlMode ? ETL_CHIPS.length : 5,
+  ),
 );
 
-function applyChip(c: (typeof chips.value)[number]) {
-  scene.value = c.scene;
-  text.value = translateUiText(c.tpl);
+/** 取底层 textarea 元素，用于读写光标 */
+function textarea(): HTMLTextAreaElement | null {
+  const el = inputRef.value?.textarea ?? inputRef.value?.$el?.querySelector?.('textarea');
+  return (el as HTMLTextAreaElement) || null;
 }
 
+function setCursor(pos: number) {
+  nextTick(() => {
+    const el = textarea();
+    if (!el) return;
+    el.focus();
+    el.setSelectionRange(pos, pos);
+    updateMention();
+  });
+}
+
+function applyChip(c: ComposerChip) {
+  scene.value = c.scene;
+  const { text: t, cursor } = resolveTemplate(translateUiText(c.tpl));
+  text.value = t;
+  setCursor(cursor);
+}
+
+// ───────────── @表名 补全 ─────────────
+const mention = ref<MentionToken | null>(null);
+const mentionIndex = ref(0);
+const mentionItems = computed(() => {
+  if (!mention.value || !props.tableNames?.length) return [] as string[];
+  return matchTableMentions(props.tableNames, mention.value.query, 8);
+});
+const mentionOpen = computed(() => mentionItems.value.length > 0);
+
+/** 每次输入或光标移动后重新判断是否处于 @token 中 */
+function updateMention() {
+  const el = textarea();
+  if (!el || !props.tableNames?.length) {
+    mention.value = null;
+    return;
+  }
+  const next = findMentionToken(text.value, el.selectionStart ?? text.value.length);
+  if (!next || next.query !== mention.value?.query || next.start !== mention.value?.start) {
+    mentionIndex.value = 0;
+  }
+  mention.value = next;
+}
+
+function pickMention(name: string) {
+  const el = textarea();
+  if (!mention.value) return;
+  const cursor = el?.selectionStart ?? text.value.length;
+  const res = applyMention(text.value, mention.value, cursor, name);
+  text.value = res.text;
+  mention.value = null;
+  setCursor(res.cursor);
+}
+
+watch(text, () => nextTick(updateMention));
+
+// ───────────── 发送 / 历史回溯 ─────────────
+/** 本窗口已发送的消息（最多 30 条），空输入时 ↑↓ 回溯 */
+const sentHistory = ref<string[]>([]);
+let historyCursor = -1;
+
 function onKey(e: KeyboardEvent) {
-  if (e.key === 'Enter' && !e.shiftKey) {
+  if (mentionOpen.value) {
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      mentionIndex.value = (mentionIndex.value + 1) % mentionItems.value.length;
+      return;
+    }
+    if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      mentionIndex.value =
+        (mentionIndex.value - 1 + mentionItems.value.length) % mentionItems.value.length;
+      return;
+    }
+    if (e.key === 'Enter' || e.key === 'Tab') {
+      e.preventDefault();
+      pickMention(mentionItems.value[mentionIndex.value]!);
+      return;
+    }
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      mention.value = null;
+      return;
+    }
+  }
+  if (e.key === 'Enter' && (!e.shiftKey || e.ctrlKey || e.metaKey)) {
     e.preventDefault();
     doSend();
+    return;
+  }
+  // 历史回溯：空输入按 ↑ 进入浏览；浏览中 ↑↓ 切换，↓ 越过最新一条回到空输入
+  if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+    const browsing = historyCursor !== -1;
+    if (!sentHistory.value.length) return;
+    if (!browsing && (text.value || e.key === 'ArrowDown')) return;
+    e.preventDefault();
+    const len = sentHistory.value.length;
+    if (e.key === 'ArrowUp') {
+      historyCursor = browsing ? Math.max(0, historyCursor - 1) : len - 1;
+    } else if (historyCursor + 1 >= len) {
+      historyCursor = -1;
+      text.value = '';
+      return;
+    } else {
+      historyCursor += 1;
+    }
+    text.value = sentHistory.value[historyCursor] || '';
+    setCursor(text.value.length);
   }
 }
+
+// 用户手动改动了回溯出来的内容后退出浏览状态，避免后续 ↑↓ 覆盖编辑
+watch(text, (v) => {
+  if (historyCursor !== -1 && v !== sentHistory.value[historyCursor]) {
+    historyCursor = -1;
+  }
+});
+
+function onKeyUp(e: KeyboardEvent) {
+  // 方向键 / Home / End 移动光标后同步 @ 状态
+  if (['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(e.key)) updateMention();
+}
+
 function doSend() {
   const t = text.value.trim();
   if (!t || props.running) return;
-  emit('send', t);
+  const mentionedTables = extractMentionedTables(t, props.tableNames || []);
+  emit('send', t, { mentionedTables });
+  sentHistory.value = [...sentHistory.value.filter((x) => x !== t), t].slice(-30);
+  historyCursor = -1;
   text.value = '';
+  mention.value = null;
 }
 
 function setText(t: string) {
   text.value = t || '';
+  historyCursor = -1;
+  setCursor(text.value.length);
 }
 
 defineExpose({ setText });
@@ -120,15 +214,36 @@ defineExpose({ setText });
   <div class="composer">
     <div class="chips">
       <ElTag
-        v-for="c in chips"
+        v-for="c in chipGroups.primary"
         :key="c.label"
         size="small"
         class="chip"
+        :class="{ hot: (c.forError && hasError) || (c.needsSelection && hasSelection && !hasError) }"
+        :type="c.forError && hasError ? 'danger' : undefined"
         effect="plain"
         @click="applyChip(c)"
       >
         {{ $tr(c.label) }}
       </ElTag>
+      <ElDropdown
+        v-if="chipGroups.more.length"
+        trigger="click"
+        size="small"
+        popper-class="ai-model-select-popper"
+        @command="applyChip"
+      >
+        <ElTag size="small" class="chip" effect="plain">
+          {{ $tr('更多') }}
+          <ElIcon class="chip-arrow"><ArrowDown /></ElIcon>
+        </ElTag>
+        <template #dropdown>
+          <ElDropdownMenu>
+            <ElDropdownItem v-for="c in chipGroups.more" :key="c.label" :command="c">
+              {{ $tr(c.label) }}
+            </ElDropdownItem>
+          </ElDropdownMenu>
+        </template>
+      </ElDropdown>
     </div>
     <div class="row">
       <ElTag v-if="etlMode">{{ $tr('ETL 配置与问答') }}</ElTag>
@@ -160,13 +275,39 @@ defineExpose({ setText });
         >{{ $tr('已附带报错') }}</ElTag
       >
     </div>
-    <ElInput
-      v-model="text"
-      type="textarea"
-      :rows="3"
-      :placeholder="$tr('描述你的需求，Enter 发送，Shift+Enter 换行')"
-      @keydown="onKey"
-    />
+    <div class="input-wrap">
+      <!-- @ 候选：贴在输入框上方，不遮挡正在输入的行 -->
+      <div v-if="mentionOpen" class="mention-pop" @mousedown.prevent>
+        <div class="mention-title">{{ $tr('引用表（Enter / Tab 选择）') }}</div>
+        <div
+          v-for="(name, i) in mentionItems"
+          :key="name"
+          class="mention-item"
+          :class="{ active: i === mentionIndex }"
+          @mouseenter="mentionIndex = i"
+          @click="pickMention(name)"
+        >
+          {{ name }}
+        </div>
+      </div>
+      <ElInput
+        ref="inputRef"
+        v-model="text"
+        type="textarea"
+        :rows="3"
+        :placeholder="
+          $tr(
+            tableNames?.length
+              ? '描述你的需求，输入 @ 引用表名；Enter 发送，Shift+Enter 换行'
+              : '描述你的需求，Enter 发送，Shift+Enter 换行',
+          )
+        "
+        @keydown="onKey"
+        @keyup="onKeyUp"
+        @click="updateMention"
+        @blur="mention = null"
+      />
+    </div>
     <div class="actions">
       <span v-if="running" class="run-hint">{{
         $tr('运行中，可随时停止')
@@ -205,12 +346,59 @@ defineExpose({ setText });
 .chip {
   cursor: pointer;
 }
+.chip.hot {
+  border-color: var(--el-color-primary);
+  color: var(--el-color-primary);
+  font-weight: 600;
+}
+.chip-arrow {
+  margin-left: 2px;
+  vertical-align: -1px;
+}
 .row {
   display: flex;
   align-items: center;
   gap: 8px;
   margin-bottom: 6px;
   flex-wrap: wrap;
+}
+.input-wrap {
+  position: relative;
+}
+.mention-pop {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 100%;
+  margin-bottom: 4px;
+  max-height: 220px;
+  overflow: auto;
+  background: var(--el-bg-color-overlay);
+  border: 1px solid var(--el-border-color);
+  border-radius: 6px;
+  box-shadow: var(--el-box-shadow-light);
+  z-index: 10;
+  font-family: ui-monospace, Consolas, monospace;
+  font-size: var(--vc-ai-font-size-sm, 12px);
+}
+.mention-title {
+  padding: 4px 8px;
+  color: var(--el-text-color-secondary);
+  font-family: inherit;
+  font-size: 11px;
+  border-bottom: 1px solid var(--el-border-color-lighter);
+}
+.mention-item {
+  padding: 4px 8px;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.mention-item.active,
+.mention-item:hover {
+  background: var(--el-color-primary-light-9);
+  color: var(--el-color-primary);
 }
 .actions {
   display: flex;

@@ -1,14 +1,14 @@
 <script lang="ts" setup>
 /**
  * 已保存查询文件管理
- * - 树状展示分组 + 查询
+ * - 树状展示分组 + 查询；可切换为「按数据库」展示（连接 → 库 → Schema → 查询）
  * - 新建/重命名/删除分组；查询改分组、删除
  * - 关键字搜索名称/描述/SQL，结果可直接打开编辑器
  * - 打开时：已有连接则复用，否则新开连接后再打开 SQL Tab
  *
  * @author yanch
  */
-import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue';
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
 
 import { getDbConfigById } from '#/api/visual/vq';
@@ -24,12 +24,19 @@ import {
 import { Page } from '@vben/common-ui';
 import { ElMessage, ElMessageBox } from 'element-plus';
 
+import { translateUiText } from '#/locales/ui-text';
+
 import { bindVisualClientFontScope } from './composables/useClientPreferences';
 import {
   useConnectionStore,
 } from '../client/composables/useConnectionStore';
 import { setPendingSavedQueryOpen } from '../client/composables/usePendingSavedQuery';
 import { visualClientConfig } from '../client/config';
+import {
+  buildSavedQueryDbTree,
+  collectSavedQueryLeaves,
+  type SavedQueryDbFolderType,
+} from './utils/savedQueryDbTree';
 
 defineOptions({ name: 'SavedQueryManage' });
 
@@ -40,8 +47,11 @@ const { openConnections, openConnection, setActiveConnection } =
 interface TreeNode {
   id: string;
   label: string;
-  nodeType: 'group' | 'query';
+  /** group/query 来自后端分组树；connection/database/schema 为按数据库视图的目录 */
+  nodeType: 'group' | 'query' | SavedQueryDbFolderType;
   rawId: number | string;
+  /** 按数据库视图中目录下的查询数量 */
+  count?: number;
   parentId?: number | string | null;
   groupId?: number | string | null;
   dbConfigId?: number | string;
@@ -59,6 +69,67 @@ const filterKeyword = ref('');
 const searching = ref(false);
 const searchResults = ref<any[]>([]);
 const searchMode = computed(() => !!filterKeyword.value.trim());
+
+/** 树展示方式：group 按分组（默认），database 按数据库 */
+type ViewMode = 'database' | 'group';
+const VIEW_MODE_STORAGE_KEY = 'vq-saved-query-view-mode';
+
+function readViewMode(): ViewMode {
+  try {
+    return localStorage.getItem(VIEW_MODE_STORAGE_KEY) === 'database'
+      ? 'database'
+      : 'group';
+  } catch {
+    return 'group';
+  }
+}
+
+const viewMode = ref<ViewMode>(readViewMode());
+// 记住用户上次选择的展示方式，下次进入页面保持一致
+watch(viewMode, (mode) => {
+  try {
+    localStorage.setItem(VIEW_MODE_STORAGE_KEY, mode);
+  } catch {
+    // 隐私模式等场景无法写入本地存储时忽略，只影响下次默认值
+  }
+});
+
+/** 按数据库视图：从分组树取出全部查询，重组为 连接 → 库 → Schema → 查询 */
+const dbTreeData = computed<TreeNode[]>(() =>
+  buildSavedQueryDbTree(collectSavedQueryLeaves(treeData.value), {
+    unknownConnection: translateUiText('未知连接'),
+    unspecifiedDatabase: translateUiText('未指定库'),
+  }),
+);
+
+/** 当前展示方式对应的树数据 */
+const displayTreeData = computed(() =>
+  viewMode.value === 'database' ? dbTreeData.value : treeData.value,
+);
+
+/** 分组 id → 完整分组路径，用于在按数据库视图中标注查询所属分组 */
+const groupPathMap = computed(() => {
+  const map = new Map<string, string>();
+  for (const g of collectGroupOptions(treeData.value)) {
+    map.set(String(g.id), g.label);
+  }
+  return map;
+});
+
+/** 查询所属分组路径；未分组返回空串 */
+function groupPathOf(node: TreeNode): string {
+  if (node.groupId == null) return '';
+  return groupPathMap.value.get(String(node.groupId)) || '';
+}
+
+/** 目录节点左侧的类型标签文案与样式 */
+const FOLDER_TAGS: Record<string, { cls: string; text: string }> = {
+  group: { text: '组', cls: 'tag-g' },
+  connection: { text: '连接', cls: 'tag-c' },
+  database: { text: '库', cls: 'tag-d' },
+  schema: { text: 'Schema', cls: 'tag-s' },
+  query: { text: 'SQL', cls: 'tag-q' },
+};
 
 const groupDialog = reactive({
   visible: false,
@@ -383,7 +454,17 @@ onBeforeUnmount(() => {
     <div class="sq-manage visual-client-scope">
       <div class="toolbar">
         <ElButton size="small" @click="backToClient">{{ $tr('返回客户端') }}</ElButton>
-        <ElButton type="primary" size="small" @click="openCreateGroup(null)">
+        <ElRadioGroup v-model="viewMode" size="small">
+          <ElRadioButton value="group">{{ $tr('按分组') }}</ElRadioButton>
+          <ElRadioButton value="database">{{ $tr('按数据库') }}</ElRadioButton>
+        </ElRadioGroup>
+        <!-- 按数据库视图里没有分组节点，新建分组只在按分组视图提供 -->
+        <ElButton
+          v-if="viewMode === 'group'"
+          type="primary"
+          size="small"
+          @click="openCreateGroup(null)"
+        >
           {{ $tr('新建分组') }}
         </ElButton>
         <ElButton size="small" :loading="loading" @click="loadTree">
@@ -481,9 +562,11 @@ onBeforeUnmount(() => {
           v-if="!treeData.length && !loading"
           :description="$tr('暂无已保存查询，可在 SQL 编辑器中 Ctrl+S 保存，或拖入 .sql/.txt')"
         />
+        <!-- key 随展示方式变化，切换时重建树以重新应用 default-expand-all -->
         <ElTree
           v-else
-          :data="treeData"
+          :key="viewMode"
+          :data="displayTreeData"
           node-key="id"
           default-expand-all
           :props="{ label: 'label', children: 'children' }"
@@ -491,18 +574,21 @@ onBeforeUnmount(() => {
           <template #default="{ data }">
             <div class="tree-node" @dblclick="onNodeDblClick(data)">
               <span class="node-label">
-                <span
-                  class="tag"
-                  :class="data.nodeType === 'group' ? 'tag-g' : 'tag-q'"
-                >
-                  {{ $tr(data.nodeType === 'group' ? '组' : 'SQL') }}
+                <span class="tag" :class="FOLDER_TAGS[data.nodeType]?.cls">
+                  {{ $tr(FOLDER_TAGS[data.nodeType]?.text || '') }}
                 </span>
                 {{ data.label }}
-                <span
-                  v-if="data.nodeType === 'query'"
-                  class="node-meta"
-                >
-                  {{ data.dbName || data.dbConfigId }} / {{ data.instanceName }}
+                <template v-if="data.nodeType === 'query'">
+                  <!-- 按数据库视图中位置已体现连接/库，改为标注所属分组 -->
+                  <span v-if="viewMode === 'database'" class="node-meta">
+                    {{ groupPathOf(data) || $tr('未分组') }}
+                  </span>
+                  <span v-else class="node-meta">
+                    {{ data.dbName || data.dbConfigId }} / {{ data.instanceName }}
+                  </span>
+                </template>
+                <span v-else-if="data.count != null" class="node-meta">
+                  ({{ data.count }})
                 </span>
               </span>
               <span class="node-actions" @click.stop>
@@ -534,20 +620,12 @@ onBeforeUnmount(() => {
                     {{ $tr('删除') }}
                   </ElButton>
                 </template>
-                <template v-else>
+                <template v-else-if="data.nodeType === 'query'">
                   <ElButton
                     link
                     type="primary"
                     size="small"
-                    @click="
-                      openInEditor({
-                        id: data.rawId,
-                        queryName: data.label,
-                        sqlText: data.sqlText || '',
-                        instanceName: data.instanceName || '',
-                        dbConfigId: data.dbConfigId,
-                      })
-                    "
+                    @click="onNodeDblClick(data)"
                   >
                     {{ $tr('打开') }}
                   </ElButton>
@@ -707,6 +785,18 @@ onBeforeUnmount(() => {
 .tag-q {
   background: var(--el-color-primary-light-8);
   color: var(--el-color-primary);
+}
+.tag-c {
+  background: var(--el-color-success-light-8);
+  color: var(--el-color-success-dark-2);
+}
+.tag-d {
+  background: var(--el-color-info-light-8);
+  color: var(--el-color-info-dark-2);
+}
+.tag-s {
+  background: var(--el-color-danger-light-9);
+  color: var(--el-color-danger);
 }
 .node-actions {
   display: none;

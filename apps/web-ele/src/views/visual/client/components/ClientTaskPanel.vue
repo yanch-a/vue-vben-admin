@@ -3,13 +3,14 @@ import type { ClientTask } from '../composables/useClientTasks';
 
 /**
  * 右上角悬浮任务进度：进行中 / 近 7 天已完成。
- * 数据来自 useClientTasks（复制 + 结构文档）。
+ * 数据来自 useClientTasks（复制、结构文档、SQL 导入和数据库备份）。
  * @author yanch
  */
 import { computed } from 'vue';
 
 import { Refresh } from '@element-plus/icons-vue';
 import { ElMessageBox } from 'element-plus';
+import { taskIndeterminate, taskPercent, transferSize } from '../composables/clientTaskDisplay';
 
 defineOptions({ name: 'ClientTaskPanel' });
 
@@ -23,6 +24,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   cancel: [task: ClientTask];
+  download: [task: ClientTask];
   refresh: [];
   'update:modelValue': [boolean];
   'update:tab': ['done' | 'running'];
@@ -69,8 +71,7 @@ function statusType(s?: string) {
 }
 
 function percent(t: ClientTask) {
-  if (!t.total) return t.status === 'SUCCESS' ? 100 : 0;
-  return Math.min(100, Math.round((t.done / t.total) * 100));
+  return taskPercent(t);
 }
 
 function progressStatus(t: ClientTask) {
@@ -145,7 +146,9 @@ async function onCancel(t: ClientTask) {
         </div>
         <div v-if="t.subtitle" class="sub">{{ t.subtitle }}</div>
         <ElProgress
-          :percentage="percent(t)"
+          :percentage="taskIndeterminate(t) ? 50 : percent(t)"
+          :indeterminate="taskIndeterminate(t)"
+          :show-text="!taskIndeterminate(t)"
           :status="progressStatus(t)"
           :stroke-width="8"
         />
@@ -154,7 +157,8 @@ async function onCancel(t: ClientTask) {
           <span>{{ t.message }}</span>
         </div>
         <div class="meta">
-          <span v-if="t.total">{{ t.done }} / {{ t.total }}</span>
+          <span v-if="t.total && t.engine !== 'NATIVE'">{{ t.done }} / {{ t.total }}</span>
+          <span v-if="t.source === 'dbBackup' && transferSize(t.fileSize)">{{ $tr('文件') }} {{ transferSize(t.fileSize) }}</span>
           <span v-if="t.source === 'copy' && t.currentRows && isRunning(t)">
             {{ $tr('当前表') }} {{ t.currentRows }} {{ $tr('行') }}
           </span>
@@ -171,8 +175,19 @@ async function onCancel(t: ClientTask) {
             {{ $tr('还有') }} {{ (t.errorTotal || t.errors.length) - 3 }} {{ $tr('条') }}
           </div>
         </div>
-        <div v-if="canCancel(t)" class="actions">
-          <ElButton size="small" type="danger" plain @click="onCancel(t)">{{ $tr('取消') }}</ElButton>
+        <div v-if="canCancel(t) || (t.source === 'dbBackup' && t.status === 'SUCCESS' && t.downloadReady)" class="actions">
+          <ElButton
+            v-if="t.source === 'dbBackup' && t.status === 'SUCCESS' && t.downloadReady"
+            size="small"
+            type="primary"
+            plain
+            @click="emit('download', t)"
+          >
+            {{ $tr('下载') }}
+          </ElButton>
+          <ElButton v-if="canCancel(t)" size="small" type="danger" plain @click="onCancel(t)">
+            {{ $tr('取消') }}
+          </ElButton>
         </div>
         <div v-else-if="t.cancelRequested && isRunning(t)" class="actions">
           <ElButton size="small" disabled>{{ $tr('取消中…') }}</ElButton>
@@ -286,7 +301,9 @@ async function onCancel(t: ClientTask) {
   word-break: break-all;
 }
 .actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
   margin-top: 8px;
-  text-align: right;
 }
 </style>

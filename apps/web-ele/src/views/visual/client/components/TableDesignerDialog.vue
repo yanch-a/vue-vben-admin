@@ -15,17 +15,22 @@ import type {
  *
  * @author yanch
  */
-import { computed, reactive, ref, watch } from 'vue';
+import { computed, nextTick, reactive, ref, watch } from 'vue';
 
 import { ElMessage } from 'element-plus';
 
 import { resolveTableIdent } from '../dialect/sqlDialect';
 import {
   generateTableDesignSql,
+  columnParameterHint,
+  columnTypeNotice,
+  normalizeColumnTypeSelection,
   resolveColumnParameterMode,
   resolveTableDesignerProfile,
   splitColumnType,
   supportsIndexSort,
+  supportsAutoIncrementType,
+  validateColumnParameters,
 } from '../dialect/tableDesignerDialect';
 
 defineOptions({ name: 'TableDesignerDialog' });
@@ -36,6 +41,7 @@ const props = withDefaults(
     info?: null | TableInfoInput;
     instanceName: string;
     loading?: boolean;
+    executionError?: string;
     mode: 'alter' | 'create';
     modelValue: boolean;
     saving?: boolean;
@@ -46,6 +52,7 @@ const props = withDefaults(
     dbType: 'MY_SQL',
     info: null,
     loading: false,
+    executionError: '',
     saving: false,
     schemaName: '',
     tableName: '',
@@ -102,6 +109,9 @@ const previewVisible = ref(false);
 const previewResult = ref<TableDesignSqlResult>({ statements: [], sql: '', warnings: [], errors: [] });
 const original = ref<null | TableDesignModel>(null);
 const form = reactive<TableDesignModel>(emptyModel());
+const validationErrors = ref<string[]>([]);
+const errorSummary = ref<HTMLElement>();
+const previousColumnNames = new Map<string, string>();
 let sequence = 0;
 
 function uid(prefix: string): string {
@@ -178,14 +188,15 @@ function modelFromInfo(info: TableInfoInput): TableDesignModel {
       comment: item.description || '',
     };
   });
-  const primaryNames = new Set(columns.filter((item) => item.primary).map((item) => item.name.toLowerCase()));
+  const primaryKeyName = Object.entries(info.properties || {}).find(([name]) => name.toLowerCase() === 'primarykeyname')?.[1];
   const indexes: TableDesignIndex[] = (info.indexes || [])
     .filter((item) => {
       const name = String(item.indexName || '').toLowerCase();
-      const cols = splitColumns(item.columns);
-      const isPrimaryIndex = !!item.unique && cols.length === primaryNames.size
-        && cols.length > 0 && cols.every((column) => primaryNames.has(column.toLowerCase()));
-      return name !== '_id_' && !name.startsWith('primary') && !isPrimaryIndex;
+      // 主键由字段页管理；同列的普通唯一索引不能被误隐藏。
+      const isPrimaryIndex = (profile.value.family === 'MYSQL_LIKE' && name === 'primary')
+        || (!!primaryKeyName && name === primaryKeyName.toLowerCase())
+        || (profile.value.family === 'SQLITE_LIKE' && /^sqlite_autoindex_/.test(name));
+      return !(profile.value.family === 'MONGODB_LIKE' && name === '_id_') && !isPrimaryIndex;
     })
     .map((item) => {
       const indexColumns = parseIndexColumns(item.columns);
@@ -275,6 +286,9 @@ function resetForm(): void {
     });
   }
   Object.assign(form, cloneModel(next));
+  previousColumnNames.clear();
+  form.columns.forEach(column => previousColumnNames.set(column.id, column.name));
+  validationErrors.value = [];
   original.value = props.mode === 'alter' ? cloneModel(next) : null;
   activeTab.value = 'columns';
   previewVisible.value = false;
@@ -285,7 +299,7 @@ watch(
   ([open]) => {
     if (open) resetForm();
   },
-  { deep: true },
+  { immediate: true },
 );
 
 const columnNames = computed(() => form.columns.map((item) => item.name.trim()).filter(Boolean));
@@ -295,9 +309,11 @@ const dialogTitle = computed(() => {
 });
 
 function addColumn(): void {
+  let suffix = form.columns.length + 1;
+  while (form.columns.some(column => column.name === `column_${suffix}`)) suffix++;
   form.columns.push({
     id: uid('column'),
-    name: `column_${form.columns.length + 1}`,
+    name: `column_${suffix}`,
     dataType: profile.value.defaultType,
     length: '',
     scale: '',
@@ -307,6 +323,8 @@ function addColumn(): void {
     defaultValue: '',
     comment: '',
   });
+  const column = form.columns.at(-1)!;
+  previousColumnNames.set(column.id, column.name);
 }
 
 function addIndex(): void {
@@ -322,23 +340,49 @@ function addIndex(): void {
 
 /** 类型切换后清理不适用的参数，避免隐藏值触发无意义的 ALTER。 */
 function normalizeColumnArguments(column: TableDesignColumn): void {
-  const mode = resolveColumnParameterMode(column.dataType, profile.value.family);
-  if (mode === 'none') {
-    column.length = '';
-    column.scale = '';
-  } else if (mode === 'precision-scale') {
-    // DECIMAL / NUMERIC 不强塞 18,2，留空时使用数据库默认，用户可分别自由填写。
-    column.length = '';
-    column.scale = '';
-  } else if (mode === 'free') {
-    column.length = '';
-    column.scale = '';
-  } else {
-    column.scale = '';
-    if (mode === 'length' && !column.length) {
-      column.length = /^(BIT|BINARY|CHAR|NCHAR)$/i.test(column.dataType.trim()) ? '1' : '255';
+  normalizeColumnTypeSelection(column, profile.value);
+}
+
+/** 字段改名同步本表索引和外键，并维护自引用外键的目标列名。 @author yanch */
+function renameColumn(column: TableDesignColumn): void {
+  const before = previousColumnNames.get(column.id);
+  column.name = column.name.trim();
+  if (before && before !== column.name) {
+    for (const index of form.indexes) {
+      index.columns = index.columns.map(name => name === before ? column.name : name);
+      index.descendingColumns = index.descendingColumns.map(name => name === before ? column.name : name);
+    }
+    for (const fk of form.foreignKeys) {
+      fk.columns = fk.columns.map(name => name === before ? column.name : name);
+      if (fk.referencedTable === form.tableName && (!fk.referencedSchema || fk.referencedSchema === props.schemaName)) fk.referencedColumns = fk.referencedColumns.map(name => name === before ? column.name : name);
     }
   }
+  previousColumnNames.set(column.id, column.name);
+}
+
+/** 单列参数错误在字段旁显示；历史字段未改类型参数时保留原生元数据。 @author yanch */
+const columnErrors = computed(() => Object.fromEntries(form.columns.map(column => {
+  const before = original.value?.columns.find(item => item.name === column.originalName);
+  const unchanged = before && ['dataType', 'length', 'scale', 'autoIncrement', 'defaultValue'].every(key => before[key as keyof TableDesignColumn] === column[key as keyof TableDesignColumn]);
+  return [column.id, unchanged ? [] : validateColumnParameters(column, profile.value)];
+})));
+
+/** 主键必填状态与生成的 NOT NULL 一致，避免界面显示可空而数据库实际不可空。 @author yanch */
+function setPrimary(column: TableDesignColumn, primary: boolean): void {
+  column.primary = primary;
+  if (primary) column.nullable = false;
+}
+
+/** 错误摘要定位到对应字段；切换到字段页后再设置键盘焦点。 @author yanch */
+function errorColumnId(error: string): string | undefined {
+  return form.columns.find(column => error.includes(`字段「${column.name}」`))?.id;
+}
+
+/** 保证错误字段在横向滚动的表格中可见。 @author yanch */
+async function focusErrorColumn(error: string): Promise<void> {
+  activeTab.value = 'columns'; await nextTick();
+  const input = document.getElementById(`column-input-${errorColumnId(error)}`);
+  input?.focus(); input?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
 }
 
 function columnParameterMode(column: TableDesignColumn) {
@@ -352,10 +396,18 @@ function canSortIndex(index: TableDesignIndex): boolean {
 function normalizeIndexColumns(index: TableDesignIndex): void {
   index.descendingColumns = (index.descendingColumns || [])
     .filter((name) => index.columns.includes(name));
+  if (!canEditBoundingBox(index)) index.boundingBox = '';
 }
 
 function normalizeIndexTypeSelection(index: TableDesignIndex): void {
   if (!canSortIndex(index)) index.descendingColumns = [];
+  if (!canEditBoundingBox(index)) index.boundingBox = '';
+}
+
+/** geometry 的空间网格需要用户指定实际坐标边界，不能替用户猜测。 @author yanch */
+function canEditBoundingBox(index: TableDesignIndex): boolean {
+  return profile.value.family === 'SQLSERVER_LIKE' && index.type === 'SPATIAL'
+    && index.columns.some(name => form.columns.some(column => column.name === name && column.dataType.toUpperCase() === 'GEOMETRY'));
 }
 
 function addForeignKey(): void {
@@ -378,95 +430,38 @@ function moveColumn(index: number, offset: number): void {
   if (item) form.columns.splice(target, 0, item);
 }
 
-function validate(): boolean {
-  if (!/^[\p{L}_][\p{L}\p{N}_$#@-]*$/u.test(form.tableName.trim())) {
-    ElMessage.warning('请输入有效的表名');
-    return false;
-  }
-  if (!form.columns.length && profile.value.family !== 'MONGODB_LIKE') {
-    ElMessage.warning('至少需要一个字段');
-    return false;
-  }
-  const names = new Set<string>();
-  for (const column of form.columns) {
-    if (!column.name.trim() || !column.dataType.trim()) {
-      ElMessage.warning('字段名和类型不能为空');
-      return false;
-    }
-    const key = column.name.trim().toLowerCase();
-    if (names.has(key)) {
-      ElMessage.warning(`字段名重复：${column.name}`);
-      return false;
-    }
-    names.add(key);
-  }
-  const autoColumns = form.columns.filter((column) => column.autoIncrement);
-  if (autoColumns.length > 1) {
-    ElMessage.warning('一张表只能设置一个自增字段');
-    return false;
-  }
-  if (autoColumns.some((column) => !column.primary)) {
-    ElMessage.warning('为保证各数据库兼容，自增字段必须同时设为主键');
-    return false;
-  }
-  if (
-    profile.value.family === 'SQLITE_LIKE' &&
-    autoColumns.some((column) => column.dataType.trim().toUpperCase() !== 'INTEGER')
-  ) {
-    ElMessage.warning('SQLite 自增主键的类型必须是 INTEGER');
-    return false;
-  }
-  for (const index of form.indexes) {
-    const columnsOptional = profile.value.family === 'SQLSERVER_LIKE'
-      && index.type === 'CLUSTERED COLUMNSTORE';
-    if (!index.name.trim() || (!columnsOptional && !index.columns.length)) {
-      ElMessage.warning('索引名称和索引字段不能为空');
-      return false;
-    }
-  }
-  for (const fk of form.foreignKeys) {
-    if (!fk.name.trim() || !fk.columns.length || !fk.referencedTable.trim() || !fk.referencedColumns.length) {
-      ElMessage.warning('请完整填写外键名称、本表字段、引用表和引用字段');
-      return false;
-    }
-    if (fk.columns.length !== fk.referencedColumns.length) {
-      ElMessage.warning(`外键「${fk.name}」两侧字段数量必须一致`);
-      return false;
-    }
-  }
-  return true;
-}
-
-function buildSql(): null | TableDesignSqlResult {
-  if (!validate()) return null;
+/** 构建与执行共用的 SQL；错误固定显示在表单上方，避免仅依赖短暂消息。 @author yanch */
+function buildSql(): TableDesignSqlResult {
+  form.tableName = form.tableName.trim();
+  form.columns.forEach(renameColumn);
   const ident = resolveTableIdent(props.dbType, {
     instanceName: props.instanceName,
     schemaName: props.schemaName || props.info?.schemaName,
     tableName: form.tableName,
   });
-  return generateTableDesignSql({
+  const result = generateTableDesignSql({
     dbType: props.dbType,
     schema: ident.schema,
     mode: props.mode,
     model: cloneModel(form),
     original: original.value ? cloneModel(original.value) : null,
   });
+  validationErrors.value = result.errors;
+  if (result.errors.length) void nextTick(() => errorSummary.value?.focus());
+  return result;
 }
 
 function preview(): void {
+  if (props.loading || props.saving) return;
   const result = buildSql();
-  if (!result) return;
   previewResult.value = result;
   previewVisible.value = true;
 }
 
 function save(): void {
+  if (props.loading || props.saving || props.executionError) return;
   const result = buildSql();
-  if (!result) return;
   if (result.errors.length) {
-    previewResult.value = result;
-    previewVisible.value = true;
-    ElMessage.error('存在当前数据库无法直接执行的修改，请根据提示调整');
     return;
   }
   if (!result.statements.length) {
@@ -487,8 +482,15 @@ function save(): void {
     append-to-body
     class="table-designer-dialog"
     :close-on-click-modal="false"
+    :close-on-press-escape="!saving"
+    :show-close="!saving"
   >
-    <div v-loading="loading" class="designer-body">
+    <div v-loading="loading || saving" :inert="loading || saving" class="designer-body">
+      <ElAlert v-if="executionError" :title="executionError" type="error" :closable="false" show-icon class="designer-alert" />
+      <div v-if="validationErrors.length" ref="errorSummary" class="validation-summary" role="alert" tabindex="-1" aria-label="表结构校验错误">
+        <strong>{{ $tr('请修正以下问题') }}</strong>
+        <ul><li v-for="error in validationErrors" :key="error"><a v-if="errorColumnId(error)" :href="`#column-input-${errorColumnId(error)}`" @click.prevent="focusErrorColumn(error)">{{ error }}</a><span v-else>{{ error }}</span></li></ul>
+      </div>
       <ElAlert
         v-if="profile.family === 'SQLITE_LIKE' && mode === 'alter'"
         :title="$tr('SQLite 可直接新增、删除、重命名字段；修改字段类型、默认值、可空性或外键需要重建表。')"
@@ -499,7 +501,7 @@ function save(): void {
       />
       <ElAlert
         v-if="profile.family === 'MONGODB_LIKE'"
-        :title="$tr('MongoDB 字段页配置 $jsonSchema 校验规则；外键不适用，索引按集合索引执行。')"
+        :title="$tr('MongoDB 字段页配置 $jsonSchema 校验规则；必填表示字段必须存在，允许 null 请在类型中输入 string | null 等联合类型。')"
         type="info"
         :closable="false"
         show-icon
@@ -530,27 +532,35 @@ function save(): void {
         <ElTabPane :label="`${$tr('字段')} (${form.columns.length})`" name="columns">
           <div class="tab-toolbar">
             <ElButton type="primary" plain size="small" @click="addColumn">+ {{ $tr('添加字段') }}</ElButton>
-            <span class="toolbar-hint">{{ $tr('类型、长度/精度和小数位分开设置；类型仍可输入数据库支持的原生值') }}</span>
+            <span class="toolbar-hint">{{ $tr('类型支持搜索及原生声明；长度、精度独立设置。默认值按 SQL 表达式填写，字符串须加单引号。') }}</span>
           </div>
           <ElTable :data="form.columns" border stripe size="small" max-height="430" row-key="id">
             <ElTableColumn type="index" width="46" align="center" />
             <ElTableColumn :label="$tr('字段名')" min-width="150">
-              <template #default="{ row }"><ElInput v-model="row.name" /></template>
+              <template #default="{ row }">
+                <ElInput :id="`column-input-${row.id}`" v-model="row.name" :aria-label="`${$tr('字段名')} ${row.name}`" :aria-describedby="columnErrors[row.id]?.length ? `column-error-${row.id}` : undefined" @change="renameColumn(row)" />
+                <div v-if="columnErrors[row.id]?.length" :id="`column-error-${row.id}`" class="column-error">{{ columnErrors[row.id]?.join('；') }}</div>
+              </template>
             </ElTableColumn>
             <ElTableColumn :label="$tr('类型')" min-width="180">
               <template #default="{ row }">
-                <ElSelect v-model="row.dataType" filterable allow-create default-first-option @change="normalizeColumnArguments(row)">
+                <ElSelect v-model="row.dataType" filterable allow-create default-first-option :aria-label="`${row.name} ${$tr('类型')}`" @change="normalizeColumnArguments(row)">
                   <ElOption v-for="type in profile.types" :key="type" :label="type" :value="type" />
                 </ElSelect>
+                <div v-if="columnTypeNotice(row, profile)" class="column-type-notice">{{ columnTypeNotice(row, profile) }}</div>
               </template>
             </ElTableColumn>
-            <ElTableColumn v-if="!['MONGODB_LIKE', 'SQLITE_LIKE'].includes(profile.family)" :label="$tr('长度/精度')" width="112">
+            <ElTableColumn v-if="!['MONGODB_LIKE', 'SQLITE_LIKE'].includes(profile.family)" :label="$tr('长度/精度/成员')" width="150">
               <template #default="{ row }">
+                <ElTooltip :content="columnParameterHint(row, profile)" placement="top" trigger="hover">
                 <ElInput
                   v-model="row.length"
                   :disabled="columnParameterMode(row) === 'none'"
-                  :placeholder="columnParameterMode(row) === 'precision-scale' ? '10' : columnParameterMode(row) === 'fractional' ? '6' : '255 / MAX'"
+                  :aria-label="`${row.name} ${$tr('长度/精度/成员')}`"
+                  :aria-describedby="columnErrors[row.id]?.length ? `column-error-${row.id}` : undefined"
+                  :placeholder="columnParameterMode(row) === 'free' ? `'a','b'` : columnParameterMode(row) === 'precision-scale' ? '可选精度' : columnParameterMode(row) === 'fractional' ? '小数秒精度' : profile.family === 'SQLSERVER_LIKE' ? '长度 / MAX' : '长度'"
                 />
+                </ElTooltip>
               </template>
             </ElTableColumn>
             <ElTableColumn v-if="!['MONGODB_LIKE', 'SQLITE_LIKE'].includes(profile.family)" :label="$tr('小数位')" width="88">
@@ -558,29 +568,31 @@ function save(): void {
                 <ElInput
                   v-model="row.scale"
                   :disabled="columnParameterMode(row) !== 'precision-scale'"
+                  :aria-label="`${row.name} ${$tr('小数位')}`"
+                  :aria-describedby="columnErrors[row.id]?.length ? `column-error-${row.id}` : undefined"
                   :placeholder="columnParameterMode(row) === 'precision-scale' ? '可选' : ''"
                 />
               </template>
             </ElTableColumn>
             <ElTableColumn v-if="profile.family !== 'MONGODB_LIKE'" :label="$tr('主键')" width="64" align="center">
-              <template #default="{ row }"><ElCheckbox v-model="row.primary" /></template>
+              <template #default="{ row }"><ElCheckbox :model-value="row.primary" :aria-label="`${row.name} ${$tr('主键')}`" @update:model-value="(value: boolean) => setPrimary(row, value)" /></template>
             </ElTableColumn>
             <ElTableColumn :label="$tr('必填')" width="64" align="center">
-              <template #default="{ row }"><ElCheckbox :model-value="!row.nullable" @update:model-value="(value: boolean) => (row.nullable = !value)" /></template>
+              <template #default="{ row }"><ElCheckbox :model-value="row.primary || !row.nullable" :disabled="row.primary" :aria-label="`${row.name} ${$tr('必填')}`" @update:model-value="(value: boolean) => (row.nullable = !value)" /></template>
             </ElTableColumn>
             <ElTableColumn v-if="profile.family !== 'MONGODB_LIKE'" :label="$tr('自增')" width="64" align="center">
-              <template #default="{ row }"><ElCheckbox v-model="row.autoIncrement" /></template>
+              <template #default="{ row }"><ElCheckbox v-model="row.autoIncrement" :disabled="!supportsAutoIncrementType(row, profile) || (mode === 'alter' && !!row.originalName && profile.family !== 'MYSQL_LIKE')" :aria-label="`${row.name} ${$tr('自增')}`" /></template>
             </ElTableColumn>
             <ElTableColumn v-if="profile.family !== 'MONGODB_LIKE'" :label="$tr('默认值')" min-width="130">
-              <template #default="{ row }"><ElInput v-model="row.defaultValue" placeholder="NULL / CURRENT_TIMESTAMP" /></template>
+              <template #default="{ row }"><ElInput v-model="row.defaultValue" :disabled="row.autoIncrement || /^(ROWVERSION|TIMESTAMP)$/i.test(row.dataType) && profile.family === 'SQLSERVER_LIKE'" :aria-label="`${row.name} ${$tr('默认值')}`" placeholder="'文本' / 0 / CURRENT_TIMESTAMP" /></template>
             </ElTableColumn>
             <ElTableColumn :label="$tr('备注')" min-width="140">
               <template #default="{ row }"><ElInput v-model="row.comment" :disabled="profile.family === 'SQLITE_LIKE'" /></template>
             </ElTableColumn>
             <ElTableColumn :label="$tr('操作')" width="116" fixed="right" align="center">
               <template #default="{ $index }">
-                <ElButton link size="small" :disabled="$index === 0" @click="moveColumn($index, -1)">↑</ElButton>
-                <ElButton link size="small" :disabled="$index === form.columns.length - 1" @click="moveColumn($index, 1)">↓</ElButton>
+                <ElButton link size="small" :aria-label="$tr('上移字段')" :disabled="$index === 0" @click="moveColumn($index, -1)">↑</ElButton>
+                <ElButton link size="small" :aria-label="$tr('下移字段')" :disabled="$index === form.columns.length - 1" @click="moveColumn($index, 1)">↓</ElButton>
                 <ElButton link type="danger" size="small" @click="form.columns.splice($index, 1)">{{ $tr('删除') }}</ElButton>
               </template>
             </ElTableColumn>
@@ -604,6 +616,7 @@ function save(): void {
               </template>
             </ElTableColumn>
             <ElTableColumn :label="$tr('索引类型')" width="210"><template #default="{ row }"><ElSelect v-model="row.type" filterable allow-create @change="normalizeIndexTypeSelection(row)"><ElOption v-for="type in profile.indexTypes" :key="type" :label="type" :value="type" /></ElSelect></template></ElTableColumn>
+            <ElTableColumn v-if="profile.family === 'SQLSERVER_LIKE'" :label="$tr('空间边界')" min-width="240"><template #default="{ row }"><ElInput v-model="row.boundingBox" :disabled="!canEditBoundingBox(row)" :aria-label="`${row.name} ${$tr('空间边界')}`" placeholder="xmin,ymin,xmax,ymax" /></template></ElTableColumn>
             <ElTableColumn :label="$tr('唯一')" width="70" align="center"><template #default="{ row }"><ElCheckbox v-model="row.unique" /></template></ElTableColumn>
             <ElTableColumn :label="$tr('操作')" width="76" align="center"><template #default="{ $index }"><ElButton link type="danger" @click="form.indexes.splice($index, 1)">{{ $tr('删除') }}</ElButton></template></ElTableColumn>
           </ElTable>
@@ -640,9 +653,9 @@ function save(): void {
 
     <template #footer>
       <div class="designer-footer">
-        <ElButton @click="visible = false">{{ $tr('取消') }}</ElButton>
-        <ElButton @click="preview">{{ $tr('预览 SQL') }}</ElButton>
-        <ElButton type="primary" :loading="saving" :disabled="loading" @click="save">{{ $tr('保存') }}</ElButton>
+        <ElButton :disabled="saving" @click="visible = false">{{ $tr('取消') }}</ElButton>
+        <ElButton :disabled="loading || saving" @click="preview">{{ $tr('预览 SQL') }}</ElButton>
+        <ElButton type="primary" :loading="saving" :disabled="loading || saving || !!executionError" @click="save">{{ $tr('保存') }}</ElButton>
       </div>
     </template>
   </ElDialog>
@@ -665,7 +678,13 @@ function save(): void {
 .option-form { max-width: 620px; padding: 18px 12px; }
 .designer-footer { display: flex; justify-content: flex-end; gap: 8px; }
 .preview-alert { margin-bottom: 10px; }
-.sql-preview { max-height: 560px; min-height: 260px; overflow: auto; margin: 0; padding: 14px 16px; color: var(--el-text-color-primary); background: #101827; border-radius: 6px; font: 13px/1.65 Consolas, Monaco, monospace; white-space: pre-wrap; word-break: break-word; }
+.sql-preview { max-height: 560px; min-height: 260px; overflow: auto; margin: 0; padding: 14px 16px; color: var(--el-text-color-primary); background: var(--el-fill-color-light); border-radius: 6px; font: 13px/1.65 Consolas, Monaco, monospace; white-space: pre-wrap; word-break: break-word; }
+.column-error { color: var(--el-color-danger); font-size: 12px; line-height: 1.5; padding-bottom: 4px; }
+.column-type-notice { color: var(--el-text-color-regular); font-size: 12px; line-height: 1.5; padding-bottom: 4px; }
+.validation-summary { color: var(--el-color-danger); background: var(--el-color-danger-light-9); border: 1px solid var(--el-color-danger-light-5); padding: 10px 14px; margin-bottom: 12px; border-radius: 6px; }
+.validation-summary ul { margin: 6px 0 0; padding-left: 20px; }
+.validation-summary a { color: inherit; text-decoration: underline; }
+.validation-summary:focus { outline: 2px solid var(--el-color-primary); outline-offset: 2px; }
 :deep(.el-select) { width: 100%; }
 
 /* 表格内联编辑：去掉输入框/下拉自带边框，与单元格贴合，避免双边框 */

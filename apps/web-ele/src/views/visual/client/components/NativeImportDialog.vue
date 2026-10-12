@@ -1,7 +1,7 @@
 <script lang="ts" setup>
 /**
- * 使用服务端官方客户端导入 SQL / 备份文件。
- * SQL 脚本仍可走逐条权限校验的执行入口；这里专门处理原生备份和批量导入。
+ * 自动优先官方客户端导入，缺少工具时使用 Java；共用后台任务进度。
+ * @author yanch
  */
 import { computed, reactive, ref, watch } from 'vue';
 
@@ -37,9 +37,13 @@ const form = reactive({
   file: null as File | null,
   collectionName: '',
   dropExisting: false,
+  engine: 'auto',
+  charset: 'UTF-8',
+  sourceDatabase: '',
 });
 
 const isMongo = computed(() => props.dbType === 'MONGODB');
+const isDm = computed(() => props.dbType === 'DM');
 const isSqlServer = computed(() => props.dbType === 'SQL_SERVER');
 
 watch(
@@ -49,9 +53,13 @@ watch(
     form.file = null;
     form.collectionName = '';
     form.dropExisting = false;
+    form.engine = 'auto';
+    form.charset = 'UTF-8';
+    form.sourceDatabase = '';
   },
 );
 
+/** 上传控件仅保存浏览器文件句柄，提交时才发送文件。 */
 function onFileChange(file: { raw?: File } | undefined) {
   form.file = file?.raw || null;
 }
@@ -64,18 +72,20 @@ function onExceed(files: UploadRawFile[]) {
   form.file = files?.[0] || null;
 }
 
+/** 按数据库显示可识别的备份格式；解包后的真实格式由服务端校验。 */
 function acceptForDb() {
-  if (isMongo.value) return '.archive,.bson,.json,.csv,.gz';
-  if (isSqlServer.value) return '.sql,.txt,.csv';
-  return '.sql,.txt,.dump,.backup,.tar,.gz';
+  if (isMongo.value) return '.archive,.bson,.json,.csv,.gz,.zip,.js';
+  if (isSqlServer.value) return '.sql,.txt,.csv,.zip,.gz';
+  return '.sql,.txt,.dump,.dmp,.backup,.tar,.gz,.zip';
 }
 
 function supportedFileHint() {
-  if (isMongo.value) return '支持 MongoDB archive、BSON、JSON、CSV 或 GZ 文件';
+  if (isMongo.value) return '支持 archive、BSON、JSON、CSV、JS 和仅含一个备份文件的 ZIP';
   if (isSqlServer.value) return '支持 SQL 脚本；CSV 可通过 bcp 导入到指定表';
-  return '支持 SQL 脚本以及当前数据库官方客户端认可的备份格式';
+  return '支持 SQL、SQL.GZ、仅含一个备份文件的 ZIP；二进制备份需要对应官方恢复工具';
 }
 
+/** 提交异步任务，由客户端任务面板继续轮询进度和提供取消入口。 */
 async function onSubmit() {
   if (!props.dbConfigId) {
     ElMessage.warning('请先打开数据库连接');
@@ -89,8 +99,8 @@ async function onSubmit() {
     ElMessage.warning('请选择备份文件');
     return;
   }
-  if (isMongo.value && form.file.name.toLowerCase().endsWith('.json') && !form.collectionName.trim()) {
-    ElMessage.warning('导入 MongoDB JSON 时请填写目标集合');
+  if (isMongo.value && /\.(json|csv|bson)(\.gz)?$/i.test(form.file.name) && !form.collectionName.trim()) {
+    ElMessage.warning('导入 MongoDB JSON / CSV / BSON 时请填写目标集合');
     return;
   }
   if (isSqlServer.value && form.file.name.toLowerCase().endsWith('.csv') && !form.collectionName.trim()) {
@@ -104,6 +114,9 @@ async function onSubmit() {
   data.append('file', form.file);
   if (form.collectionName.trim()) data.append('collectionName', form.collectionName.trim());
   data.append('dropExisting', form.dropExisting ? 'true' : 'false');
+  data.append('engine', form.engine);
+  data.append('charset', form.charset);
+  if (form.sourceDatabase.trim()) data.append('sourceDatabase', form.sourceDatabase.trim());
 
   submitting.value = true;
   try {
@@ -113,11 +126,11 @@ async function onSubmit() {
       ElMessage.error('任务创建失败');
       return;
     }
-    ElMessage.success(`已提交官方客户端导入：${form.file.name}`);
+    ElMessage.success(`已提交${task.engine === 'NATIVE' ? '官方客户端' : 'Java'}导入：${form.file.name}`);
     visible.value = false;
     emit('started', task);
   } catch (error: any) {
-    ElMessage.error(error?.msg || error?.message || '官方客户端导入失败');
+    ElMessage.error(error?.msg || error?.message || '备份导入失败');
   } finally {
     submitting.value = false;
   }
@@ -127,7 +140,7 @@ async function onSubmit() {
 <template>
   <ElDialog
     v-model="visible"
-    :title="$tr('官方客户端导入')"
+    :title="$tr('导入数据库备份')"
     width="560px"
     destroy-on-close
     append-to-body
@@ -136,12 +149,25 @@ async function onSubmit() {
       type="info"
       :closable="false"
       show-icon
-      :title="$tr('导入任务在服务端执行，客户端必须已在“客户端工具”中测试可用。')"
+      :title="$tr('自动优先使用官方客户端，未安装时使用 Java。SQL 中显式库名和 Schema 按文件内容执行。遇错停止；已执行的操作可能已经写入数据库。')"
       class="mb-3"
     />
     <ElForm label-width="108px" @submit.prevent>
       <ElFormItem :label="$tr('目标实例')">
         <ElInput :model-value="instanceName" disabled />
+      </ElFormItem>
+      <ElFormItem :label="$tr('导入方式')">
+        <ElSelect v-model="form.engine" style="width: 100%" :disabled="submitting">
+          <ElOption :label="$tr('自动选择（推荐）')" value="auto" />
+          <ElOption :label="$tr('官方客户端')" value="native" />
+          <ElOption :label="$tr('Java')" value="managed" />
+        </ElSelect>
+      </ElFormItem>
+      <ElFormItem :label="$tr('脚本编码')">
+        <ElSelect v-model="form.charset" style="width: 100%" :disabled="submitting">
+          <ElOption label="UTF-8" value="UTF-8" />
+          <ElOption label="GBK（Java）" value="GBK" />
+        </ElSelect>
       </ElFormItem>
       <ElFormItem :label="$tr('备份文件')" required>
         <ElUpload
@@ -165,9 +191,12 @@ async function onSubmit() {
           :placeholder="isMongo ? 'JSON / CSV 导入时必填' : 'CSV 导入时必填'"
         />
       </ElFormItem>
+      <ElFormItem v-if="isMongo || isDm" :label="isMongo ? $tr('归档源库名') : $tr('备份源模式')">
+        <ElInput v-model="form.sourceDatabase" :placeholder="isMongo ? $tr('跨库恢复 archive 时填写；留空表示与目标库同名') : $tr('跨模式恢复 DMP 时填写；留空表示与目标模式同名')" />
+      </ElFormItem>
       <ElFormItem v-if="isMongo" :label="$tr('覆盖已有数据')">
         <ElSwitch v-model="form.dropExisting" />
-        <span class="tip inline">{{ $tr('使用官方工具的 drop 选项') }}</span>
+        <span class="tip inline">{{ $tr('适用于官方归档、BSON、JSON、CSV；JS 按脚本内容执行') }}</span>
       </ElFormItem>
     </ElForm>
     <template #footer>

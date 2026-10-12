@@ -26,10 +26,10 @@ describe('MongoDB 命令适配', () => {
     expect(isMongoEditableQuery('db.users.find({})')).toBe(true);
     expect(isMongoEditableQuery('db.users.aggregate([{ "$match": {} }])')).toBe(false);
     expect(buildMongoUpdateCommand(ref, original, edited, ['name'], ['_id'])).toContain(
-      'updateOne({"_id":"507f1f77bcf86cd799439011"}, {"$set":{"name":"new"}})',
+      '"_id":{"$eq":"507f1f77bcf86cd799439011"}',
     );
     expect(buildMongoDeleteCommand(ref, original, Object.keys(original), ['_id'])).toContain(
-      'deleteOne({"_id":"507f1f77bcf86cd799439011"})',
+      '"_id":{"$eq":"507f1f77bcf86cd799439011"}',
     );
     expect(buildMongoInsertCommand(ref, edited, Object.keys(edited))).toBe(
       'db.getCollection("users").insertOne({"name":"new","profile":{"level":1}});',
@@ -40,5 +40,10 @@ describe('MongoDB 命令适配', () => {
     expect(() =>
       buildMongoDeleteCommand(ref, { name: 'no id' }, ['name'], []),
     ).toThrow('缺少 _id');
+  });
+  it('即使调用方只指定其它列，过滤器仍固定 _id 并按原值等值检测冲突',()=>{
+    const sql=buildMongoUpdateCommand({table:'t'},{_id:{$oid:'507f1f77bcf86cd799439011'},v:{$ne:'literal'}},{v:'new'},['v'],['v']);
+    expect(sql).toContain('"_id":{"$eq":{"$oid":"507f1f77bcf86cd799439011"}}');
+    expect(sql).toContain('"v":{"$eq":{"$ne":"literal"}}');
   });
 });

@@ -31,16 +31,18 @@ const visible = computed({
 const percent = computed(() => {
   const t = props.task;
   if (!t) return 0;
-  if (typeof t.progressPercent === 'number') return t.progressPercent;
+  const ceiling = ['PENDING', 'RUNNING'].includes(t.status) ? 99 : 100;
+  if (typeof t.progressPercent === 'number') return Math.min(ceiling, t.progressPercent);
   if (!t.totalObjects) return 0;
   return Math.min(
-    100,
+    ceiling,
     Math.round((t.processedObjects * 100) / t.totalObjects),
   );
 });
 
 const statusText = computed(() => {
   const s = props.task?.status;
+  if (props.task?.cancelRequested && ['PENDING', 'RUNNING'].includes(s || '')) return '正在取消';
   const map: Record<string, string> = {
     PENDING: '等待中',
     RUNNING: '执行中',
@@ -114,7 +116,7 @@ const errors = computed(() => props.task?.errors || []);
           <span v-if="task.currentTableRows">{{ $tr('（本表') }} {{ task.currentTableRows }} {{ $tr('行）') }}</span>
         </div>
         <div>
-          {{ $tr('成功') }} {{ task.successCount || 0 }}{{ $tr('，失败') }} {{ task.failedCount || 0 }}{{ $tr('，已写入') }}
+          {{ $tr('成功') }} {{ task.successCount || 0 }}{{ $tr('，失败') }} {{ task.failedCount || 0 }}{{ $tr('，跳过') }} {{ task.skippedCount || 0 }}{{ $tr('，已提交') }}
           {{ task.copiedRows || 0 }} {{ $tr('行') }}
         </div>
         <div v-if="task.truncated" class="trunc">{{ $tr('部分表因行数上限被截断') }}</div>
@@ -122,7 +124,7 @@ const errors = computed(() => props.task?.errors || []);
       </div>
 
       <div v-if="errors.length" class="errors">
-        <div class="err-title">{{ $tr('异常（最多显示 1000 条）') }}</div>
+        <div class="err-title">{{ $tr('异常与提示') }} {{ errors.length }} / {{ task.errorTotal || errors.length }}</div>
         <ElScrollbar max-height="160px">
           <div v-for="(e, i) in errors" :key="i" class="err-item">
             <strong>{{ e.objectName }}</strong>
@@ -134,8 +136,8 @@ const errors = computed(() => props.task?.errors || []);
     </template>
 
     <template #footer>
-      <ElButton v-if="canCancel" type="danger" plain @click="emit('cancel')">
-        {{ $tr('取消任务') }}
+      <ElButton v-if="canCancel" :disabled="task?.cancelRequested" :loading="task?.cancelRequested" type="danger" plain @click="emit('cancel')">
+        {{ $tr(task?.cancelRequested ? '正在取消' : '取消任务') }}
       </ElButton>
       <ElButton @click="emit('hide'); visible = false">{{ $tr('隐藏') }}</ElButton>
     </template>

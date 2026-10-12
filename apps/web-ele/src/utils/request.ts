@@ -33,12 +33,13 @@ export default async function request(config: {
   if (config.timeout != null) options.timeout = config.timeout;
 
   let body: any;
-  if (method === 'get' || method === 'delete') {
+  if (method === 'get') {
     body = await requestClient.request(config.url, {
       method,
       ...options,
     });
   } else {
+    // DELETE 也可能带 JSON body（如 Redis 二进制键的 keyBase64），不能丢掉 data。
     body = await requestClient.request(config.url, {
       method,
       data: config.data,

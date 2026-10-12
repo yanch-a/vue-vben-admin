@@ -8,7 +8,7 @@
  */
 import type { SqlDialectFamily } from './dbTypes';
 
-import { normalizeDbTypeCode, resolveDialectFamily } from './dbTypes';
+import { DB_TYPE_REGISTRY, normalizeDbTypeCode, resolveDialectFamily } from './dbTypes';
 import { resolveSqlDialect } from './sqlDialect';
 
 export interface TableDesignColumn {
@@ -38,6 +38,8 @@ export interface TableDesignIndex {
   columns: string[];
   /** 复合索引中显式指定为 DESC 的字段；未列出的字段使用数据库默认升序。 */
   descendingColumns: string[];
+  /** SQL Server geometry 空间索引必需的 xmin,ymin,xmax,ymax 边界。 */
+  boundingBox?: string;
 }
 
 export interface TableDesignForeignKey {
@@ -95,9 +97,12 @@ export interface TableDesignSqlResult {
 const FAMILY_TYPES: Record<SqlDialectFamily, string[]> = {
   MYSQL_LIKE: [
     'BIGINT', 'INT', 'MEDIUMINT', 'SMALLINT', 'TINYINT', 'DECIMAL', 'NUMERIC',
-    'FLOAT', 'DOUBLE', 'VARCHAR', 'CHAR', 'TEXT', 'MEDIUMTEXT', 'LONGTEXT',
+    'FLOAT', 'DOUBLE', 'VARCHAR', 'CHAR', 'TINYTEXT', 'TEXT', 'MEDIUMTEXT', 'LONGTEXT',
     'DATE', 'DATETIME', 'TIMESTAMP', 'TIME', 'YEAR', 'BOOLEAN', 'JSON', 'ENUM',
-    'SET', 'BINARY', 'VARBINARY', 'BLOB', 'GEOMETRY', 'POINT',
+    'SET', 'BINARY', 'VARBINARY', 'TINYBLOB', 'BLOB', 'MEDIUMBLOB', 'LONGBLOB', 'BIT',
+    'GEOMETRY', 'POINT', 'LINESTRING', 'POLYGON', 'MULTIPOINT',
+    'MULTILINESTRING', 'MULTIPOLYGON', 'GEOMETRYCOLLECTION',
+    'TINYINT UNSIGNED', 'SMALLINT UNSIGNED', 'MEDIUMINT UNSIGNED', 'INT UNSIGNED', 'BIGINT UNSIGNED',
   ],
   POSTGRES_LIKE: [
     'BIGINT', 'BIGSERIAL', 'INTEGER', 'SERIAL', 'SMALLINT', 'SMALLSERIAL',
@@ -105,38 +110,49 @@ const FAMILY_TYPES: Record<SqlDialectFamily, string[]> = {
     'CHARACTER VARYING', 'CHAR', 'TEXT', 'BOOLEAN', 'DATE', 'TIME',
     'TIME WITH TIME ZONE', 'TIMESTAMP', 'TIMESTAMP WITH TIME ZONE',
     'JSON', 'JSONB', 'UUID', 'BYTEA', 'BIT', 'BIT VARYING', 'MONEY', 'INTERVAL',
-    'INET', 'CIDR', 'XML', 'TSVECTOR', 'TSQUERY',
+    'INET', 'CIDR', 'MACADDR', 'MACADDR8', 'XML', 'TSVECTOR', 'TSQUERY',
+    'POINT', 'LINE', 'LSEG', 'BOX', 'PATH', 'POLYGON', 'CIRCLE', 'PG_LSN', 'OID',
+    'INT4RANGE', 'INT8RANGE', 'NUMRANGE', 'TSRANGE', 'TSTZRANGE', 'DATERANGE',
+    'INT4MULTIRANGE', 'INT8MULTIRANGE', 'NUMMULTIRANGE', 'TSMULTIRANGE', 'TSTZMULTIRANGE', 'DATEMULTIRANGE',
+    'INTEGER[]', 'BIGINT[]', 'NUMERIC[]', 'VARCHAR[]', 'TEXT[]', 'BOOLEAN[]', 'UUID[]', 'JSONB[]', 'DATE[]', 'TIMESTAMP[]',
   ],
   ORACLE_LIKE: [
     'NUMBER', 'INTEGER', 'FLOAT', 'BINARY_FLOAT', 'BINARY_DOUBLE', 'VARCHAR2', 'NVARCHAR2',
     'CHAR', 'NCHAR', 'CLOB', 'NCLOB', 'DATE', 'TIMESTAMP',
     'TIMESTAMP WITH TIME ZONE', 'TIMESTAMP WITH LOCAL TIME ZONE', 'INTERVAL YEAR TO MONTH',
-    'INTERVAL DAY TO SECOND', 'RAW', 'BLOB', 'JSON', 'XMLTYPE',
+    'INTERVAL DAY TO SECOND', 'RAW', 'BLOB', 'BFILE', 'LONG', 'LONG RAW', 'ROWID', 'UROWID', 'JSON', 'BOOLEAN', 'XMLTYPE',
   ],
   SQLSERVER_LIKE: [
     'BIGINT', 'INT', 'SMALLINT', 'TINYINT', 'DECIMAL', 'NUMERIC', 'MONEY',
     'SMALLMONEY', 'FLOAT', 'REAL', 'NVARCHAR', 'VARCHAR', 'NCHAR', 'CHAR',
     'VARBINARY', 'BINARY', 'BIT', 'DATE', 'TIME', 'DATETIME', 'DATETIME2',
     'DATETIMEOFFSET', 'SMALLDATETIME', 'UNIQUEIDENTIFIER', 'ROWVERSION', 'XML', 'GEOMETRY', 'GEOGRAPHY',
+    'SQL_VARIANT', 'TEXT', 'NTEXT', 'IMAGE', 'JSON', 'VECTOR',
   ],
-  SQLITE_LIKE: ['INTEGER', 'REAL', 'TEXT', 'BLOB', 'NUMERIC'],
+  SQLITE_LIKE: ['INTEGER', 'INT', 'REAL', 'TEXT', 'BLOB', 'NUMERIC', 'ANY'],
   H2_LIKE: [
     'BIGINT', 'INTEGER', 'SMALLINT', 'TINYINT', 'NUMERIC', 'DECIMAL', 'DOUBLE',
     'REAL', 'VARCHAR', 'CHARACTER VARYING', 'CHAR', 'CLOB', 'BOOLEAN', 'DATE',
     'TIME', 'TIME WITH TIME ZONE', 'TIMESTAMP', 'TIMESTAMP WITH TIME ZONE',
-    'UUID', 'JSON', 'BINARY', 'BINARY VARYING', 'BLOB', 'GEOMETRY',
+    'UUID', 'JSON', 'BINARY', 'BINARY VARYING', 'BLOB', 'GEOMETRY', 'DECFLOAT', 'JAVA_OBJECT', 'ENUM',
+    'INTEGER ARRAY', 'BIGINT ARRAY', 'VARCHAR ARRAY', 'BOOLEAN ARRAY', 'UUID ARRAY',
+    'INTERVAL YEAR', 'INTERVAL MONTH', 'INTERVAL DAY', 'INTERVAL HOUR', 'INTERVAL MINUTE', 'INTERVAL SECOND',
+    'INTERVAL YEAR TO MONTH', 'INTERVAL DAY TO HOUR', 'INTERVAL DAY TO MINUTE', 'INTERVAL DAY TO SECOND',
+    'INTERVAL HOUR TO MINUTE', 'INTERVAL HOUR TO SECOND', 'INTERVAL MINUTE TO SECOND',
   ],
   MONGODB_LIKE: [
     'objectId', 'string', 'bool', 'int', 'long', 'double', 'decimal', 'date',
     'timestamp', 'object', 'array', 'binData', 'regex', 'javascript',
-    'javascriptWithScope', 'minKey', 'maxKey', 'null',
+    'javascriptWithScope', 'minKey', 'maxKey', 'null', 'undefined', 'dbPointer', 'symbol',
   ],
 };
 
 const DM_TYPES = [
   'BIGINT', 'INT', 'SMALLINT', 'TINYINT', 'DECIMAL', 'NUMERIC', 'DOUBLE', 'REAL',
   'VARCHAR', 'VARCHAR2', 'NVARCHAR2', 'CHAR', 'TEXT', 'CLOB', 'DATE', 'TIME',
-  'TIMESTAMP', 'BIT', 'BINARY', 'VARBINARY', 'BLOB',
+  'TIMESTAMP', 'BIT', 'BINARY', 'VARBINARY', 'BLOB', 'NUMBER', 'FLOAT', 'DOUBLE PRECISION', 'NCHAR', 'NCLOB',
+  'IMAGE', 'LONGVARCHAR', 'LONGVARBINARY', 'LONG', 'BFILE', 'BYTE', 'TIMESTAMP WITH TIME ZONE',
+  'TIMESTAMP WITH LOCAL TIME ZONE', 'INTERVAL YEAR TO MONTH', 'INTERVAL DAY TO SECOND',
 ];
 
 /** 返回当前产品的字段、索引及表选项配置。 */
@@ -151,7 +167,7 @@ export function resolveTableDesignerProfile(dbType?: null | string): TableDesign
   const profile: TableDesignerProfile = {
     family,
     productCode,
-    label: resolveSqlDialect(dbType).label,
+    label: DB_TYPE_REGISTRY[productCode]?.label || resolveSqlDialect(dbType).label,
     types: [...FAMILY_TYPES[family]],
     defaultType: FAMILY_TYPES[family][0] || 'VARCHAR(255)',
     indexTypes: ['BTREE'],
@@ -209,7 +225,7 @@ export function resolveTableDesignerProfile(dbType?: null | string): TableDesign
     ];
   }
   if (productCode === 'DM') {
-    profile.types = DM_TYPES;
+    profile.types = [...DM_TYPES];
     profile.defaultType = 'BIGINT';
   }
   return profile;
@@ -225,28 +241,28 @@ const COLUMN_PARAMETER_TYPES: Record<SqlDialectFamily, {
 }> = {
   MYSQL_LIKE: {
     fractional: ['DATETIME', 'TIME', 'TIMESTAMP'],
-    length: ['BINARY', 'BIT', 'CHAR', 'VARBINARY', 'VARCHAR'],
+    length: ['BINARY', 'BIT', 'CHAR', 'FLOAT', 'VARBINARY', 'VARCHAR'],
     precisionScale: ['DECIMAL', 'NUMERIC'],
   },
   POSTGRES_LIKE: {
-    fractional: ['TIME', 'TIME WITH TIME ZONE', 'TIMESTAMP', 'TIMESTAMP WITH TIME ZONE', 'TIMESTAMPTZ'],
-    length: ['BIT', 'BIT VARYING', 'CHAR', 'CHARACTER', 'CHARACTER VARYING', 'VARCHAR'],
+    fractional: ['TIME', 'TIME WITH TIME ZONE', 'TIME WITHOUT TIME ZONE', 'TIMETZ', 'TIMESTAMP', 'TIMESTAMP WITH TIME ZONE', 'TIMESTAMP WITHOUT TIME ZONE', 'TIMESTAMPTZ'],
+    length: ['BIT', 'BIT VARYING', 'CHAR', 'CHARACTER', 'CHARACTER VARYING', 'FLOAT', 'VARCHAR'],
     precisionScale: ['DECIMAL', 'NUMERIC'],
   },
   ORACLE_LIKE: {
-    fractional: ['TIMESTAMP', 'TIMESTAMP WITH LOCAL TIME ZONE', 'TIMESTAMP WITH TIME ZONE'],
-    length: ['CHAR', 'FLOAT', 'NCHAR', 'NVARCHAR2', 'RAW', 'VARCHAR', 'VARCHAR2'],
+    fractional: ['TIME', 'TIMESTAMP', 'TIMESTAMP WITH LOCAL TIME ZONE', 'TIMESTAMP WITH TIME ZONE'],
+    length: ['CHAR', 'FLOAT', 'NCHAR', 'NVARCHAR2', 'RAW', 'UROWID', 'VARCHAR', 'VARCHAR2', 'BINARY', 'VARBINARY'],
     precisionScale: ['DECIMAL', 'NUMBER', 'NUMERIC'],
   },
   SQLSERVER_LIKE: {
     fractional: ['DATETIME2', 'DATETIMEOFFSET', 'TIME'],
-    length: ['BINARY', 'CHAR', 'FLOAT', 'NCHAR', 'NVARCHAR', 'VARBINARY', 'VARCHAR'],
+    length: ['BINARY', 'CHAR', 'FLOAT', 'NCHAR', 'NVARCHAR', 'VARBINARY', 'VARCHAR', 'VECTOR'],
     precisionScale: ['DECIMAL', 'NUMERIC'],
   },
   SQLITE_LIKE: { fractional: [], length: [], precisionScale: [] },
   H2_LIKE: {
     fractional: ['TIME', 'TIME WITH TIME ZONE', 'TIMESTAMP', 'TIMESTAMP WITH TIME ZONE'],
-    length: ['BINARY', 'BINARY VARYING', 'CHAR', 'CHARACTER VARYING', 'VARCHAR'],
+    length: ['BINARY', 'BINARY VARYING', 'CHAR', 'CHARACTER VARYING', 'VARCHAR', 'DECFLOAT', 'JAVA_OBJECT'],
     precisionScale: ['DECIMAL', 'NUMERIC'],
   },
   MONGODB_LIKE: { fractional: [], length: [], precisionScale: [] },
@@ -256,9 +272,136 @@ function normalizedTypeName(dataType: string): string {
   return String(dataType || '').trim().replaceAll(/\s+/g, ' ').toUpperCase();
 }
 
-/** 自增/Identity 只开放给各产品能稳定支持的数值类型，避免生成必然失败的 DDL。 */
-function supportsAutoIncrementType(column: TableDesignColumn, profile: TableDesignerProfile): boolean {
+/** 达梦与 Oracle 共用方言族，但小数秒精度上限必须按真实产品区分。 @author yanch */
+function fractionalPrecisionLimit(profile: TableDesignerProfile): number {
+  if (profile.productCode === 'DM') return 6;
+  if (profile.family === 'SQLSERVER_LIKE') return 7;
+  return ['ORACLE_LIKE', 'H2_LIKE'].includes(profile.family) ? 9 : 6;
+}
+
+/** 类型切换使用当前类型的安全默认参数，不沿用上一种类型的长度或精度。 @author yanch */
+export function normalizeColumnTypeSelection(column: TableDesignColumn, profile: TableDesignerProfile): void {
+  const parsed = splitColumnType(column.dataType, undefined, undefined, profile.family);
+  Object.assign(column, parsed);
+  const mode = resolveColumnParameterMode(column.dataType, profile.family);
+  if (!column.length && mode === 'length') {
+    const type = normalizedTypeName(column.dataType).replace(/(?:\[\])+|\s+ARRAY$/, '').trim();
+    if (/^(VARCHAR2?|NVARCHAR2?|CHARACTER VARYING|VARBINARY|BINARY VARYING|RAW)$/.test(type)) column.length = '255';
+    else if (/^(CHAR|CHARACTER|NCHAR|BIT|BINARY)$/.test(type)) column.length = '1';
+    // FLOAT、DECFLOAT 等的精度留空，使用数据库默认值，不能填字符串的 255。
+  }
+  if (profile.family === 'POSTGRES_LIKE' && /^(BIG|SMALL)?SERIAL$/i.test(column.dataType)) {
+    column.autoIncrement = true;
+    column.nullable = false;
+  }
+  if (!supportsAutoIncrementType(column, profile)) column.autoIncrement = false;
+}
+
+/** 给参数输入提供产品专属说明，复杂原生声明可直接在类型框填写。 @author yanch */
+export function columnParameterHint(column: TableDesignColumn, profile: TableDesignerProfile): string {
   const type = normalizedTypeName(column.dataType);
+  const mode = resolveColumnParameterMode(type, profile.family);
+  if (['ENUM', 'SET'].includes(type)) return "成员列表，例如 'small','large'（包含单引号）";
+  if (profile.family === 'SQLSERVER_LIKE' && type === 'VECTOR') return '向量维度 1–1998（float32）；float16 请填写完整原生声明';
+  if (mode === 'fractional') return `小数秒精度 0–${fractionalPrecisionLimit(profile)}，留空使用数据库默认值`;
+  if (mode === 'precision-scale') return profile.family === 'POSTGRES_LIKE'
+    ? '精度 1–1000；PostgreSQL 15+ 支持负小数位及小数位大于精度'
+    : profile.family === 'ORACLE_LIKE' && profile.productCode !== 'DM'
+      ? '精度 1–38，小数位 -84–127；例如 NUMBER(4,-2)'
+      : '填写总精度及小数位；小数位不能大于精度';
+  if (mode === 'length') return profile.family === 'SQLSERVER_LIKE'
+    ? '正整数；VARCHAR / NVARCHAR / VARBINARY 支持 MAX'
+    : profile.family === 'ORACLE_LIKE' && profile.productCode !== 'DM'
+      ? '正整数；CHAR / VARCHAR2 支持 30 CHAR 或 30 BYTE'
+      : '填写正整数；留空是否有效取决于数据库和字段类型';
+  return '无独立长度参数；复杂类型请填写完整原生声明，例如 INTERVAL DAY(3) TO SECOND(6)';
+}
+
+/** 校验单列参数，供界面实时提示和保存 SQL 共用；不执行 SQL。 @author yanch */
+export function validateColumnParameters(column: TableDesignColumn, profile: TableDesignerProfile): string[] {
+  const errors: string[] = [];
+  const family = profile.family;
+  const type = normalizedTypeName(column.dataType).replace(/\s+UNSIGNED$/, '');
+  const mode = resolveColumnParameterMode(type, family);
+  const length = String(column.length || '').trim();
+  const scale = String(column.scale || '').trim();
+  const arrayBase = type.replace(/(?:\[\s*\d*\s*\])+|\s+ARRAY(?:\[\d+\])?$/, '').trim();
+  const nativeLength = family === 'ORACLE_LIKE' && profile.productCode !== 'DM'
+    && ['CHAR', 'VARCHAR', 'VARCHAR2'].includes(type) && /^\d+\s+(?:BYTE|CHAR)$/i.test(length);
+  const nativePrecision = family === 'ORACLE_LIKE' && profile.productCode !== 'DM' && type === 'NUMBER' && length === '*';
+  const maxLength = family === 'SQLSERVER_LIKE' && ['VARCHAR', 'NVARCHAR', 'VARBINARY'].includes(type) && /^MAX$/i.test(length);
+  const numberLength = /^\d+$/.test(length) || nativeLength;
+  if (length && mode !== 'free' && mode !== 'none' && !numberLength && !maxLength && !nativePrecision) errors.push('长度/精度格式无效');
+  const zeroLength = family === 'MYSQL_LIKE' && ['CHAR', 'VARCHAR', 'BINARY', 'VARBINARY'].includes(type);
+  if (numberLength && Number.parseInt(length) <= 0 && mode !== 'fractional' && !zeroLength) errors.push('长度/精度必须大于 0');
+  const requiresLength = (family === 'MYSQL_LIKE' && ['VARCHAR', 'VARBINARY'].includes(type))
+    || (family === 'ORACLE_LIKE' && profile.productCode !== 'DM' && ['VARCHAR', 'VARCHAR2', 'NVARCHAR2', 'RAW'].includes(type))
+    || (family === 'SQLSERVER_LIKE' && type === 'VECTOR');
+  if (requiresLength && !length) errors.push(`${type} 必须填写长度`);
+  const enumType = ['MYSQL_LIKE', 'H2_LIKE'].includes(family) && ['ENUM', 'SET'].includes(type);
+  if (enumType && !/^\s*'(?:[^'\\]|\\.|'')*'\s*(?:,\s*'(?:[^'\\]|\\.|'')*'\s*)*$/.test(length)) errors.push(`${type} 需要带单引号的成员列表，例如 'a','b'`);
+  if (scale && mode !== 'precision-scale') errors.push('此类型不支持独立小数位');
+  if (scale && mode === 'precision-scale') {
+    const signed = family === 'POSTGRES_LIKE' || (family === 'ORACLE_LIKE' && profile.productCode !== 'DM');
+    if (!(signed ? /^-?\d+$/ : /^\d+$/).test(scale)) errors.push('小数位格式无效');
+    if (!length) errors.push('设置小数位时必须同时填写精度');
+    if (!signed && Number(scale) > Number(length)) errors.push('小数位不能大于精度');
+    if (family === 'POSTGRES_LIKE' && Math.abs(Number(scale)) > 1000) errors.push('小数位必须在 -1000–1000 之间');
+    if (family === 'ORACLE_LIKE' && profile.productCode !== 'DM' && (Number(scale) < -84 || Number(scale) > 127)) errors.push('小数位必须在 -84–127 之间');
+    if (family === 'MYSQL_LIKE' && Number(scale) > 30) errors.push('MySQL 小数位不能超过 30');
+  }
+  if (mode === 'precision-scale' && /^\d+$/.test(length)) {
+    const limit = family === 'MYSQL_LIKE' ? 65 : family === 'POSTGRES_LIKE' ? 1000
+      : ['ORACLE_LIKE', 'SQLSERVER_LIKE'].includes(family) ? 38 : 100000;
+    if (Number(length) > limit) errors.push(`精度不能超过 ${limit}`);
+  }
+  if (mode === 'fractional' && /^\d+$/.test(length)) {
+    const limit = fractionalPrecisionLimit(profile);
+    if (Number(length) > limit) errors.push(`小数秒精度必须在 0–${limit} 之间`);
+  }
+  if (mode === 'length' && numberLength) {
+    const size = Number.parseInt(length);
+    const floatLimit = family === 'ORACLE_LIKE' ? 126 : 53;
+    if (arrayBase === 'FLOAT' && size > floatLimit) errors.push(`FLOAT 精度不能超过 ${floatLimit}`);
+    if (family === 'MYSQL_LIKE' && type === 'BIT' && size > 64) errors.push('BIT 长度不能超过 64');
+    if (family === 'MYSQL_LIKE' && ['CHAR', 'BINARY'].includes(type) && size > 255) errors.push(`${type} 长度不能超过 255`);
+    if (family === 'SQLSERVER_LIKE') {
+      if (type === 'VECTOR' && size > 1998) errors.push('float32 向量维度不能超过 1998');
+      const limit = ['NCHAR', 'NVARCHAR'].includes(type) ? 4000 : ['CHAR', 'VARCHAR', 'BINARY', 'VARBINARY'].includes(type) ? 8000 : undefined;
+      if (limit && size > limit) errors.push(`${type} 长度不能超过 ${limit}，可变长类型可使用 MAX`);
+    }
+  }
+  if (column.autoIncrement && !supportsAutoIncrementType(column, profile)) errors.push(`${column.dataType} 不支持自增`);
+  // 已存在的 PostgreSQL SERIAL 默认值由序列提供，不能把元数据中的 nextval 当作用户新增默认值。
+  if (column.defaultValue.trim() && !column.originalName && (column.autoIncrement || /^(BIG|SMALL)?SERIAL$/.test(type))) errors.push('自增字段不能同时指定默认值');
+  if (family === 'SQLSERVER_LIKE' && ['ROWVERSION', 'TIMESTAMP'].includes(type) && (column.defaultValue.trim() || column.primary)) errors.push('ROWVERSION / TIMESTAMP 不能设置默认值或主键');
+  if (family === 'MONGODB_LIKE') {
+    const types = column.dataType.split('|').map(item => item.trim());
+    if (types.some(item => !FAMILY_TYPES.MONGODB_LIKE.includes(item))) errors.push('请输入有效的 BSON 类型别名，多个类型用 | 分隔');
+  }
+  return errors;
+}
+
+/** 版本和弃用提示在选型时可见，也随 SQL 预览返回，避免等保存失败才发现。 @author yanch */
+export function columnTypeNotice(column: TableDesignColumn, profile: TableDesignerProfile): string {
+  const type = normalizedTypeName(column.dataType);
+  if (profile.family === 'ORACLE_LIKE' && profile.productCode !== 'DM') {
+    if (type === 'JSON') return '原生 JSON 需要 Oracle 21c+';
+    if (type === 'BOOLEAN') return 'SQL BOOLEAN 需要 Oracle 23c/23ai+';
+    if (['LONG', 'LONG RAW'].includes(type)) return '旧类型，建议使用 CLOB / BLOB';
+  }
+  if (profile.family === 'SQLSERVER_LIKE') {
+    if (/^(JSON|VECTOR)(?:\(|$)/.test(type)) return '需要 SQL Server 2025 或支持该类型的 Azure SQL；请确认目标版本';
+    if (['TEXT', 'NTEXT', 'IMAGE'].includes(type)) return '旧类型，建议使用可变长类型 MAX';
+  }
+  if (profile.family === 'POSTGRES_LIKE' && type.includes('MULTIRANGE')) return '多范围类型需要 PostgreSQL 14+；兼容产品需确认支持';
+  if (profile.family === 'MONGODB_LIKE' && /(?:undefined|dbPointer|symbol|javascriptWithScope)/.test(column.dataType)) return '已弃用 BSON 类型，仅用于历史兼容';
+  return '';
+}
+
+/** 自增/Identity 只开放给各产品能稳定支持的数值类型，避免生成必然失败的 DDL。 */
+export function supportsAutoIncrementType(column: TableDesignColumn, profile: TableDesignerProfile): boolean {
+  const type = normalizedTypeName(column.dataType).replace(/\s+UNSIGNED$/, '');
   const family = profile.family;
   if (family === 'MYSQL_LIKE') {
     return ['BIGINT', 'INT', 'INTEGER', 'MEDIUMINT', 'SMALLINT', 'TINYINT'].includes(type);
@@ -268,7 +411,7 @@ function supportsAutoIncrementType(column: TableDesignColumn, profile: TableDesi
   }
   if (family === 'ORACLE_LIKE') {
     const types = profile.productCode === 'DM'
-      ? ['BIGINT', 'DECIMAL', 'INT', 'INTEGER', 'NUMBER', 'NUMERIC', 'SMALLINT', 'TINYINT']
+      ? ['BIGINT', 'INT', 'INTEGER', 'SMALLINT', 'TINYINT']
       : ['DECIMAL', 'INT', 'INTEGER', 'NUMBER', 'NUMERIC', 'SMALLINT'];
     return types.includes(type)
       && (!column.scale || Number(column.scale) === 0);
@@ -286,9 +429,13 @@ export function resolveColumnParameterMode(
   family: SqlDialectFamily,
 ): ColumnParameterMode {
   if (family === 'MONGODB_LIKE' || family === 'SQLITE_LIKE') return 'none';
-  const type = normalizedTypeName(dataType)
+  let type = normalizedTypeName(dataType)
     .replace(/\s+(?:UNSIGNED(?:\s+ZEROFILL)?|ZEROFILL)$/i, '');
-  if (family === 'MYSQL_LIKE' && ['ENUM', 'SET'].includes(type)) return 'free';
+  // 完整原生声明直接保留，不能在尾部再拼接一组参数。
+  if (type.includes('(')) return 'none';
+  if (family === 'POSTGRES_LIKE') type = type.replace(/(?:\[\s*\d*\s*\])+$/, '').trim();
+  if (family === 'H2_LIKE') type = type.replace(/\s+ARRAY(?:\[\d+\])?$/, '').trim();
+  if (['MYSQL_LIKE', 'H2_LIKE'].includes(family) && ['ENUM', 'SET'].includes(type)) return 'free';
   const config = COLUMN_PARAMETER_TYPES[family];
   if (config.precisionScale.includes(type)) return 'precision-scale';
   if (config.fractional.includes(type)) return 'fractional';
@@ -312,8 +459,11 @@ export function splitColumnType(
   let dataType = raw;
   let length = '';
   let scale = '';
-  const match = raw.match(/^([^()]+?)\s*\((.*)\)\s*(.*)$/);
-  if (match) {
+  const match = raw.match(/^([^()]+?)\s*\((.*)\)\s*([^()]*)$/);
+  // 多组括号属于完整原生语法；ENUM 的字符串内部可以包含括号。
+  const simpleParameters = match && (!String(match[2]).includes('(') || /^(ENUM|SET)$/i.test(String(match[1]).trim()))
+    && !(family === 'SQLSERVER_LIKE' && /^VECTOR$/i.test(String(match[1]).trim()) && String(match[2]).includes(','));
+  if (match && simpleParameters) {
     const base = String(match[1] || '').trim();
     const suffix = String(match[3] || '').trim();
     dataType = suffix ? `${base} ${suffix}` : base;
@@ -330,7 +480,7 @@ export function splitColumnType(
   const mode = resolveColumnParameterMode(dataType, family);
   if (!length && mode === 'fractional' && dbScale !== null && dbScale !== undefined) {
     length = String(dbScale);
-  } else if (!length && ['free', 'length', 'precision-scale'].includes(mode)
+  } else if (!length && ['length', 'precision-scale'].includes(mode)
     && dbLength !== null && dbLength !== undefined && Number(dbLength) > 0) {
     length = String(dbLength);
   }
@@ -348,7 +498,9 @@ function composeColumnType(column: TableDesignColumn, family: SqlDialectFamily):
   const scale = String(column.scale || '').trim();
   if (mode === 'none' || !length) return raw;
   const args = mode === 'precision-scale' && scale ? `${length},${scale}` : length;
-  const timeZone = raw.match(/^(TIME(?:STAMP)?)(\s+WITH(?:\s+LOCAL)?\s+TIME\s+ZONE)$/i);
+  const array = raw.match(/^(.+?)((?:\[\s*\d*\s*\])+|\s+ARRAY(?:\[\d+\])?)$/i);
+  if (array) return `${composeColumnType({ ...column, dataType: array[1]! }, family)}${array[2]}`;
+  const timeZone = raw.match(/^(TIME(?:STAMP)?)(\s+(?:WITH(?:\s+LOCAL)?|WITHOUT)\s+TIME\s+ZONE)$/i);
   if (timeZone) return `${timeZone[1]}(${args})${timeZone[2]}`;
   const attributes = raw.match(/^(.+?)(\s+(?:UNSIGNED(?:\s+ZEROFILL)?|ZEROFILL))$/i);
   if (attributes) return `${attributes[1]}(${args})${attributes[2]}`;
@@ -409,7 +561,8 @@ function columnType(column: TableDesignColumn, family: SqlDialectFamily): string
   if (!column.autoIncrement) return raw;
   if (family === 'POSTGRES_LIKE') {
     if (/\bBIGINT\b/i.test(raw)) return 'BIGSERIAL';
-    if (/\b(SMALLINT|INT|INTEGER)\b/i.test(raw)) return 'SERIAL';
+    if (/\bSMALLINT\b/i.test(raw)) return 'SMALLSERIAL';
+    if (/\b(INT|INTEGER)\b/i.test(raw)) return 'SERIAL';
   }
   return raw;
 }
@@ -420,6 +573,7 @@ function columnDefinition(
   family: SqlDialectFamily,
   quote: (name: string) => string,
   includeName = true,
+  dbType?: null | string,
 ): string {
   const parts: string[] = [];
   if (includeName) parts.push(quote(column.name));
@@ -427,7 +581,7 @@ function columnDefinition(
   if (column.autoIncrement) {
     if (family === 'MYSQL_LIKE') parts.push('AUTO_INCREMENT');
     if (family === 'SQLSERVER_LIKE') parts.push('IDENTITY(1,1)');
-    if (family === 'ORACLE_LIKE') parts.push('GENERATED BY DEFAULT AS IDENTITY');
+    if (family === 'ORACLE_LIKE') parts.push(normalizeDbTypeCode(dbType) === 'DM' ? 'IDENTITY(1,1)' : 'GENERATED BY DEFAULT AS IDENTITY');
     if (family === 'H2_LIKE') parts.push('GENERATED BY DEFAULT AS IDENTITY');
     if (family === 'SQLITE_LIKE' && column.primary && /^INTEGER$/i.test(column.dataType.trim())) {
       parts.push('PRIMARY KEY AUTOINCREMENT');
@@ -491,7 +645,8 @@ function indexCreateSql(
       return `CREATE NONCLUSTERED COLUMNSTORE INDEX ${dialect.quoteIdent(index.name)} ON ${target} (${csv(index.columns, dialect.quoteIdent)});`;
     }
     if (type === 'SPATIAL') {
-      return `CREATE SPATIAL INDEX ${dialect.quoteIdent(index.name)} ON ${target} (${csv(index.columns, dialect.quoteIdent)});`;
+      const boundingBox = index.boundingBox?.trim();
+      return `CREATE SPATIAL INDEX ${dialect.quoteIdent(index.name)} ON ${target} (${csv(index.columns, dialect.quoteIdent)})${boundingBox ? ` USING GEOMETRY_GRID WITH (BOUNDING_BOX = (${boundingBox}))` : ''};`;
     }
     if (type === 'PRIMARY XML') {
       return `CREATE PRIMARY XML INDEX ${dialect.quoteIdent(index.name)} ON ${target} (${csv(index.columns, dialect.quoteIdent)});`;
@@ -595,9 +750,10 @@ function mongoValidator(model: TableDesignModel): Record<string, unknown> {
   const baseProperties = base.properties && typeof base.properties === 'object'
     ? base.properties as Record<string, Record<string, unknown>>
     : {};
-  const properties: Record<string, unknown> = {};
+  // 原型为空，确保名为 __proto__ / constructor 的字段也能作为普通 JSON 属性输出。
+  const properties: Record<string, unknown> = Object.create(null);
   const required: string[] = [];
-  for (const column of model.columns.filter((item) => item.name && item.name !== '_id')) {
+  for (const column of model.columns.filter((item) => item.name)) {
     const bsonTypes = String(column.dataType || 'string')
       .split('|')
       .map((item) => item.trim())
@@ -629,6 +785,49 @@ function validateModelCompatibility(
   warnings: string[],
   errors: string[],
 ): void {
+  const family = profile.family;
+  const key = (name: string) => ['POSTGRES_LIKE', 'ORACLE_LIKE', 'H2_LIKE', 'MONGODB_LIKE'].includes(family) ? name.trim() : name.trim().toLowerCase();
+  const validName = (name: string) => !!name.trim() && !/[\u0000-\u001F]/.test(name);
+  if (!validName(model.tableName)) errors.push('表名不能为空或包含控制字符');
+  if (!model.columns.length && family !== 'MONGODB_LIKE') errors.push('至少需要一个字段');
+  const names = new Set<string>();
+  for (const column of model.columns) {
+    if (!validName(column.name) || !column.dataType.trim()) errors.push('字段名和类型不能为空或包含控制字符');
+    if (names.has(key(column.name))) errors.push(`字段名重复：${column.name}`);
+    names.add(key(column.name));
+  }
+  const autoColumns = model.columns.filter(column => column.autoIncrement);
+  const primary = model.columns.filter(column => column.primary);
+  if (['MYSQL_LIKE', 'SQLSERVER_LIKE', 'SQLITE_LIKE'].includes(family) && autoColumns.length > 1) errors.push(`${profile.label} 一张表只能设置一个自增字段`);
+  if (family === 'MYSQL_LIKE') {
+    for (const column of autoColumns) {
+      const indexedFirst = primary[0]?.name === column.name || model.indexes.some(index => ['BTREE', 'HASH'].includes(normalizedTypeName(index.type)) && index.columns[0] === column.name);
+      if (!indexedFirst) errors.push(`自增字段「${column.name}」必须是主键或普通索引的首列`);
+    }
+  }
+  if (family === 'SQLITE_LIKE') {
+    if (autoColumns.length && (primary.length !== 1 || !autoColumns[0]?.primary || model.options.withoutRowid)) errors.push('SQLite AUTOINCREMENT 必须使用单列 INTEGER 主键，且不能启用 WITHOUT ROWID');
+    if (model.options.withoutRowid && !primary.length) errors.push('SQLite WITHOUT ROWID 必须设置主键');
+    if (model.options.strict) {
+      for (const column of model.columns) {
+        if (!['INT', 'INTEGER', 'REAL', 'TEXT', 'BLOB', 'ANY'].includes(normalizedTypeName(column.dataType))) errors.push(`SQLite STRICT 字段「${column.name}」仅允许 INT / INTEGER / REAL / TEXT / BLOB / ANY`);
+      }
+    }
+  }
+  if (family === 'SQLSERVER_LIKE' && model.columns.filter(column => ['ROWVERSION', 'TIMESTAMP'].includes(normalizedTypeName(column.dataType))).length > 1) errors.push('SQL Server 一张表只能有一个 ROWVERSION / TIMESTAMP 字段');
+  // 索引/外键引用必须指向当前字段；防止删除字段后留下悬空引用。
+  for (const [label, objects] of [['索引', model.indexes], ['外键', model.foreignKeys]] as const) {
+    const objectNames = new Set<string>();
+    for (const object of objects) {
+      if (!validName(object.name)) errors.push(`${label}名称不能为空`);
+      if (objectNames.has(key(object.name))) errors.push(`${label}名称重复：${object.name}`);
+      objectNames.add(key(object.name));
+      const optional = label === '索引' && family === 'SQLSERVER_LIKE' && 'type' in object && object.type === 'CLUSTERED COLUMNSTORE';
+      if (!object.columns.length && !optional) errors.push(`${label}「${object.name}」必须选择字段`);
+      if (new Set(object.columns.map(key)).size !== object.columns.length) errors.push(`${label}「${object.name}」包含重复字段`);
+      if (family !== 'MONGODB_LIKE' && object.columns.some(name => !names.has(key(name)))) errors.push(`${label}「${object.name}」引用了不存在的字段`);
+    }
+  }
   for (const column of model.columns) {
     const originalColumn = column.originalName
       ? original?.columns.find((item) => item.name === column.originalName)
@@ -646,24 +845,13 @@ function validateModelCompatibility(
     });
     // 修改表名、备注或可空性时，不用新规则重新否定数据库中已经存在的合法原生类型。
     if (!definitionChanged) continue;
-    const mode = resolveColumnParameterMode(column.dataType, profile.family);
-    const length = String(column.length || '').trim();
-    const scale = String(column.scale || '').trim();
-    const nativeLength = profile.family === 'ORACLE_LIKE'
-      && mode === 'length' && /^\d+\s+(?:BYTE|CHAR)$/i.test(length);
-    if (length && mode !== 'free' && !/^\d+$/.test(length) && !nativeLength
-      && !(profile.family === 'SQLSERVER_LIKE' && mode === 'length' && /^MAX$/i.test(length))) {
-      errors.push(`字段「${column.name}」的长度/精度格式不受支持，请输入非负整数${profile.family === 'ORACLE_LIKE' ? '、数字加 CHAR/BYTE' : ''}${profile.family === 'SQLSERVER_LIKE' ? '或 MAX' : ''}。`);
+    errors.push(...validateColumnParameters(column, profile).map(error => `字段「${column.name}」：${error}`));
+    const notice = columnTypeNotice(column, profile);
+    if (notice) warnings.push(notice);
+    if (family === 'ORACLE_LIKE' && profile.productCode !== 'DM') {
+      if (column.autoIncrement) warnings.push('Oracle Identity 自增需要 12c+。');
     }
-    if (scale && (!/^\d+$/.test(scale) || mode !== 'precision-scale')) {
-      errors.push(`字段「${column.name}」的小数位只适用于 DECIMAL / NUMERIC / NUMBER，且必须是非负整数。`);
-    }
-    if (/^\d+$/.test(length) && /^\d+$/.test(scale) && Number(scale) > Number(length)) {
-      errors.push(`字段「${column.name}」的小数位不能大于精度。`);
-    }
-    if (column.autoIncrement && !supportsAutoIncrementType(column, profile)) {
-      errors.push(`${profile.label} 的字段「${column.name}」不能在 ${column.dataType} 类型上设置自增。`);
-    }
+    if (family === 'POSTGRES_LIKE' && (Number(column.scale) < 0 || Number(column.scale) > Number(column.length))) warnings.push('负小数位或小数位大于精度需要 PostgreSQL 15+。');
   }
 
   const clustered = model.indexes.filter((item) => normalizedTypeName(item.type).startsWith('CLUSTERED'));
@@ -732,7 +920,7 @@ function validateModelCompatibility(
       errors.push(`MySQL FULLTEXT 索引「${index.name}」只能使用字符或文本字段。`);
     }
     if (profile.family === 'MYSQL_LIKE' && type === 'SPATIAL'
-      && indexedTypes.some((item) => !['GEOMETRY', 'POINT'].includes(item))) {
+      && indexedTypes.some((item) => !['GEOMETRY', 'POINT', 'LINESTRING', 'POLYGON', 'MULTIPOINT', 'MULTILINESTRING', 'MULTIPOLYGON', 'GEOMETRYCOLLECTION'].includes(item))) {
       errors.push(`MySQL SPATIAL 索引「${index.name}」只能使用空间字段。`);
     }
     if (profile.family === 'H2_LIKE' && type === 'SPATIAL'
@@ -747,6 +935,15 @@ function validateModelCompatibility(
       && indexedTypes.some((item) => item !== 'XML')) {
       errors.push(`SQL Server PRIMARY XML 索引「${index.name}」只能使用 XML 字段。`);
     }
+    if (family === 'SQLSERVER_LIKE' && ['SPATIAL', 'PRIMARY XML'].includes(type)) {
+      if (!primary.length || clustered.length) errors.push(`SQL Server ${type} 索引「${index.name}」需要聚集主键；不能同时指定其他聚集索引。`);
+      if (type === 'SPATIAL' && indexedTypes.includes('GEOMETRY')) {
+        const raw = String(index.boundingBox || '').trim();
+        const parts = raw.split(',').map(value => Number(value.trim()));
+        const numeric = /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?$/i;
+        if (parts.length !== 4 || raw.split(',').some(value => !numeric.test(value.trim())) || parts.some(value => !Number.isFinite(value)) || !(parts[0]! < parts[2]! && parts[1]! < parts[3]!)) errors.push(`空间索引「${index.name}」必须填写有效的 xmin,ymin,xmax,ymax 边界，且最小值小于最大值。`);
+      } else if (type === 'SPATIAL' && index.boundingBox?.trim()) errors.push(`geography 空间索引「${index.name}」不使用 BOUNDING_BOX，请清空边界。`);
+    }
   }
 
   for (const fk of model.foreignKeys) {
@@ -754,6 +951,8 @@ function validateModelCompatibility(
       ? original?.foreignKeys.find((item) => item.name === fk.originalName)
       : undefined;
     if (originalForeignKey && sameForeignKey(originalForeignKey, fk)) continue;
+    if (!fk.referencedTable.trim() || !fk.referencedColumns.length || fk.columns.length !== fk.referencedColumns.length) errors.push(`外键「${fk.name}」必须填写引用表及数量一致的引用字段`);
+    if ([fk.onDelete, fk.onUpdate].includes('SET NULL') && fk.columns.some(name => model.columns.some(column => column.name === name && (!column.nullable || column.primary)))) errors.push(`外键「${fk.name}」使用 SET NULL 时，本表字段必须允许空值且不能是主键`);
     if (!profile.foreignKeyDeleteActions.includes(fk.onDelete)) {
       errors.push(`${profile.label} 不支持外键「${fk.name}」的 ON DELETE ${fk.onDelete}。`);
     }
@@ -762,11 +961,11 @@ function validateModelCompatibility(
     }
   }
 
-  if (original && ['POSTGRES_LIKE', 'SQLSERVER_LIKE'].includes(profile.family)) {
+  if (original && ['POSTGRES_LIKE', 'SQLSERVER_LIKE', 'ORACLE_LIKE', 'H2_LIKE'].includes(profile.family)) {
     for (const before of original.columns) {
       const after = model.columns.find((item) => item.originalName === before.name);
       if (after && before.autoIncrement !== after.autoIncrement) {
-        const feature = profile.family === 'SQLSERVER_LIKE' ? 'IDENTITY' : 'SERIAL/自增序列';
+        const feature = profile.family === 'POSTGRES_LIKE' ? 'SERIAL/自增序列' : 'IDENTITY';
         errors.push(`${profile.label} 不能通过当前安全 ALTER 流程修改字段「${before.name}」的 ${feature} 属性，请重建字段。`);
       }
     }
@@ -793,11 +992,12 @@ function generateCreate(
     ];
   }
   const dialect = resolveSqlDialect(dbType);
-  const definitions = model.columns.map((column) => `  ${columnDefinition(column, profile.family, dialect.quoteIdent)}`);
+  const definitions = model.columns.map((column) => `  ${columnDefinition(column, profile.family, dialect.quoteIdent, true, dbType)}`);
   const primary = model.columns.filter((column) => column.primary);
   const sqliteInlinePrimary = profile.family === 'SQLITE_LIKE' && primary.length === 1
     && primary[0]?.autoIncrement && /^INTEGER$/i.test(primary[0].dataType.trim());
-  if (primary.length && !sqliteInlinePrimary) definitions.push(`  PRIMARY KEY (${csv(primary.map((column) => column.name), dialect.quoteIdent)})`);
+  const nonclusteredPrimary = profile.family === 'SQLSERVER_LIKE' && model.indexes.some(index => normalizedTypeName(index.type).startsWith('CLUSTERED')) ? ' NONCLUSTERED' : '';
+  if (primary.length && !sqliteInlinePrimary) definitions.push(`  PRIMARY KEY${nonclusteredPrimary} (${csv(primary.map((column) => column.name), dialect.quoteIdent)})`);
   if (profile.supportsForeignKeys) {
     definitions.push(...model.foreignKeys.map((fk) => `  ${fkClause(fk, dbType, schema)}`));
   }
@@ -840,7 +1040,9 @@ function generateAlterColumn(
   }
   const name = dialect.quoteIdent(after.name);
   if (family === 'POSTGRES_LIKE') {
-    if (typeChanged) out.push(`ALTER TABLE ${target} ALTER COLUMN ${name} TYPE ${composeColumnType(after, family)};`);
+    // SERIAL 仅可用于新列声明；已有序列列改类型必须使用其真实存储类型。
+    const storageType = composeColumnType(after, family).replace(/^BIGSERIAL$/i, 'BIGINT').replace(/^SMALLSERIAL$/i, 'SMALLINT').replace(/^SERIAL$/i, 'INTEGER');
+    if (typeChanged) out.push(`ALTER TABLE ${target} ALTER COLUMN ${name} TYPE ${storageType};`);
     if (nullabilityChanged) out.push(`ALTER TABLE ${target} ALTER COLUMN ${name} ${after.nullable && !after.primary ? 'DROP' : 'SET'} NOT NULL;`);
     if (defaultChanged) out.push(`ALTER TABLE ${target} ALTER COLUMN ${name} ${after.defaultValue.trim() ? `SET DEFAULT ${after.defaultValue.trim()}` : 'DROP DEFAULT'};`);
     if (before.comment !== after.comment) out.push(`COMMENT ON COLUMN ${target}.${name} IS ${dialect.literal(after.comment || '')};`);
@@ -848,7 +1050,7 @@ function generateAlterColumn(
   }
   if (family === 'ORACLE_LIKE') {
     if (typeChanged || nullabilityChanged || defaultChanged || before.autoIncrement !== after.autoIncrement) {
-      out.push(`ALTER TABLE ${target} MODIFY (${columnDefinition(after, family, dialect.quoteIdent)});`);
+      out.push(`ALTER TABLE ${target} MODIFY (${columnDefinition(after, family, dialect.quoteIdent, true, dbType)});`);
     }
     if (before.comment !== after.comment) out.push(`COMMENT ON COLUMN ${target}.${name} IS ${dialect.literal(after.comment || '')};`);
     return out;
@@ -917,7 +1119,8 @@ function generateAlter(
   } else {
     const beforePrimary = original.columns.filter((item) => item.primary).map((item) => item.name);
     const afterPrimary = model.columns.filter((item) => item.primary).map((item) => item.name);
-    const primaryChanged = stable(beforePrimary) !== stable(afterPrimary);
+    // 数据库会自动维护改名字段上的主键，不能仅因字段改名就删除并重建主键。
+    const primaryChanged = stable(beforePrimary) !== stable(model.columns.filter(item => item.primary).map(item => item.originalName || item.name));
     if (primaryChanged) {
       if (family === 'SQLITE_LIKE') {
         errors.push('SQLite 不能通过 ALTER TABLE 修改主键，请重建表后迁移数据。');
@@ -938,7 +1141,7 @@ function generateAlter(
       else if (!sameColumn(before, after)) out.push(...generateAlterColumn(dbType, schema, table, before, after, errors));
     }
     for (const column of model.columns.filter((item) => !item.originalName)) {
-      const definition = columnDefinition(column, family, dialect.quoteIdent);
+      const definition = columnDefinition(column, family, dialect.quoteIdent, true, dbType);
       if (family === 'ORACLE_LIKE') out.push(`ALTER TABLE ${tableNameSql(dbType, schema, table)} ADD (${definition});`);
       else if (family === 'SQLSERVER_LIKE') out.push(`ALTER TABLE ${tableNameSql(dbType, schema, table)} ADD ${definition};`);
       else out.push(`ALTER TABLE ${tableNameSql(dbType, schema, table)} ADD COLUMN ${definition};`);
@@ -1047,7 +1250,7 @@ export function generateTableDesignSql(args: {
   return {
     statements: normalized,
     sql: [...notices, ...normalized].join('\n\n'),
-    warnings,
-    errors,
+    warnings: [...new Set(warnings)],
+    errors: [...new Set(errors)],
   };
 }

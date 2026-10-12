@@ -12,15 +12,16 @@
  *
  * @author yanch
  */
+import { getResultDraft, putResultDraft, setResultSaving, syncBatchResult } from '../../composables/resultDraftStore';
 import type { QueryResultState } from '../../composables/useQueryTabs';
 import type { ExplainPlanState } from '../../utils/explainPlan';
 import type { TableRef } from '../../utils/resultRowSql';
 import type { ResultTableMeta } from '../../utils/resultJoinUpdate';
+import type { ResultEditParameter } from '../../utils/resultComparison';
 import type { DirtyRowEdit } from '../../utils/resultSheetValue';
 
 import {
   computed,
-  h,
   markRaw,
   nextTick,
   onBeforeUnmount,
@@ -31,11 +32,10 @@ import {
   watch,
 } from 'vue';
 
-import { ElCheckbox, ElMessage, ElMessageBox } from 'element-plus';
+import { ElMessage, ElMessageBox } from 'element-plus';
 
 import { buildResultTsv } from '../../utils/resultClipboard';
 import {
-  dedupeDeleteSql,
   planDeleteTargets,
   sameDeletePlan,
 } from '../../utils/resultDeleteTargets';
@@ -44,6 +44,8 @@ import {
   buildInsertSql,
   buildUpdateSql,
   parseQueryTables,
+  resultProjectionHints,
+  physicalColumnEquals,
 } from '../../utils/resultRowSql';
 import {
   buildMongoDeleteCommand,
@@ -54,7 +56,7 @@ import {
 } from '../../utils/mongoCommand';
 import {
   buildJoinCopyUpdateSqls,
-  buildJoinUpdateSqls,
+  compileJoinUpdatePlan,
 } from '../../utils/resultJoinUpdate';
 import {
   coerceSheetValue,
@@ -63,10 +65,6 @@ import {
   toSheetText,
 } from '../../utils/resultSheetValue';
 import { isClientPolicyError } from '../../utils/sqlWriteGuard';
-import {
-  rememberSkipNoPkWarn,
-  shouldSkipNoPkWarn,
-} from '../../utils/resultPrimaryKeys';
 import VirtualResultTable from './VirtualResultTable.vue';
 import CellContentDrawer from './CellContentDrawer.vue';
 import ExplainPlanPanel from './ExplainPlanPanel.vue';
@@ -104,7 +102,7 @@ const props = defineProps<{
    */
   executeRowDml?: (sql: string) => Promise<unknown>;
   /** 同一行涉及多表时，在后端同一事务中提交。 */
-  executeRowDmlBatch?: (sqls: string[]) => Promise<unknown>;
+  executeRowDmlBatch?: (sqls: string[], parameters?: ResultEditParameter[][]) => Promise<unknown>;
 }>();
 
 const emit = defineEmits<{
@@ -177,6 +175,10 @@ const formatDrawer = reactive({
 const editVisible = ref(false);
 const editForm = ref<Record<string, any>>({});
 const editOriginal = ref<Record<string, any> | null>(null);
+/** 保留非法 JSON 文本，并在提交前明确阻止保存。@author yanch */
+const editInvalidFields = ref(new Set<string>());
+/** 弹窗发起行下标独立于后续表格选中行，异步回调不得覆盖另一行。 */
+const editRowIndex = ref(-1);
 
 /** 是否处于单元格编辑 */
 const editMode = ref(false);
@@ -206,20 +208,53 @@ const displayRows = computed(() =>
 const dbType = computed(() => props.dbType || 'MY_SQL');
 const isMongo = computed(() => isMongoDbType(dbType.value));
 
-function matchResultColumn(name: string, cols: string[]): string | undefined {
-  if (cols.includes(name)) return name;
-  const lower = String(name).toLowerCase();
-  return cols.find((c) => c.toLowerCase() === lower);
+/** 每个结果只编译一次显示列到物理列/类型的映射，批量保存所有行复用。 */
+const columnBindings = computed(() => {
+  const hints = new Map(resultProjectionHints(props.result?.sourceSql || '', columns.value, props.result?.columnMetadata).map((hint) => [hint.resultName, hint]));
+  const metadata = new Map((props.result?.columnMetadata || []).map((column) => [column.label, column]));
+  return new Map(columns.value.map((name) => {
+    const hint = hints.get(name); const column = metadata.get(name);
+    return [name, { physical: column?.name || hint?.column || name, writable: hint?.writable !== false, metadata: column }];
+  }));
+});
+
+function physicalColumn(resultName: string): string {
+  const binding = columnBindings.value.get(resultName);
+  if (!binding?.writable) throw new Error(`表达式列 ${resultName} 不支持回写`);
+  return binding.physical;
 }
 
-/** 结果集里实际带上的主键列（用结果列的真实大小写，忽略元数据大小写差异） */
+function typedSqlValue(name: string, value: unknown) {
+  const metadata = columnBindings.value.get(name)?.metadata;
+  if (!metadata || value == null) return value;
+  return { __lemonTypedValue: { value, jdbcType: metadata.jdbcType, typeName: metadata.typeName } };
+}
+
+function mapPhysicalRow(row: Record<string, any>, selectedColumns = columns.value) {
+  const mapped: Record<string, any> = {};
+  for (const name of selectedColumns) {
+    const binding = columnBindings.value.get(name);
+    if (!binding?.writable) continue;
+    const value = typedSqlValue(name, row[name]);
+    if (Object.prototype.hasOwnProperty.call(mapped, binding.physical) && JSON.stringify(mapped[binding.physical]) !== JSON.stringify(value)) {
+      throw new Error(`字段 ${binding.physical} 的多个显示别名值不一致，请只保留一个别名`);
+    }
+    mapped[binding.physical] = value;
+  }
+  return mapped;
+}
+
+function mapTypedResultRow(row: Record<string, any>) {
+  return Object.fromEntries(columns.value.map((name) => [name, typedSqlValue(name, row[name])]));
+}
+
 const pkInResult = computed(() =>
   (props.primaryKeys || [])
-    .map((k) => matchResultColumn(k, columns.value))
+    .map((k) => columns.value.find((col) => { try { return physicalColumnEquals(physicalColumn(col), k, (props.tableMetas || []).flatMap((table) => table.columns)); } catch { return false; } }))
     .filter((k): k is string => !!k),
 );
 const tableHasPk = computed(() => (props.primaryKeys || []).length > 0);
-/** 有主键只用主键；无主键才退回结果列（执行前会再确认） */
+/** 定位要求完整主键；生成 SQL 时额外加入查询中可写列的原值检测冲突。 */
 const whereCols = computed(() =>
   tableHasPk.value ? pkInResult.value : columns.value,
 );
@@ -252,7 +287,7 @@ const canMutate = computed(
     (!!props.tableRef?.table || (props.tableMetas?.length || 0) > 0) &&
     !!selectedRow.value,
 );
-const canDeleteRow = computed(() => canMutate.value && !isJoinQuery.value);
+const canDeleteRow = computed(() => canMutate.value && !isJoinQuery.value && !editMode.value && !sheetSaving.value && !props.executing);
 /** 有勾选时菜单写明将删的行数，避免用户以为只删右键那一行 */
 const deleteMenuLabel = computed(() => {
   const count = selectedRows.value.length;
@@ -310,14 +345,19 @@ const canEnterSheet = computed(
 );
 
 /**
- * 修改/删除前检查主键：有主键必须出现在结果里；无主键先警告可能误伤其它行。
+ * 修改/删除前检查完整主键；无主键禁止自动回写，不用全列旧值猜测行身份。
  * 联表不走「无主键全列 WHERE」，改哪张表就要求该表主键出现在结果中（保存时再校验）。
  * 进入编辑前会再拉一次主键，避免空缓存把有主键的表当成无主键。
  */
 async function confirmRowMutation(action: '修改' | '删除'): Promise<boolean> {
+  const origin = props.result;
+  if (origin?.readOnlyReason) { ElMessage.warning(origin.readOnlyReason); return false; }
   if (props.ensurePrimaryKeys) {
     await props.ensurePrimaryKeys();
     await nextTick();
+  }
+  if (props.result !== origin || sheetSaving.value || props.executing) {
+    ElMessage.warning('结果已切换或正在执行，已取消本次操作'); return false;
   }
   if (props.primaryKeysReady === false) {
     ElMessage.warning('正在读取表主键，请稍后再试');
@@ -330,49 +370,15 @@ async function confirmRowMutation(action: '修改' | '删除'): Promise<boolean>
     }
     return true;
   }
-  if (tableHasPk.value && pkInResult.value.length === 0) {
+  if (tableHasPk.value && pkInResult.value.length !== (props.primaryKeys || []).length) {
     ElMessage.warning(
       `当前结果未包含主键（${(props.primaryKeys || []).join(', ')}），无法按主键定位。请在 SELECT 中带上主键列后再${action}`,
     );
     return false;
   }
-  if (!tableHasPk.value) {
-    if (shouldSkipNoPkWarn()) {
-      return true;
-    }
-    const skipState = reactive({ skip: false });
-    try {
-      await ElMessageBox({
-        title: '无主键风险提示',
-        type: 'warning',
-        showCancelButton: true,
-        confirmButtonText: `仍要${action}`,
-        cancelButtonText: '取消',
-        message: () =>
-          h('div', { class: 'no-pk-warn' }, [
-            h(
-              'p',
-              { style: 'margin: 0 0 12px; line-height: 1.5;' },
-              `未能识别到主键。${action}将按结果列的旧值匹配，只查出一列时可能改到其它行。`,
-            ),
-            h(
-              ElCheckbox,
-              {
-                modelValue: skipState.skip,
-                'onUpdate:modelValue': (v: boolean | string | number) => {
-                  skipState.skip = v === true;
-                },
-              },
-              () => '7天内不再提示',
-            ),
-          ]),
-      });
-      if (skipState.skip) {
-        rememberSkipNoPkWarn();
-      }
-    } catch {
-      return false;
-    }
+  if (!tableHasPk.value && !isMongo.value) {
+    ElMessage.warning('当前表没有可确认的主键，已禁止直接修改或删除。请添加主键，或在 SQL 编辑器中明确编写条件');
+    return false;
   }
   return true;
 }
@@ -578,6 +584,7 @@ async function copyText(text: string, tip?: string) {
 }
 
 function requireTable(): TableRef {
+  if (props.result?.readOnlyReason) throw new Error(props.result.readOnlyReason);
   if (!props.tableRef?.table) {
     throw new Error('无法识别结果对应的表，请使用单表 SELECT（如 SELECT * FROM db.table）');
   }
@@ -601,7 +608,7 @@ function joinUpdateContext() {
 /**
  * 新增行走 INSERT。只带用户填过的列，留空列不写，好让自增和默认值生效。
  */
-function buildInsertedRowSql(item: DirtyRowEdit): string {
+function buildInsertedRowSql(item: DirtyRowEdit, parameters?: ResultEditParameter[]): string {
   if (isJoinQuery.value) {
     throw new Error('联表结果不支持新增行，请对单表查询后再添加');
   }
@@ -624,15 +631,25 @@ function buildInsertedRowSql(item: DirtyRowEdit): string {
   }
   return buildInsertSql(
     table,
-    item.edited as Record<string, any>,
-    cols,
+    mapPhysicalRow(item.edited, cols),
+    cols.map(physicalColumn),
     dbType.value,
+    parameters,
   );
 }
 
-function buildEditsSqls(item: DirtyRowEdit): string[] {
+/** 联表来源/主键计划只在结果或元数据改变时编译，所有编辑行复用。 */
+const joinWritePlan = computed(() => {
+  if (!isJoinQuery.value || (props.tableMetas?.length || 0) < 2) return null;
+  const context = joinUpdateContext();
+  return compileJoinUpdatePlan(context.tables, context.resultCols, context.sourceSql, context.dbType, context.columnTables);
+});
+
+function buildEditsSqls(item: DirtyRowEdit, parameters?: ResultEditParameter[][]): string[] {
+  const bound: ResultEditParameter[] = [];
   if (item.inserted) {
-    return [buildInsertedRowSql(item)];
+    parameters?.push(bound);
+    return [buildInsertedRowSql(item, parameters ? bound : undefined)];
   }
   if (isMongo.value) {
     if (!isMongoEditableQuery(props.result?.sourceSql || '')) {
@@ -653,25 +670,19 @@ function buildEditsSqls(item: DirtyRowEdit): string[] {
     if ((props.tableMetas?.length || 0) < 2) {
       throw new Error('正在读取联表信息，请稍后再保存');
     }
-    const ctx = joinUpdateContext();
-    return buildJoinUpdateSqls(
-      item,
-      ctx.tables,
-      ctx.resultCols,
-      ctx.sourceSql,
-      ctx.dbType,
-      ctx.columnTables,
-    );
+    return joinWritePlan.value!({ ...item, original: mapTypedResultRow(item.original), edited: mapTypedResultRow(item.edited) }, parameters);
   }
   const table = requireTable();
+  parameters?.push(bound);
   return [
     buildUpdateSql(
       table,
-      item.original as Record<string, any>,
-      item.edited as Record<string, any>,
-      item.changedColumns,
-      whereCols.value,
+      mapPhysicalRow(item.original),
+      mapPhysicalRow(item.edited, item.changedColumns),
+      item.changedColumns.map(physicalColumn),
+      whereCols.value.map(physicalColumn),
       dbType.value,
+      parameters ? bound : undefined,
     ),
   ];
 }
@@ -863,18 +874,20 @@ async function onEdit() {
     ElMessage.warning('无法识别结果对应的表，请先执行带 FROM 的查询后再修改');
     return;
   }
-  if (!(await confirmRowMutation('修改'))) {
-    return;
-  }
-  editOriginal.value = { ...selectedRow.value };
-  editForm.value = { ...selectedRow.value };
+  const origin = props.result; const row = selectedRow.value;
+  if (!(await confirmRowMutation('修改')) || props.result !== origin || selectedRow.value !== row) return;
+  editRowIndex.value = displayRows.value.indexOf(row!);
+  editOriginal.value = { ...row };
+  editForm.value = { ...row };
+  editInvalidFields.value.clear();
   editVisible.value = true;
 }
 
 /**
- * 编辑框输入：原值为 NULL 且输入为空 → 保持 NULL；否则按字符串写入
+ * 编辑框保留原值类型；复合字段要求合法 JSON，错误输入留在弹窗中等待修正。
  */
 function onEditField(col: string, v: string) {
+  editInvalidFields.value.delete(col);
   const original = editOriginal.value?.[col];
   if (
     (original === null || original === undefined) &&
@@ -883,12 +896,14 @@ function onEditField(col: string, v: string) {
     editForm.value[col] = null;
     return;
   }
-  if (isMongo.value && original && typeof original === 'object') {
+  if (original && typeof original === 'object' && !('__lemonBinary' in original)) {
     try {
       editForm.value[col] = JSON.parse(v);
       return;
     } catch {
-      // 保留文本，让后端拒绝非法 JSON，而不是静默丢失用户输入。
+      editForm.value[col] = v;
+      editInvalidFields.value.add(col);
+      return;
     }
   }
   editForm.value[col] = isMongo.value
@@ -898,30 +913,30 @@ function onEditField(col: string, v: string) {
 
 /**
  * 只为已经定格的行生成删除语句。
- * SQL 相同 WHERE 只留一条；MongoDB deleteOne 按行各生成一条，避免少删一个文档。
+ * 关系型按 SQL 和绑定值一起去重；MongoDB deleteOne 按行生成。
  */
 function buildDeleteStatements(rows: Record<string, any>[]):
-  | { ok: true; sqls: string[] }
+  | { ok: true; sqls: string[]; parameters?: ResultEditParameter[][] }
   | { ok: false; message: string } {
-  let statements: string[] = [];
   try {
-    const ref = requireTable();
-    statements = rows.map((row) =>
-      isMongo.value
-        ? buildMongoDeleteCommand(ref, row, columns.value, whereCols.value)
-        : buildDeleteSql(ref, row, columns.value, whereCols.value, dbType.value),
-    );
-  } catch (e: any) {
-    return { ok: false, message: e?.message || '生成 DELETE 失败' };
-  }
-  const sqls = isMongo.value ? statements : dedupeDeleteSql(statements);
-  if (!sqls.length) {
-    return { ok: false, message: '没有可执行的删除语句' };
-  }
-  return { ok: true, sqls };
+    const ref = requireTable(); const sqls: string[] = []; const parameters: ResultEditParameter[][] = [];
+    const seen = new Set<string>();
+    for (const row of rows) {
+      const bound: ResultEditParameter[] = [];
+      const physical = isMongo.value ? row : mapPhysicalRow(row);
+      const sql = isMongo.value ? buildMongoDeleteCommand(ref, row, columns.value, whereCols.value)
+        : buildDeleteSql(ref, physical, Object.keys(physical), whereCols.value.map(physicalColumn), dbType.value, bound);
+      const key = JSON.stringify([sql, bound]);
+      if (!isMongo.value && seen.has(key)) continue;
+      seen.add(key); sqls.push(sql); parameters.push(bound);
+    }
+    if (!sqls.length) return { ok: false, message: '没有可执行的删除语句' };
+    return { ok: true, sqls, parameters: isMongo.value ? undefined : parameters };
+  } catch (error: any) { return { ok: false, message: error?.message || '生成 DELETE 失败' }; }
 }
 
 async function onDelete() {
+  if (sheetSaving.value || props.executing) return;
   closeCtxMenu();
   // 先定格勾选和右键行。后面的确认框是异步的，不能再读实时勾选，否则会删错行。
   const resultAtClick = props.result;
@@ -967,9 +982,8 @@ async function onDelete() {
         ? `将删除已勾选的 ${count} 行，未勾选的行不会删除。`
         : `将删除已勾选的 ${count} 行。右键所在行没有勾选，不会删除。`
       : '当前没有勾选，将只删除右键所在的这一行。';
-  const locateText = tableHasPk.value
-    ? '按主键定位，删除后不可恢复。'
-    : '当前无主键，按全部结果列匹配，可能删除值相同的其它行，且不可恢复。';
+  const locateText = isMongo.value ? 'MongoDB 按行删除，失败时已成功的删除会保留。'
+    : '校验原值，每条必须准确定位一行；定位冲突则整批回滚。成功提交后不可恢复。';
   try {
     await ElMessageBox.confirm(`${scopeText}${locateText}`, '删除确认', {
       type: 'warning',
@@ -994,15 +1008,12 @@ async function onDelete() {
     return;
   }
   const again = buildDeleteStatements(plan.rows);
-  if (!again.ok || again.sqls.join('\n') !== prepared.sqls.join('\n')) {
+  if (!again.ok || JSON.stringify([again.sqls, again.parameters]) !== JSON.stringify([prepared.sqls, prepared.parameters])) {
     ElMessage.warning(again.ok ? '删除条件已变化，已取消删除' : again.message);
     return;
   }
+  if (sheetSaving.value || props.executing) return;
   const sqls = prepared.sqls;
-  if (sqls.length === 1) {
-    emit('run-dml', sqls[0]!);
-    return;
-  }
   if (isMongo.value) {
     const run = props.executeRowDml;
     if (!run) {
@@ -1010,6 +1021,7 @@ async function onDelete() {
       return;
     }
     let done = 0;
+    sheetSaving.value = true; setResultSaving(resultAtClick, true);
     try {
       for (const command of sqls) {
         await run(command);
@@ -1018,10 +1030,16 @@ async function onDelete() {
     } catch (e: any) {
       ElMessage.error(pickErrorText(e, '删除中断'));
       if (done > 0) {
-        expectResultRefresh.value = true;
-        emit('refresh-result');
+        if (props.result === resultAtClick) { expectResultRefresh.value = true; emit('refresh-result'); }
+        else if (resultAtClick) { resultAtClick.rows = resultAtClick.rows.filter((row) => !plan.rows.slice(0, done).includes(row)); resultAtClick.rowCount = resultAtClick.rows.length; syncBatchResult(resultAtClick); }
       }
       return;
+    } finally {
+      sheetSaving.value = false; setResultSaving(resultAtClick, false);
+    }
+    if (props.result !== resultAtClick) {
+      if (resultAtClick) { resultAtClick.rows = resultAtClick.rows.filter((row) => !plan.rows.includes(row)); resultAtClick.rowCount = resultAtClick.rows.length; syncBatchResult(resultAtClick); }
+      ElMessage.success(`原标签已删除 ${done} 行`); return;
     }
     expectResultRefresh.value = true;
     emit('refresh-result');
@@ -1032,10 +1050,18 @@ async function onDelete() {
     ElMessage.error('当前页未提供批量删除接口，已取消，未删除任何数据');
     return;
   }
+  sheetSaving.value = true; setResultSaving(resultAtClick, true);
   try {
-    await props.executeRowDmlBatch(sqls);
+    await props.executeRowDmlBatch(sqls, prepared.parameters);
   } catch (e: any) {
-    ElMessage.error(pickErrorText(e, '删除失败，事务已回滚，没有数据被删除'));
+    ElMessage.error(pickErrorText(e, '删除失败，请核对错误详情和数据库当前状态'));
+    return;
+  } finally {
+    sheetSaving.value = false; setResultSaving(resultAtClick, false);
+  }
+  if (props.result !== resultAtClick) {
+    if (resultAtClick) { resultAtClick.rows = resultAtClick.rows.filter((row) => !plan.rows.includes(row)); resultAtClick.rowCount = resultAtClick.rows.length; syncBatchResult(resultAtClick); }
+    ElMessage.success(`原标签已删除 ${count} 行`);
     return;
   }
   expectResultRefresh.value = true;
@@ -1044,7 +1070,15 @@ async function onDelete() {
 }
 
 async function onSaveEdit() {
+  if (sheetSaving.value || props.executing) return;
   if (!editOriginal.value) return;
+  if (editInvalidFields.value.size) {
+    ElMessage.warning(`请先修正字段的 JSON：${[...editInvalidFields.value].join(', ')}`);
+    return;
+  }
+  const origin = props.result;
+  const index = editRowIndex.value;
+  const edited = { ...editForm.value };
   const changedColumns = columns.value.filter(
     (c) => !sameDbValue(editOriginal.value![c], editForm.value[c]),
   );
@@ -1054,27 +1088,40 @@ async function onSaveEdit() {
     return;
   }
   try {
+    const parameters: ResultEditParameter[][] = [];
     const sqls = buildEditsSqls({
-      rowIndex: selectedIndex.value,
+      rowIndex: editRowIndex.value,
       original: editOriginal.value,
       edited: editForm.value,
       changedColumns,
-    });
-    if (isJoinQuery.value) {
+    }, isMongo.value ? undefined : parameters);
+    if (!isMongo.value) {
       if (!props.executeRowDmlBatch) {
         ElMessage.error('当前页未提供事务更新接口，无法安全保存联表修改');
         return;
       }
+      sheetSaving.value = true;
+      setResultSaving(origin, true);
+      await props.executeRowDmlBatch(sqls, parameters);
+      if (origin !== props.result) { if (origin && index >= 0) origin.rows[index] = edited; return; }
       editVisible.value = false;
-      await props.executeRowDmlBatch(sqls);
       expectResultRefresh.value = true;
       emit('refresh-result');
       return;
     }
+    if (!props.executeRowDml) throw new Error('当前页未提供文档更新接口，已禁止写入');
+    const run = props.executeRowDml;
+    sheetSaving.value = true; setResultSaving(origin, true);
+    await run(sqls[0]!);
+    if (origin !== props.result) { if (origin && index >= 0) origin.rows[index] = edited; return; }
     editVisible.value = false;
-    emit('run-dml', sqls[0]!);
+    expectResultRefresh.value = true; emit('refresh-result');
   } catch (e: any) {
     ElMessage.warning(e?.message || '生成 UPDATE 失败');
+  } finally {
+    syncBatchResult(origin);
+    setResultSaving(origin, false);
+    sheetSaving.value = false;
   }
 }
 
@@ -1083,6 +1130,7 @@ function cloneRows(rows: Record<string, any>[]): Record<string, any>[] {
 }
 
 function resetEditCopies() {
+  putResultDraft(props.result, null);
   originalRows = cloneRows(tableRows.value);
   editRows.value = markRaw(cloneRows(tableRows.value));
   dirtyIndexSet.value = new Set();
@@ -1143,10 +1191,11 @@ function refreshDirtySet() {
 }
 
 function displayCell(value: unknown): string {
+  if (value && typeof value === 'object' && '__lemonBinary' in value) return toSheetText(value);
   if (value === null || value === undefined) {
     return editMode.value ? 'NULL' : '';
   }
-  if (isMongo.value && typeof value === 'object') {
+  if (typeof value === 'object') {
     try {
       return JSON.stringify(value);
     } catch {
@@ -1157,8 +1206,9 @@ function displayCell(value: unknown): string {
 }
 
 function editFieldText(value: unknown): string {
+  if (value && typeof value === 'object' && '__lemonBinary' in value) return toSheetText(value);
   if (value === null || value === undefined) return '';
-  if (isMongo.value && typeof value === 'object') {
+  if (typeof value === 'object') {
     try {
       return JSON.stringify(value, null, 2);
     } catch {
@@ -1174,7 +1224,7 @@ function isNullCell(value: unknown): boolean {
 
 async function startEditCell(rowIndex: number, col: string) {
   if (!editMode.value || sheetSaving.value) return;
-  await commitEditingCell();
+  if (!(await commitEditingCell())) return;
   const row = editRows.value[rowIndex];
   if (!row) return;
   editingCell.value = { row: rowIndex, col };
@@ -1184,16 +1234,18 @@ async function startEditCell(rowIndex: number, col: string) {
       : toSheetText(row[col]);
 }
 
-async function commitEditingCell(): Promise<void> {
+async function commitEditingCell(): Promise<boolean> {
   const cell = editingCell.value;
-  if (!cell) return;
+  if (!cell) return true;
   const row = editRows.value[cell.row];
   const orig = originalRows[cell.row];
   if (row && orig) {
-    row[cell.col] = coerceSheetValue(orig[cell.col], editDraft.value);
+    try { row[cell.col] = coerceSheetValue(orig[cell.col], editDraft.value); }
+    catch (error:any) { ElMessage.warning(error?.message || '字段值格式无效'); return false; }
     refreshDirtySet();
   }
   editingCell.value = null;
+  return true;
 }
 
 function cancelEditingCell() {
@@ -1221,7 +1273,7 @@ async function onCellEditorKeydown(e: KeyboardEvent) {
   if (e.key !== 'Enter' && e.key !== 'Tab') return;
   e.preventDefault();
   const cell = editingCell.value;
-  await commitEditingCell();
+  if (!(await commitEditingCell())) return;
   if (!cell) return;
   const cols = columns.value;
   const colIdx = cols.indexOf(cell.col);
@@ -1286,7 +1338,9 @@ function markRowsSaved(rowIndexes: number[]) {
 }
 
 async function confirmLeaveSheet(action: string): Promise<boolean> {
-  await commitEditingCell();
+  if (sheetSaving.value) { ElMessage.warning('结果正在保存，请等待完成'); return false; }
+  const resultAtConfirm = props.result;
+  if (!(await commitEditingCell())) return false;
   if (!editMode.value || dirtyCount.value <= 0) return true;
   try {
     await ElMessageBox.confirm(
@@ -1298,6 +1352,9 @@ async function confirmLeaveSheet(action: string): Promise<boolean> {
         cancelButtonText: '取消',
       },
     );
+    if (props.result !== resultAtConfirm) return false;
+    putResultDraft(props.result, null);
+    resetEditCopies();
     return true;
   } catch {
     return false;
@@ -1334,6 +1391,8 @@ async function onExitSheet() {
  */
 let sheetEntering = false;
 async function enterEditForInsert(): Promise<boolean> {
+  const origin = props.result;
+  if (origin?.readOnlyReason) { ElMessage.warning(origin.readOnlyReason); return false; }
   if (isJoinQuery.value || !props.tableRef?.table) {
     ElMessage.warning('联表结果不支持新增行，请对单表查询后再添加');
     return false;
@@ -1350,6 +1409,7 @@ async function enterEditForInsert(): Promise<boolean> {
     if (tableRows.value.length > 0 && !(await confirmRowMutation('修改'))) {
       return false;
     }
+    if (props.result !== origin || props.executing || sheetSaving.value) return false;
     resetEditCopies();
     editMode.value = true;
     return true;
@@ -1391,8 +1451,9 @@ async function onAddRow() {
  * 主键、唯一列会原样带上，重复时需要先改掉再保存。
  */
 async function onDuplicateRow() {
+  const origin=props.result;
   closeCtxMenu();
-  await commitEditingCell();
+  if (!(await commitEditingCell()) || props.result!==origin) return;
   const source =
     selectedIndex.value >= 0
       ? displayRows.value[selectedIndex.value] || selectedRow.value
@@ -1412,7 +1473,7 @@ function describeSave(edits: DirtyRowEdit[]): { title: string; message: string }
   if (isJoinQuery.value) {
     return {
       title: '保存联表修改（按各表主键定位）',
-      message: `将按行提交 UPDATE（共 ${edits.length} 行），同一行涉及的多表修改在一个事务中完成。改某表字段时必须带该表主键，WHERE 只用主键原值。是否继续？`,
+      message: `将更新共 ${edits.length} 行，本次全部修改在一个事务中提交。必须包含完整主键，并校验原值；发生冲突时整批回滚，事务状态未知时必须重新查询核对。是否继续？`,
     };
   }
   const insertCount = edits.filter((item) => item.inserted).length;
@@ -1433,7 +1494,7 @@ function describeSave(edits: DirtyRowEdit[]): { title: string; message: string }
         : '当前表没有主键，更新按结果列旧值定位。',
     );
   }
-  detail.push('中途失败时，已经成功的行会保留。');
+  detail.push(isMongo.value ? 'MongoDB 按行提交，中途失败时已成功行保留，未提交行保留草稿。' : '本次全部修改在一个事务中提交，发生冲突时整批回滚；提交或回滚状态未知时必须重新查询核对。');
   const title =
     insertCount > 0 && updateCount === 0
       ? '保存新增行'
@@ -1466,8 +1527,10 @@ function pickErrorText(e: any, fallback: string) {
 
 async function onSaveSheet() {
   if (sheetSaving.value) return;
-  await commitEditingCell();
+  const resultAtSave = props.result;
+  if (!(await commitEditingCell())) return;
   const runDml = props.executeRowDml;
+  const runBatch = props.executeRowDmlBatch;
   if (isJoinQuery.value ? !props.executeRowDmlBatch : !runDml) {
     ElMessage.error(
       isJoinQuery.value
@@ -1509,23 +1572,43 @@ async function onSaveSheet() {
     }
   }
 
+  if (props.result !== resultAtSave || sheetSaving.value || props.executing) { ElMessage.warning('结果已切换或正在保存，请稍后重试'); return; }
   sheetSaving.value = true;
+  setResultSaving(resultAtSave, true);
   const saved: number[] = [];
   try {
-    for (const item of edits) {
-      const sqls = buildEditsSqls(item);
-      if (isJoinQuery.value) {
-        if (!props.executeRowDmlBatch) {
-          throw new Error('当前页未提供事务更新接口，无法安全保存联表修改');
-        }
-        await props.executeRowDmlBatch(sqls);
-      } else {
-        for (const sql of sqls) await runDml!(sql);
+    const mongoAtSave = isMongo.value;
+    const parameters: ResultEditParameter[][] = [];
+    const plan = edits.map((item) => ({ item, sqls: buildEditsSqls(item, mongoAtSave ? undefined : parameters) }));
+    if (!mongoAtSave) {
+      if (!runBatch) throw new Error('当前页未提供事务更新接口，无法安全保存');
+      await runBatch(plan.flatMap((entry) => entry.sqls), parameters);
+      saved.push(...edits.map((item) => item.rowIndex));
+      putResultDraft(resultAtSave, null);
+      if (props.result !== resultAtSave) {
+        if (resultAtSave) for (const edit of edits) resultAtSave.rows[edit.rowIndex] = { ...edit.edited };
+        ElMessage.success(`原标签已保存 ${saved.length} 行`);
+        return;
       }
+      markRowsSaved(saved);
+    } else for (const entry of plan) {
+      for (const sql of entry.sqls) await runDml!(sql);
+      const item = entry.item;
       saved.push(item.rowIndex);
-      markRowsSaved([item.rowIndex]);
+      if (props.result === resultAtSave) markRowsSaved([item.rowIndex]);
+      else {
+        if (resultAtSave) resultAtSave.rows[item.rowIndex] = { ...item.edited };
+        // 原标签的草稿也消除已成功行，失败重试不能再次执行已成功 INSERT。
+        const draft = getResultDraft(resultAtSave);
+        if (draft) {
+          draft.original[item.rowIndex] = { ...item.edited };
+          draft.added.delete(item.rowIndex); draft.dirty.delete(item.rowIndex);
+        }
+      }
     }
+    putResultDraft(resultAtSave, null);
     ElMessage.success(`已保存 ${saved.length} 行`);
+    if (props.result !== resultAtSave) return;
     expectResultRefresh.value = true;
     emit('refresh-result');
   } catch (e: any) {
@@ -1535,6 +1618,11 @@ async function onSaveSheet() {
         : pickErrorText(e, '保存失败'),
     );
   } finally {
+    if (resultAtSave && props.result !== resultAtSave) {
+      resultAtSave.rowCount = resultAtSave.rows.length;
+      syncBatchResult(resultAtSave);
+    }
+    setResultSaving(resultAtSave, false);
     sheetSaving.value = false;
   }
 }
@@ -1733,7 +1821,11 @@ watch(
 
 watch(
   () => props.result,
-  (result) => {
+  (result, previous) => {
+    if (!expectResultRefresh.value && previous && editMode.value && (dirtyCount.value > 0 || newRowIndexes.value.size || editingCell.value)) {
+      putResultDraft(previous, { rows: editRows.value, original: originalRows, dirty: dirtyIndexSet.value,
+        added: newRowIndexes.value, editingCell: editingCell.value, editDraft: editDraft.value });
+    }
     focusedSet.value = result?.activeSet ?? 0;
     selectedRow.value = null;
     selectedIndex.value = -1;
@@ -1743,19 +1835,30 @@ watch(
     closeCtxMenu();
     closeFind();
     formatDrawer.visible = false;
+    editVisible.value = false;
+    editOriginal.value = null;
+    editRowIndex.value = -1;
     if (expectResultRefresh.value) {
       expectResultRefresh.value = false;
       if (editMode.value) resetEditCopies();
       else dirtyCount.value = 0;
       return;
     }
-    if (editMode.value && dirtyCount.value > 0) {
-      ElMessage.warning('结果已更新，未保存的表格修改已丢弃');
+    const draft = getResultDraft(result);
+    if (draft) {
+      editMode.value = true;
+      editRows.value = draft.rows; originalRows = draft.original;
+      dirtyIndexSet.value = draft.dirty; newRowIndexes.value = draft.added;
+      dirtyCount.value = draft.dirty.size;
+      editingCell.value = draft.editingCell; editDraft.value = draft.editDraft;
+    } else {
+      if (editMode.value) resetEditCopies();
+      dirtyCount.value = 0;
     }
-    if (editMode.value) resetEditCopies();
-    dirtyCount.value = 0;
   },
 );
+/** 父级重查/关闭前显式确认；切标签则自动保存草稿，不需要打断导航。 */
+defineExpose({ confirmLeaveSheet, isSaving: () => sheetSaving.value, hasPendingEdits: () => dirtyCount.value > 0 || newRowIndexes.value.size > 0 || !!editingCell.value });
 </script>
 
 <template>
@@ -2145,6 +2248,9 @@ watch(
       destroy-on-close
       append-to-body
       class="result-edit-dialog"
+      :close-on-click-modal="!sheetSaving"
+      :close-on-press-escape="!sheetSaving"
+      :show-close="!sheetSaving"
     >
       <p v-if="isJoinQuery" class="pk-hint">
         {{ $tr('联表只能按各表主键定位。改哪张表，结果里就要带上该表主键；同名 id 请写成 别名.id。') }}
@@ -2153,7 +2259,7 @@ watch(
         {{ $tr('WHERE 使用主键：') }}{{ pkInResult.join(', ') }}
       </p>
       <p v-else class="pk-hint warn">
-        {{ $tr('当前表没有主键，保存时按结果列旧值匹配，可能影响其它行。') }}
+        {{ $tr('当前表没有完整主键，无法安全定位原行，请补齐主键后重新查询。') }}
       </p>
       <ElForm :label-width="editLabelWidth" class="edit-form">
         <ElFormItem v-for="col in columns" :key="col" :label="col">
@@ -2164,6 +2270,7 @@ watch(
                 : editFieldText(editForm[col])
             "
             type="textarea"
+            :disabled="sheetSaving"
             :autosize="{ minRows: 1, maxRows: 4 }"
             :placeholder="
               editOriginal &&
@@ -2176,8 +2283,8 @@ watch(
         </ElFormItem>
       </ElForm>
       <template #footer>
-        <ElButton @click="editVisible = false">{{ $tr('取消') }}</ElButton>
-        <ElButton type="primary" @click="onSaveEdit">{{ $tr('保存') }}</ElButton>
+        <ElButton :disabled="sheetSaving" @click="editVisible = false">{{ $tr('取消') }}</ElButton>
+        <ElButton type="primary" :loading="sheetSaving" :disabled="sheetSaving" @click="onSaveEdit">{{ $tr('保存') }}</ElButton>
       </template>
     </ElDialog>
   </div>

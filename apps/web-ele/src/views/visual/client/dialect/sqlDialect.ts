@@ -13,6 +13,7 @@
  * @author yanch
  */
 
+import { typedResultLiteral, utf8Hex, type TypedResultValue } from '../utils/resultTypedLiteral';
 import type { SqlDialectFamily } from './dbTypes';
 
 import {
@@ -453,7 +454,26 @@ const FAMILY_PROFILE: Record<SqlDialectFamily, SqlDialectProfile> = {
 
 /** 解析完整方言配置（编辑器 / 模板 / 结果行 DML 统一入口） */
 export function resolveSqlDialect(dbType?: null | string): SqlDialectProfile {
-  return FAMILY_PROFILE[resolveDialectFamily(dbType)];
+  const family = resolveDialectFamily(dbType);
+  const profile = FAMILY_PROFILE[family];
+  const literal = (value: unknown): string => {
+    if (value && typeof value === 'object' && '__lemonTypedValue' in value) return typedResultLiteral(value as TypedResultValue, family, literal);
+    if (typeof value === 'string' && value.includes('\\')) {
+      if (family === 'MYSQL_LIKE') return `CONVERT(X'${utf8Hex(value)}' USING utf8mb4)`;
+      if (family === 'POSTGRES_LIKE') return `convert_from(decode('${utf8Hex(value)}', 'hex'), 'UTF8')`;
+    }
+    if (value && typeof value === 'object' && '__lemonBinary' in value) {
+      const hex = String((value as { __lemonBinary: unknown }).__lemonBinary);
+      if (!/^(?:[0-9a-fA-F]{2})*$/.test(hex)) throw new Error('非法二进制十六进制值');
+      if (family === 'POSTGRES_LIKE') return `decode('${hex}', 'hex')`;
+      if (family === 'ORACLE_LIKE') return `hextoraw('${hex}')`;
+      if (family === 'SQLSERVER_LIKE') return `0x${hex}`;
+      return `X'${hex}'`;
+    }
+    if (Array.isArray(value)) throw new Error('数组结果请使用 SQL 编辑器按数据库原生类型更新');
+    return profile.literal(value);
+  };
+  return { ...profile, literal };
 }
 
 /** 对象树一级节点的界面称呼，随产品在「数据库 / 模式」间切换 */

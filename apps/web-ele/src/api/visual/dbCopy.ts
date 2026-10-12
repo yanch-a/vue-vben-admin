@@ -18,7 +18,12 @@ export interface DbCopyStartPayload {
   /** 可选：限定源侧名称空间 */
   sourceSchema?: string;
   tableNames: string[];
-  mode?: 'structure' | 'both';
+  mode?: 'structure' | 'both' | 'data';
+  existingTableAction?: 'fail' | 'replace' | 'skip';
+  verifyRowCount?: boolean;
+  consistentSnapshot?: boolean;
+  queryTimeoutSeconds?: number;
+  batchMemoryMiB?: number;
   dropIfExists?: boolean;
   bulkInsert?: boolean;
   ignoreDefiner?: boolean;
@@ -48,6 +53,7 @@ export interface DbCopyTaskVO {
   currentObject?: string;
   successCount?: number;
   failedCount?: number;
+  skippedCount?: number;
   createTime?: number;
   updateTime?: number;
   message?: string;

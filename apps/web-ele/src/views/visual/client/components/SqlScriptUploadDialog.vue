@@ -108,6 +108,8 @@ async function onSubmit() {
   submitting.value = true;
   let starter: Promise<any>;
   if (form.engine === 'native') {
+    data.append('engine', 'native');
+    data.append('charset', form.charset);
     data.append('dropExisting', 'false');
     starter = startNativeDatabaseImport(data);
   } else {

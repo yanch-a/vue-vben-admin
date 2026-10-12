@@ -68,7 +68,7 @@ const showIgnoreDefiner = computed(
 /** PG / 真 Oracle：实例之下还有 schema/owner；达梦 instanceKind=SCHEMA 则否 */
 function needsNamespace(dbType?: string) {
   const d = resolveDbType(dbType);
-  if (d.family === 'POSTGRES_LIKE') return true;
+  if (d.family === 'POSTGRES_LIKE' || d.family === 'SQLSERVER_LIKE') return true;
   if (d.family === 'ORACLE_LIKE' && d.instanceKind === 'DATABASE') return true;
   return false;
 }
@@ -116,14 +116,22 @@ const targetSchemas = ref<string[]>([]);
 /** 目标连接快速切换时，只允许最后一次实例请求更新下拉框。 */
 let targetInstanceRequestId = 0;
 let targetSchemaRequestId = 0;
+/** 源过滤快速切换时，旧结果不能覆盖新选择。 */
+let sourceTableRequestId = 0;
 
 const form = reactive({
   targetDbConfigId: null as null | number | string,
   targetInstance: '',
   targetSchema: '',
   sourceSchema: '' as string,
-  mode: 'both' as 'both' | 'structure',
-  dropIfExists: true,
+  mode: 'both' as 'both' | 'structure' | 'data',
+  existingTableAction: 'fail' as 'fail' | 'replace' | 'skip',
+  verifyRowCount: true,
+  consistentSnapshot: true,
+  continueOnError: false,
+  batchSize: 200,
+  batchMemoryMiB: 8,
+  queryTimeoutSeconds: 300,
   bulkInsert: true,
   ignoreDefiner: false,
   /** 默认全表；勾选后才按 maxRows 截断 */
@@ -136,6 +144,8 @@ function tableDisplayName(qualified: string) {
 }
 
 async function loadTables() {
+  const requestId = ++sourceTableRequestId;
+  const selectedSchema = form.sourceSchema;
   if (!props.sourceConnection?.id || !props.sourceInstance) {
     tableNames.value = [];
     checkedTables.value = [];
@@ -150,6 +160,7 @@ async function loadTables() {
         props.sourceConnection.id,
         props.sourceInstance,
       );
+      if (requestId !== sourceTableRequestId) return;
       const schemas = res?.data || res || [];
       const schemaNames: string[] = [];
       const all: string[] = [];
@@ -167,13 +178,12 @@ async function loadTables() {
         }
       }
       sourceSchemaOptions.value = [...new Set(schemaNames)].sort();
-      const filterSchema = (form.sourceSchema || '').trim();
+      const filterSchema = (selectedSchema || '').trim();
       list = filterSchema
         ? all.filter(
             (n) =>
               n === filterSchema ||
-              n.startsWith(`${filterSchema}.`) ||
-              n.toLowerCase().startsWith(`${filterSchema.toLowerCase()}.`),
+              n.startsWith(`${filterSchema}.`),
           )
         : all;
     } else {
@@ -181,6 +191,7 @@ async function loadTables() {
         props.sourceConnection.id,
         props.sourceInstance,
       );
+      if (requestId !== sourceTableRequestId) return;
       list = (res?.data || res || [])
         .map((t: any) => t.qualifiedName || t.tableName)
         .filter(Boolean);
@@ -188,22 +199,22 @@ async function loadTables() {
     }
     tableNames.value = list;
     const pre = (props.preselectedTables || []).filter((t) => list.includes(t));
-    // 预选名可能是裸表名：尝试在当前列表里模糊匹配
+    // 裸表名只有唯一匹配才可预选，避免同名表跨 schema 被同时误选。
     let resolvedPre = pre;
     if (!resolvedPre.length && props.preselectedTables?.length) {
-      resolvedPre = list.filter((n) =>
-        props.preselectedTables!.some(
-          (p) => n === p || n.endsWith(`.${p}`) || n.split('.').pop() === p,
-        ),
-      );
+      resolvedPre = props.preselectedTables.flatMap((name) => {
+        const matches = list.filter((item) => item === name || item.endsWith(`.${name}`));
+        return matches.length === 1 ? matches : [];
+      });
     }
-    checkedTables.value = resolvedPre.length ? resolvedPre : [...list];
+    checkedTables.value = props.preselectedTables?.length ? resolvedPre : [...list];
   } catch {
+    if (requestId !== sourceTableRequestId) return;
     tableNames.value = [];
     checkedTables.value = [];
     sourceSchemaOptions.value = [];
   } finally {
-    loadingTables.value = false;
+    if (requestId === sourceTableRequestId) loadingTables.value = false;
   }
 }
 
@@ -230,7 +241,12 @@ async function loadTargetConfigs() {
     [...fromOpen, ...fromAll].forEach((item) => {
       map.set(String(item.id), item);
     });
-    targetConfigs.value = [...map.values()];
+    const sourceFamily = sourceDialect.value.family;
+    targetConfigs.value = [...map.values()].filter((item) => {
+      const family = resolveDialectFamily(item.dbType);
+      const supported = ['MYSQL_LIKE', 'POSTGRES_LIKE', 'ORACLE_LIKE', 'SQLSERVER_LIKE', 'H2_LIKE', 'SQLITE_LIKE', 'MONGODB_LIKE'].includes(family);
+      return supported && (sourceFamily === 'MONGODB_LIKE' ? family === 'MONGODB_LIKE' : family !== 'MONGODB_LIKE');
+    });
     const srcId = props.sourceConnection?.id;
     const other = targetConfigs.value.find((c) => String(c.id) !== String(srcId));
     form.targetDbConfigId = other?.id ?? targetConfigs.value[0]?.id ?? null;
@@ -325,7 +341,13 @@ watch(
   async (v) => {
     if (!v) return;
     form.mode = 'both';
-    form.dropIfExists = true;
+    form.existingTableAction = 'fail';
+    form.verifyRowCount = true;
+    form.consistentSnapshot = true;
+    form.continueOnError = false;
+    form.batchSize = 200;
+    form.batchMemoryMiB = 8;
+    form.queryTimeoutSeconds = 300;
     form.bulkInsert = true;
     form.ignoreDefiner = false;
     form.limitRows = false;
@@ -418,12 +440,16 @@ async function onCopy() {
         : undefined,
       tableNames: checkedTables.value,
       mode: form.mode,
-      dropIfExists: form.dropIfExists,
+      existingTableAction: form.existingTableAction,
+      verifyRowCount: form.verifyRowCount,
+      consistentSnapshot: form.consistentSnapshot,
+      queryTimeoutSeconds: form.queryTimeoutSeconds,
+      batchMemoryMiB: form.batchMemoryMiB,
       bulkInsert: form.bulkInsert,
       ignoreDefiner: form.ignoreDefiner,
       maxRows: form.limitRows ? form.maxRows : 0,
-      batchSize: form.bulkInsert ? 200 : 50,
-      continueOnError: true,
+      batchSize: form.batchSize,
+      continueOnError: form.continueOnError,
     });
     const task = (res?.data || res) as DbCopyTaskVO;
     if (!task?.taskId) {
@@ -445,7 +471,7 @@ async function onCopy() {
   <ElDialog
     v-model="visible"
     :title="$tr('复制数据库')"
-    width="960px"
+    width="min(960px, 96vw)"
     destroy-on-close
     append-to-body
     class="copy-db-dialog"
@@ -602,14 +628,29 @@ async function onCopy() {
           <ElRadioGroup v-model="form.mode" class="mode-radios">
             <ElRadio value="both">{{ $tr('结构和数据') }}</ElRadio>
             <ElRadio value="structure">{{ $tr('仅结构') }}</ElRadio>
+            <ElRadio v-if="props.sourceConnection?.dbType !== 'MONGODB'" value="data">{{ $tr('仅追加数据') }}</ElRadio>
           </ElRadioGroup>
 
           <div class="opts">
-            <ElCheckbox v-model="form.dropIfExists">{{ $tr('如果目标中存在则删除') }}</ElCheckbox>
+            <div v-if="form.mode !== 'data'" class="field-row">
+              <span class="label">{{ $tr('目标已存在') }}</span>
+              <ElSelect v-model="form.existingTableAction" style="flex: 1">
+                <ElOption value="fail" :label="$tr('报错停止（默认）')" />
+                <ElOption value="skip" :label="$tr('跳过并保留目标表')" />
+                <ElOption value="replace" :label="$tr('删除并重新复制')" />
+              </ElSelect>
+            </div>
+            <ElAlert v-if="form.mode !== 'data' && form.existingTableAction === 'replace'" type="warning" :closable="false"
+              :title="$tr('替换会删除目标表及数据。MySQL、Oracle 等数据库的 DDL 不能通过事务恢复，请先备份目标。')" />
+            <ElAlert v-if="form.mode === 'data'" type="info" :closable="false"
+              :title="$tr('向已有目标表追加数据，保留原结构和约束。主键重复或类型不兼容时，本表写入失败并回滚；重试前请检查已完成的表。')" />
             <ElCheckbox v-model="form.bulkInsert">{{ $tr('使用大容量插入（多值 INSERT）') }}</ElCheckbox>
             <ElCheckbox v-if="showIgnoreDefiner" v-model="form.ignoreDefiner">
               {{ $tr('忽略 DEFINER') }}
             </ElCheckbox>
+            <ElCheckbox v-if="form.mode !== 'structure'" v-model="form.verifyRowCount">{{ $tr('提交前校验目标新增行数') }}</ElCheckbox>
+            <ElCheckbox v-model="form.continueOnError">{{ $tr('单表失败后继续其他表') }}</ElCheckbox>
+            <ElCheckbox v-if="['MYSQL_LIKE', 'POSTGRES_LIKE'].includes(sourceDialect.family)" v-model="form.consistentSnapshot">{{ $tr('源数据使用一致性快照') }}</ElCheckbox>
             <ElCheckbox v-model="form.limitRows">{{ $tr('限制每表导出行数') }}</ElCheckbox>
             <div v-if="form.limitRows" class="max-rows">
               <span class="label">{{ $tr('上限') }}</span>
@@ -617,15 +658,22 @@ async function onCopy() {
             </div>
           </div>
 
+          <ElCollapse>
+            <ElCollapseItem name="performance" :title="$tr('性能与超时设置')">
+              <div class="field-row"><span class="label">{{ $tr('每批行数') }}</span><ElInputNumber v-model="form.batchSize" :min="1" :max="1000" /></div>
+              <div class="field-row"><span class="label">{{ $tr('批次内存 MiB') }}</span><ElInputNumber v-model="form.batchMemoryMiB" :min="1" :max="64" /></div>
+              <div class="field-row"><span class="label">{{ $tr('语句超时（秒）') }}</span><ElInputNumber v-model="form.queryTimeoutSeconds" :min="1" :max="86400" /></div>
+            </ElCollapseItem>
+          </ElCollapse>
           <div class="hint">
-            {{ $tr('默认复制全表数据。勾选「限制每表导出行数」时，超出部分会截断并把任务标为部分成功。 异库类型按统一标准映射建表（含主键、唯一/普通索引、自增、安全默认值）。选定目标 Schema/Owner 后，表会落到该名称空间（可自动 CREATE SCHEMA）。') }}
+            {{ $tr('默认复制全表数据，按表提交。限制行数时会标记数据截断。同产品优先保留原生结构；异产品使用类型映射并报告需核对的差异。取消或失败保留此前已完成的表。行数校验会扫描目标表，大表可按需要关闭。') }}
           </div>
         </ElScrollbar>
       </div>
     </div>
 
     <template #footer>
-      <ElButton :loading="submitting" type="primary" @click="onCopy">{{ $tr('复制') }}</ElButton>
+      <ElButton :disabled="loadingTables || loadingInstances || loadingSchemas || !checkedTables.length" :loading="submitting" type="primary" @click="onCopy">{{ $tr('复制') }}</ElButton>
       <ElButton @click="visible = false">{{ $tr('关闭') }}</ElButton>
     </template>
   </ElDialog>
@@ -744,5 +792,9 @@ async function onCopy() {
   align-items: center;
   gap: 8px;
   padding-left: 22px;
+}
+@media (max-width: 720px) {
+  .copy-body { grid-template-columns: 1fr; height: auto; max-height: 70vh; overflow-y: auto; }
+  .pane { min-height: 260px; }
 }
 </style>
