@@ -287,7 +287,7 @@ const canMutate = computed(
     (!!props.tableRef?.table || (props.tableMetas?.length || 0) > 0) &&
     !!selectedRow.value,
 );
-const canDeleteRow = computed(() => canMutate.value && !isJoinQuery.value && !editMode.value && !sheetSaving.value && !props.executing);
+const canDeleteRow = computed(() => canMutate.value && !isJoinQuery.value && !sheetSaving.value && !props.executing);
 /** 有勾选时菜单写明将删的行数，避免用户以为只删右键那一行 */
 const deleteMenuLabel = computed(() => {
   const count = selectedRows.value.length;
@@ -935,12 +935,67 @@ function buildDeleteStatements(rows: Record<string, any>[]):
   } catch (error: any) { return { ok: false, message: error?.message || '生成 DELETE 失败' }; }
 }
 
+/** 勾选以表格里的当前行对象为准。退出编辑后不能再用编辑副本。 */
+function liveCheckedRows(): Record<string, any>[] {
+  return tableElRef.value?.getSelectionRows?.() || selectedRows.value;
+}
+
+/**
+ * 编辑中的删除：未保存新行只从表格去掉。
+ * 已经在库里的行用进入编辑时的原值生成 DELETE，避免把没保存的修改写进定位条件。
+ */
+function sheetDeleteSources(rows: Record<string, any>[]): { local: Record<string, any>[]; stored: Record<string, any>[]; storedRows: Record<string, any>[] } {
+  const local: Record<string, any>[] = [];
+  const stored: Record<string, any>[] = [];
+  const storedRows: Record<string, any>[] = [];
+  for (const row of rows) {
+    const index = editRows.value.indexOf(row);
+    if (index >= 0 && newRowIndexes.value.has(index)) local.push(row);
+    else {
+      storedRows.push(row);
+      stored.push(index >= 0 ? originalRows[index] || row : row);
+    }
+  }
+  return { local, stored, storedRows };
+}
+
+/** 从编辑副本和查询结果里同时拿走这些行，其它未保存修改按新下标保留。 */
+function dropSheetRows(rows: Record<string, any>[]) {
+  const indexes = rows.map((row) => editRows.value.indexOf(row)).filter((index) => index >= 0);
+  if (!indexes.length) return;
+  const drop = new Set(indexes);
+  const result = props.result;
+  if (result?.rows) {
+    indexes.filter((index) => !newRowIndexes.value.has(index) && index < result.rows.length)
+      .sort((left, right) => right - left)
+      .forEach((index) => result.rows.splice(index, 1));
+    result.rowCount = result.rows.length;
+    syncBatchResult(result);
+  }
+  let removed = 0;
+  const nextNew = new Set<number>();
+  for (let index = 0; index < editRows.value.length; index++) {
+    if (drop.has(index)) { removed += 1; continue; }
+    if (newRowIndexes.value.has(index)) nextNew.add(index - removed);
+  }
+  originalRows = originalRows.filter((_, index) => !drop.has(index));
+  editRows.value = markRaw(editRows.value.filter((_, index) => !drop.has(index)));
+  newRowIndexes.value = nextNew;
+  refreshDirtySet();
+  selectedRows.value = [];
+  selectedRow.value = null;
+  selectedIndex.value = -1;
+  selectedCol.value = null;
+  tableElRef.value?.clearSelection?.();
+}
+
 async function onDelete() {
   if (sheetSaving.value || props.executing) return;
   closeCtxMenu();
+  if (editMode.value && !(await commitEditingCell())) return;
   // 先定格勾选和右键行。后面的确认框是异步的，不能再读实时勾选，否则会删错行。
   const resultAtClick = props.result;
-  const checkedSnapshot = selectedRows.value.slice();
+  const checkedSnapshot = liveCheckedRows().slice();
   const contextSnapshot = selectedRow.value;
   const plan = planDeleteTargets(checkedSnapshot, contextSnapshot, displayRows.value);
   if (!plan.ok) {
@@ -959,14 +1014,17 @@ async function onDelete() {
     );
     return;
   }
-  if (!(await confirmRowMutation('删除'))) {
+  const sources = editMode.value ? sheetDeleteSources(plan.rows) : { local: [], stored: plan.rows, storedRows: plan.rows };
+  if (sources.stored.length && !(await confirmRowMutation('删除'))) {
     return;
   }
   if (props.result !== resultAtClick) {
     ElMessage.warning('结果已更新，已取消删除');
     return;
   }
-  const prepared = buildDeleteStatements(plan.rows);
+  const prepared = sources.stored.length
+    ? buildDeleteStatements(sources.stored)
+    : { ok: true as const, sqls: [] as string[], parameters: [] as ResultEditParameter[][] };
   if (!prepared.ok) {
     ElMessage.warning(prepared.message);
     return;
@@ -982,8 +1040,9 @@ async function onDelete() {
         ? `将删除已勾选的 ${count} 行，未勾选的行不会删除。`
         : `将删除已勾选的 ${count} 行。右键所在行没有勾选，不会删除。`
       : '当前没有勾选，将只删除右键所在的这一行。';
-  const locateText = isMongo.value ? 'MongoDB 按行删除，失败时已成功的删除会保留。'
-    : '校验原值，每条必须准确定位一行；定位冲突则整批回滚。成功提交后不可恢复。';
+  const locateText = sources.stored.length === 0
+    ? '这些行还没写入数据库，只会从表格里去掉。'
+    : `${sources.local.length ? `其中 ${sources.local.length} 行还没保存，只从表格去掉。` : ''}${editMode.value ? '其它未保存修改会保留。' : ''}${isMongo.value ? 'MongoDB 按行删除，失败时已成功的删除会保留。' : '校验原值，每条必须准确定位一行；定位冲突则整批回滚。成功提交后不可恢复。'}`;
   try {
     await ElMessageBox.confirm(`${scopeText}${locateText}`, '删除确认', {
       type: 'warning',
@@ -999,7 +1058,7 @@ async function onDelete() {
     return;
   }
   const latest = planDeleteTargets(
-    selectedRows.value,
+    liveCheckedRows(),
     selectedRow.value,
     displayRows.value,
   );
@@ -1007,12 +1066,19 @@ async function onDelete() {
     ElMessage.warning('勾选已变化，已取消删除');
     return;
   }
-  const again = buildDeleteStatements(plan.rows);
+  const again = sources.stored.length
+    ? buildDeleteStatements(sources.stored)
+    : { ok: true as const, sqls: [] as string[], parameters: [] as ResultEditParameter[][] };
   if (!again.ok || JSON.stringify([again.sqls, again.parameters]) !== JSON.stringify([prepared.sqls, prepared.parameters])) {
     ElMessage.warning(again.ok ? '删除条件已变化，已取消删除' : again.message);
     return;
   }
   if (sheetSaving.value || props.executing) return;
+  if (!prepared.sqls.length) {
+    dropSheetRows(plan.rows);
+    ElMessage.success(`已从表格移除 ${plan.rows.length} 行未保存的新行`);
+    return;
+  }
   const sqls = prepared.sqls;
   if (isMongo.value) {
     const run = props.executeRowDml;
@@ -1030,8 +1096,10 @@ async function onDelete() {
     } catch (e: any) {
       ElMessage.error(pickErrorText(e, '删除中断'));
       if (done > 0) {
-        if (props.result === resultAtClick) { expectResultRefresh.value = true; emit('refresh-result'); }
-        else if (resultAtClick) { resultAtClick.rows = resultAtClick.rows.filter((row) => !plan.rows.slice(0, done).includes(row)); resultAtClick.rowCount = resultAtClick.rows.length; syncBatchResult(resultAtClick); }
+        if (props.result !== resultAtClick) {
+          if (resultAtClick) { resultAtClick.rows = resultAtClick.rows.filter((row) => !sources.storedRows.slice(0, done).includes(row)); resultAtClick.rowCount = resultAtClick.rows.length; syncBatchResult(resultAtClick); }
+        } else if (editMode.value) dropSheetRows(sources.storedRows.slice(0, done));
+        else { expectResultRefresh.value = true; emit('refresh-result'); }
       }
       return;
     } finally {
@@ -1041,8 +1109,8 @@ async function onDelete() {
       if (resultAtClick) { resultAtClick.rows = resultAtClick.rows.filter((row) => !plan.rows.includes(row)); resultAtClick.rowCount = resultAtClick.rows.length; syncBatchResult(resultAtClick); }
       ElMessage.success(`原标签已删除 ${done} 行`); return;
     }
-    expectResultRefresh.value = true;
-    emit('refresh-result');
+    if (editMode.value) dropSheetRows(plan.rows);
+    else { expectResultRefresh.value = true; emit('refresh-result'); }
     ElMessage.success(`已删除勾选的 ${count} 行`);
     return;
   }
@@ -1064,8 +1132,8 @@ async function onDelete() {
     ElMessage.success(`原标签已删除 ${count} 行`);
     return;
   }
-  expectResultRefresh.value = true;
-  emit('refresh-result');
+  if (editMode.value) dropSheetRows(plan.rows);
+  else { expectResultRefresh.value = true; emit('refresh-result'); }
   ElMessage.success(`已删除勾选的 ${count} 行`);
 }
 
@@ -1812,6 +1880,16 @@ onBeforeUnmount(() => {
   document.removeEventListener('keydown', onDocumentKeydown, true);
 });
 
+/** 编辑副本和查询结果不是同一批对象。换数组后按行号把当前行指回正在显示的那一行。 */
+watch(displayRows, (rows) => {
+  if (selectedIndex.value >= rows.length) {
+    selectedIndex.value = -1;
+    selectedCol.value = null;
+  }
+  if (selectedIndex.value >= 0) selectedRow.value = rows[selectedIndex.value] || null;
+  else if (selectedRow.value && !rows.includes(selectedRow.value)) selectedRow.value = null;
+});
+
 watch(
   () => [props.result?.rows, props.result?.columns, editMode.value] as const,
   () => {
@@ -1978,7 +2056,7 @@ defineExpose({ confirmLeaveSheet, isSaving: () => sheetSaving.value, hasPendingE
           {{ $tr('联表只能按各表主键 UPDATE。改某表字段时，SELECT 必须带上该表主键；两表都有 id 时请写成 别名.id 或 id AS user_id。') }}
         </template>
         <template v-else>
-          {{ $tr('单击单元格编辑，改过的行会整行标黄。主键也可以改，保存时按修改前的原值定位。NULL 显示为 NULL，空着保存仍是 NULL。底部新增行左侧有绿线，只保存填写过的字段。') }}
+          {{ $tr('单击单元格编辑，改过的行会整行标黄。主键也可以改，保存时按修改前的原值定位。NULL 显示为 NULL，空着保存仍是 NULL。底部新增行左侧有绿线，只保存填写过的字段。右键可删除：未保存的新行只从表格去掉，已有行立即删除，其它未保存修改会保留。') }}
         </template>
       </p>
       <!-- Ctrl+F 查找条（结果区聚焦时可用） -->

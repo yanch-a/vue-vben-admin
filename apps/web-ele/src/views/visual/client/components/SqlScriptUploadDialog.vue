@@ -36,7 +36,7 @@ const visible = computed({
 const submitting = ref(false);
 const form = reactive({
   file: null as File | null,
-  continueOnError: true,
+  continueOnError: false,
   charset: 'UTF-8',
   engine: 'managed' as 'managed' | 'native',
 });
@@ -52,7 +52,7 @@ watch(
   (open) => {
     if (!open) return;
     form.file = null;
-    form.continueOnError = true;
+    form.continueOnError = false;
     form.charset = 'UTF-8';
     form.engine = 'managed';
   },

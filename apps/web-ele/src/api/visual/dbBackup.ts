@@ -37,6 +37,8 @@ export interface DbBackupTaskVO {
 export function startDbBackup(data: {
   dbConfigId: number | string;
   instanceName: string;
+  engine?: 'jdbc' | 'native';
+  options?: Omit<Parameters<typeof import('./database').exportSqlDump>[0], 'dbConfigId' | 'engine'> & { fileName?: string };
 }) {
   return request({
     url: dbBackupUrl + 'start',

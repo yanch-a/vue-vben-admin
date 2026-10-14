@@ -113,6 +113,72 @@ describe('结果编辑交互修复',()=>{
     expect(sql).toContain('"_id":{"$eq":{"$oid":"507f1f77bcf86cd799439011"}}');
     expect(sql).toContain('"$set":{"v":{"$numberDecimal":"2.50"}}');
   });
+  async function deleteFromMenu(label: string) {
+    document.querySelector<HTMLElement>('.vrt-td[title]')!.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true }));
+    await nextTick();
+    const item = [...document.querySelectorAll<HTMLElement>('.result-ctx-menu .item')].find((element) => element.textContent?.trim() === label);
+    expect(item).toBeDefined();
+    expect(item!.classList.contains('disabled')).toBe(false);
+    item!.click();
+    for (let i = 0; i < 8; i++) await Promise.resolve();
+    await nextTick();
+  }
+  it('退出编辑后勾选仍指向当前结果，可以右键删除', async () => {
+    const { batch } = await mount({
+      primaryKeys: ['id'],
+      tableMetas: [{ ref: { table: 't' }, columns: ['id', 'v'], primaryKeys: ['id'] }],
+      result: { columns: ['id', 'v'], rows: [{ id: 1, v: 'old' }], rowCount: 1, sourceSql: 'SELECT id,v FROM t' },
+    });
+    await click('表格编辑');
+    const box = document.querySelectorAll<HTMLInputElement>('input[type=checkbox]')[1];
+    expect(box).toBeDefined();
+    box!.checked = true;
+    box!.dispatchEvent(new Event('change', { bubbles: true }));
+    await click('退出编辑');
+    vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm' as never);
+    await deleteFromMenu('删除已勾选的 1 行');
+    expect(document.body.textContent).not.toContain('勾选行已不在当前结果中');
+    expect(batch).toHaveBeenCalledOnce();
+    expect(batch.mock.calls[0]![1][0].map((parameter: { value: unknown }) => parameter.value)).toEqual([1, 'old']);
+  });
+  it('编辑模式可以删除已有行，并保留其它行未保存的修改', async () => {
+    const { batch } = await mount({
+      primaryKeys: ['id'],
+      tableMetas: [{ ref: { table: 't' }, columns: ['id', 'v'], primaryKeys: ['id'] }],
+      result: { columns: ['id', 'v'], rows: [{ id: 1, v: 'old' }, { id: 2, v: 'keep' }], rowCount: 2, sourceSql: 'SELECT id,v FROM t' },
+    });
+    await click('表格编辑');
+    await editValue('next', 'keep');
+    vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm' as never);
+    await deleteFromMenu('删除');
+    expect(batch).toHaveBeenCalledOnce();
+    expect(batch.mock.calls[0]![1][0].map((parameter: { value: unknown }) => parameter.value)).toEqual([1, 'old']);
+    expect(document.body.textContent).toContain('退出编辑');
+    expect(document.querySelector('.vrt-td[title="old"]')).toBeNull();
+    expect(document.querySelector('.vrt-td[title="next"]')).not.toBeNull();
+    expect(document.body.textContent).toContain('保存修改 (1)');
+  });
+  it('编辑模式删除未保存的新行不访问数据库', async () => {
+    const { batch } = await mount({
+      primaryKeys: ['id'],
+      tableMetas: [{ ref: { table: 't' }, columns: ['id', 'v'], primaryKeys: ['id'] }],
+      result: { columns: ['id', 'v'], rows: [{ id: 1, v: 'old' }], rowCount: 1, sourceSql: 'SELECT id,v FROM t' },
+    });
+    await click('表格编辑');
+    await click('添加行');
+    vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm' as never);
+    document.querySelector<HTMLElement>('.vrt-td[title="NULL"]')!.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true }));
+    await nextTick();
+    const item = [...document.querySelectorAll<HTMLElement>('.result-ctx-menu .item')].find((element) => element.textContent?.trim() === '删除');
+    expect(item!.classList.contains('disabled')).toBe(false);
+    item!.click();
+    for (let i = 0; i < 8; i++) await Promise.resolve();
+    await nextTick();
+    expect(batch).not.toHaveBeenCalled();
+    expect(document.querySelector('.vrt-td[title="NULL"]')).toBeNull();
+    expect(document.querySelector('.vrt-td[title="old"]')).not.toBeNull();
+    expect(document.body.textContent).toContain('退出编辑');
+  });
   it('非法数组 JSON 保留单元格输入并阻止保存，不抛出未处理异步错误',async()=>{
     const {batch}=await mount({dbType:'POSTGRE_SQL',primaryKeys:['id'],tableRef:{table:'t'},tableMetas:[{ref:{table:'t'},columns:['id','v'],primaryKeys:['id']}],
       result:{columns:['id','v'],rows:[{id:1,v:[1,2]}],rowCount:1,sourceSql:'SELECT id,v FROM t'}});

@@ -2,7 +2,7 @@
 /**
  * 顶部已打开连接栏
  * - 单击切换；关闭按钮关闭页签
- * - 连接页签右键：刷新 / 改颜色 / 已执行 SQL / 导入导出本连接查询
+ * - 连接页签右键：刷新 / 改颜色 / 已执行 SQL / 导入导出本连接查询 / 关闭、关闭所有、关闭其他
  * - 空白区域右键：保存 / 加载服务器工作现场，或导入导出本地临时查询
  * @author yanch
  */
@@ -26,6 +26,10 @@ const props = defineProps<{
 const emit = defineEmits<{
   change: [sessionId: number | string];
   close: [sessionId: number | string];
+  /** 关闭当前已打开的全部连接 */
+  'close-all': [];
+  /** 只保留右键的这个连接，关闭其余已打开连接 */
+  'close-others': [sessionId: number | string];
   /** 打开已有数据库连接 */
   open: [];
   /** 刷新该连接对应的左侧浏览对象 */
@@ -129,14 +133,30 @@ function closeCtx() {
   ctx.visible = false;
 }
 
+/** 菜单贴着点击处，贴边时收回视口，避免关闭项被裁掉。 */
+function placeMenu(e: MouseEvent, mode: 'blank' | 'tab') {
+  const pad = 8;
+  const menuW = 220;
+  const menuH = mode === 'tab' ? 340 : 168;
+  let x = e.clientX;
+  let y = e.clientY;
+  if (x + menuW > window.innerWidth - pad) {
+    x = Math.max(pad, window.innerWidth - menuW - pad);
+  }
+  if (y + menuH > window.innerHeight - pad) {
+    y = Math.max(pad, window.innerHeight - menuH - pad);
+  }
+  ctx.x = x;
+  ctx.y = y;
+}
+
 function onTabContextMenu(e: MouseEvent, c: DbConnection) {
   e.preventDefault();
   e.stopPropagation();
   ctx.mode = 'tab';
   ctx.sessionId = String(c.sessionId);
   ctx.dbConfigId = String(c.id);
-  ctx.x = e.clientX;
-  ctx.y = e.clientY;
+  placeMenu(e, 'tab');
   ctx.visible = true;
 }
 
@@ -148,9 +168,29 @@ function onBarContextMenu(e: MouseEvent) {
   ctx.mode = 'blank';
   ctx.sessionId = '';
   ctx.dbConfigId = '';
-  ctx.x = e.clientX;
-  ctx.y = e.clientY;
+  placeMenu(e, 'blank');
   ctx.visible = true;
+}
+
+/** 关闭右键选中的这一条连接。 */
+function onCloseCurrent() {
+  const sid = ctx.sessionId;
+  closeCtx();
+  if (sid) emit('close', sid);
+}
+
+/** 关闭当前打开的全部连接。 */
+function onCloseAll() {
+  closeCtx();
+  emit('close-all');
+}
+
+/** 只保留右键的连接。只开着一条时没有「其他」，菜单项不可点。 */
+function onCloseOthers() {
+  if (props.connections.length <= 1) return;
+  const sid = ctx.sessionId;
+  closeCtx();
+  if (sid) emit('close-others', sid);
 }
 
 function onRefreshBrowse() {
@@ -334,6 +374,15 @@ defineExpose({
           <div class="item" @click="onImportConnectionQueries">
             {{ $tr('导入本连接查询记录') }}
           </div>
+          <div class="item divider" @click="onCloseCurrent">{{ $tr('关闭') }}</div>
+          <div class="item" @click="onCloseAll">{{ $tr('关闭所有') }}</div>
+          <div
+            class="item"
+            :class="{ disabled: connections.length <= 1 }"
+            @click="onCloseOthers"
+          >
+            {{ $tr('关闭其他') }}
+          </div>
         </template>
         <template v-else>
           <div class="item" @click="onSaveWorkspace">{{ $tr('保存工作现场') }}</div>
@@ -477,6 +526,12 @@ defineExpose({
 .item:hover {
   background: var(--el-fill-color-light);
   color: var(--el-color-primary);
+}
+.item.disabled,
+.item.disabled:hover {
+  color: var(--el-text-color-disabled);
+  background: transparent;
+  cursor: not-allowed;
 }
 .color-row {
   display: flex;

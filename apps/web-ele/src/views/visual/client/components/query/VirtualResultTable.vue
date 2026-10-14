@@ -318,6 +318,7 @@ function getSelectionRows() {
 function clearSelection() {
   selected.value = new Set();
   currentIndex.value = -1;
+  emit('selection-change', []);
 }
 
 /**
@@ -465,6 +466,25 @@ watch(
     if (appended) return;
     resetResultScroll();
     void nextTick(resetResultScroll);
+  },
+);
+
+/**
+ * 进入/退出编辑会换成另一份行对象，勾选下标不变。
+ * 立刻按新数组把勾选行交回父级，避免父级还拿着已经不在表格里的副本。
+ */
+watch(
+  () => props.rows,
+  (rows) => {
+    const count = rows?.length || 0;
+    let dropped = false;
+    const next = new Set<number>();
+    selected.value.forEach((index) => {
+      if (index >= 0 && index < count) next.add(index);
+      else dropped = true;
+    });
+    if (dropped) selected.value = next;
+    emitSelection();
   },
 );
 

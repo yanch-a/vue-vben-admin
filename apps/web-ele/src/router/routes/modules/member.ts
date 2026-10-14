@@ -1,7 +1,7 @@
 import type { RouteRecordRaw } from 'vue-router';
 
 /**
- * 会员详情 / 订单详情 / 会员分组：列表跳转用，菜单中可能无隐藏路由
+ * 订单详情 / 会员分组：列表跳转用，菜单中可能无隐藏路由（会员新增/编辑已改为列表页弹窗）
  */
 const routes: RouteRecordRaw[] = [
   {
@@ -13,17 +13,6 @@ const routes: RouteRecordRaw[] = [
       hideInMenu: true,
       title: '会员分组',
       activePath: '/member/memberUserGroup',
-    },
-  },
-  {
-    name: 'MemberUserDetailRoute',
-    path: '/memberUser/detail',
-    // @ts-expect-error Options API SFC：vue-tsc 无法为其生成模块声明
-    component: () => import('#/views/member/memberUser/MemberUserEdit.vue'),
-    meta: {
-      hideInMenu: true,
-      title: '会员详情',
-      activePath: '/member/memberUser',
     },
   },
   {

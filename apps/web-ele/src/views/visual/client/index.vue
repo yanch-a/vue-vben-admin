@@ -31,7 +31,6 @@ import { getDbConfigById } from '#/api/visual/vq';
 import {
   downloadDbBackupFile,
   getDbBackupTask,
-  startDbBackup,
 } from '#/api/visual/dbBackup';
 import { Page } from '@vben/common-ui';
 
@@ -271,15 +270,60 @@ async function closeOtherTabs(keepTabId: string) {
   targets.forEach((tab) => closeTabDirect(tab.id));
 }
 
-/** 关闭连接前保护所有查询，不因等待期间新增页签而静默丢稿。 */
-async function closeConnection(sessionId: number | string) {
-  const targets = (getQueryTabsSnapshot().tabsByConnection[String(sessionId)] || []).slice();
-  if (!(await confirmDiscardQueryTabs(targets)) || !(await cancelClosingQueryTabs(targets))) return;
-  const current = getQueryTabsSnapshot().tabsByConnection[String(sessionId)] || [];
-  if (current.some((tab) => !targets.some((target) => target.id === tab.id))) {
-    ElMessage.warning('连接中的页签已变化，请重新关闭'); return;
+/** 取出这些连接上的查询页签，关闭前统一确认草稿并取消执行。 */
+function queryTabsOfConnections(sessionIds: Array<number | string>) {
+  const snap = getQueryTabsSnapshot().tabsByConnection;
+  return sessionIds.flatMap((id) => (snap[String(id)] || []).slice());
+}
+
+/** 确认期间这些连接又新开了页签时，不能按旧名单静默关掉。 */
+function connectionQueryTabsChanged(
+  sessionIds: Array<number | string>,
+  targets: typeof tabs.value,
+) {
+  const snap = getQueryTabsSnapshot().tabsByConnection;
+  return sessionIds.some((id) => {
+    const current = snap[String(id)] || [];
+    return current.some((tab) => !targets.some((target) => target.id === tab.id));
+  });
+}
+
+/**
+ * 关闭一批连接。草稿确认和取消查询只做一次，避免「关闭所有」连续弹窗。
+ * 只关闭调用时已经打开的这些 session，等待期间新开的连接会留下。
+ */
+async function closeConnections(sessionIds: Array<number | string>) {
+  const ids = sessionIds.filter((id) => id != null && String(id) !== '');
+  if (!ids.length) return false;
+  const targets = queryTabsOfConnections(ids);
+  if (!(await confirmDiscardQueryTabs(targets)) || !(await cancelClosingQueryTabs(targets))) return false;
+  if (connectionQueryTabsChanged(ids, targets)) {
+    ElMessage.warning('连接中的页签已变化，请重新关闭');
+    return false;
   }
-  closeConnectionDirect(sessionId);
+  ids.forEach((id) => closeConnectionDirect(id));
+  return true;
+}
+
+/** 关闭连接前保护该连接上的全部查询，不因等待期间新增页签而静默丢稿。 */
+async function closeConnection(sessionId: number | string) {
+  await closeConnections([sessionId]);
+}
+
+/** 连接栏右键「关闭所有」：关掉当前打开的每一条连接。 */
+async function closeAllConnections() {
+  await closeConnections(openConnections.value.map((conn) => conn.sessionId));
+}
+
+/** 连接栏右键「关闭其他」：保留右键的这条，并把它切成当前连接。 */
+async function closeOtherConnections(keepSessionId: number | string) {
+  const targets = openConnections.value
+    .map((conn) => conn.sessionId)
+    .filter((id) => String(id) !== String(keepSessionId));
+  if (!(await closeConnections(targets))) return;
+  if (openConnections.value.some((conn) => String(conn.sessionId) === String(keepSessionId))) {
+    setActiveConnection(keepSessionId);
+  }
 }
 
 /** 收集全部连接中的页签，离开工作台不能只检查当前连接。 */
@@ -363,6 +407,7 @@ const exporting = ref(false);
 
 /** SQL 转储对话框 */
 const sqlDump = reactive({
+  background: false,
   visible: false,
   instanceName: '',
   preselectedTables: [] as string[],
@@ -1715,6 +1760,7 @@ async function onTreeContextAction(payload: {
       await exportInstanceSchemaExcel(instanceName);
       return;
     case 'exportTableSql':
+      sqlDump.background = false;
       sqlDump.instanceName = instanceName;
       // 必须带限定名。只用裸表名时，PG/Oracle 会导出到默认 schema 里的同名空表，文件里就只剩结构。
       sqlDump.preselectedTables = tableName
@@ -1964,32 +2010,23 @@ watch(
   },
 );
 
-/** 右键「导出/备份库为 SQL 文件」：提交后台任务并打开进度框。 */
-async function startInstanceBackup(instanceName: string) {
-  if (!activeConnection.value) {
-    ElMessage.warning('请先打开数据库连接');
+/** 库级导出也先配置表清单、执行引擎和文件选项。 @author yanch */
+function startInstanceBackup(instanceName: string) {
+  if (!activeConnection.value || !instanceName) {
+    ElMessage.warning('请先选择数据库连接和数据库');
     return;
   }
-  if (!instanceName) {
-    ElMessage.warning(`请先选择${instanceLabel.value}`);
-    return;
-  }
-  try {
-    const res: any = await startDbBackup({
-      dbConfigId: activeConnection.value.id,
-      instanceName,
-    });
-    const task = res?.data ?? res;
-    if (!task?.taskId) {
-      ElMessage.error(task?.msg || '没有拿到备份任务');
-      return;
-    }
-    trackDbBackup(task);
-    backupDialog.taskId = task.taskId;
-    backupDialog.visible = true;
-  } catch (e: any) {
-    ElMessage.error(e?.msg || e?.message || '启动备份失败');
-  }
+  sqlDump.instanceName = instanceName;
+  sqlDump.preselectedTables = [];
+  sqlDump.background = true;
+  sqlDump.visible = true;
+}
+
+/** 配置提交成功后接续原后台进度面板。 @author yanch */
+function onConfiguredBackupStarted(task: import('#/api/visual/dbBackup').DbBackupTaskVO) {
+  trackDbBackup(task);
+  backupDialog.taskId = task.taskId;
+  backupDialog.visible = true;
 }
 
 function minimizeBackup() {
@@ -2768,7 +2805,8 @@ function applyEditorResultRatio(editorParts = 2, resultParts = 1) {
 }
 
 /**
- * 导出当前结果对应 SQL：后台重新执行后下载 xlsx（不用前端表格数据）
+ * 导出当前结果对应 SQL：后台按原始 SQL 重新执行后下载 xlsx。
+ * 不传行数上限。SQL 自己写了 LIMIT/TOP 就导出那么多，没写就导出全部结果，不受页面预览 200 行影响。
  * @author yanch
  */
 async function onExportExcel() {
@@ -2788,7 +2826,6 @@ async function onExportExcel() {
         dbConfigId: activeConnection.value!.id,
         instanceName: activeTab.value!.instanceName,
         sql,
-        maxRows: visualClientConfig.exportMaxRows,
       }),
     `SQL导出_${Date.now()}.xlsx`,
     '导出成功',
@@ -2796,7 +2833,8 @@ async function onExportExcel() {
 }
 
 /**
- * 导出当前结果为 INSERT .sql：后台重查 + 库方言拼装（多库兼容）
+ * 导出当前结果为 INSERT .sql：后台按原始 SQL 重查后按库方言拼装。
+ * 行数规则与导出 Excel 相同，不套页面预览或 5 万行上限。
  * @author yanch
  */
 async function onExportSqlInsert() {
@@ -2824,7 +2862,6 @@ async function onExportSqlInsert() {
         sql,
         tableName: tableRef.table,
         schemaName: tableRef.schema,
-        maxRows: visualClientConfig.exportMaxRows,
       }),
     `${schemaPart}${tableRef.table}_insert_${Date.now()}.sql`.replace(
       /[\\/:*?"<>|]/g,
@@ -2835,7 +2872,7 @@ async function onExportSqlInsert() {
 }
 
 /**
- * 表右键：按 SELECT * 后台重查并导出 Excel
+ * 表右键：按不带行数限制的 SELECT *（MongoDB 为 find）导出整表 Excel
  * @author yanch
  */
 async function exportTableAsExcel(
@@ -2860,7 +2897,6 @@ async function exportTableAsExcel(
         dbConfigId: activeConnection.value!.id,
         instanceName,
         sql,
-        maxRows: visualClientConfig.exportMaxRows,
       }),
     `${instanceName}_${tableName}.xlsx`,
     '导出成功',
@@ -2891,7 +2927,7 @@ async function exportInstanceSchemaExcel(instanceName: string) {
   );
 }
 
-/** 按库方言拼 SELECT *（给导出用） */
+/** 按库方言拼不限行数的整表查询，供表右键导出使用 */
 function buildSelectAllSql(
   dbType: string,
   instanceName: string,
@@ -2904,11 +2940,10 @@ function buildSelectAllSql(
     schemaName,
     tableName,
   });
-  return d.selectAllLimited(
-    ident.schema,
-    ident.table,
-    visualClientConfig.exportMaxRows,
-  );
+  if (isMongoDbType(dbType)) {
+    return `db.getCollection(${JSON.stringify(ident.table)}).find({});`;
+  }
+  return `SELECT * FROM ${d.qualifyTable(ident.schema, ident.table)}`;
 }
 
 /**
@@ -3790,6 +3825,8 @@ onBeforeUnmount(() => {
         :active-id="activeConnectionId"
         @change="setActiveConnection"
         @close="closeConnection"
+        @close-all="closeAllConnections"
+        @close-others="closeOtherConnections"
         @refresh="refreshBrowseObjects"
         @open="onOpenConnection"
         @export-session="exportTemporarySession"
@@ -4133,6 +4170,8 @@ onBeforeUnmount(() => {
 
     <SqlDumpDialog
       v-model="sqlDump.visible"
+      :background="sqlDump.background"
+      @started="onConfiguredBackupStarted"
       :db-config-id="activeConnection?.id"
       :db-name="activeConnection?.dbName"
       :db-type="activeConnection?.dbType"

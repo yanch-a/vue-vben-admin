@@ -31,6 +31,16 @@ export default async function request(config: {
   if (config.headers) options.headers = config.headers;
   if (config.signal) options.signal = config.signal;
   if (config.timeout != null) options.timeout = config.timeout;
+  // 实例默认 Content-Type 是 application/json。axios 1.x 遇到 JSON 类型时会把
+  // FormData 转成 JSON 字符串，文件和 dbConfigId 都不再是表单字段，Spring 的
+  // @RequestParam / MultipartFile 会报参数缺失，且进不了业务方法。
+  // 显式声明 multipart 后，浏览器会补上 boundary，服务端才能解析出各字段。
+  if (typeof FormData !== 'undefined' && config.data instanceof FormData) {
+    options.headers = {
+      ...(options.headers || {}),
+      'Content-Type': 'multipart/form-data',
+    };
+  }
 
   let body: any;
   if (method === 'get') {

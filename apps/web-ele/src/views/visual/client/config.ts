@@ -28,7 +28,8 @@ export const visualClientConfig = {
   defaultQueryMaxRows: 200,
 
   /**
-   * 表数据导出 Excel / SQL 转储时的默认最大行数（安全阀）
+   * 跨库复制里勾选「限制行数」后的默认上限。
+   * 查询结果导出和表右键导出 Excel 不使用这个值，按 SQL 实际结果导出。
    */
   exportMaxRows: 50_000,
 } as const;

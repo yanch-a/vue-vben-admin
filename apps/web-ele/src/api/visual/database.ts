@@ -351,6 +351,11 @@ export function exportSqlInsert(data: {
  * @author yanch
  */
 export function exportSqlDump(data: {
+  /** 用户指定引擎，纯净 SQL 仅使用 Java。 @author yanch */
+  engine?: 'jdbc' | 'native'
+  includeDatabaseObjects?: boolean;
+  targetCollation?: string;
+  pureSql?: boolean
   dbConfigId: number | string
   instanceName: string
   tableNames: string[]

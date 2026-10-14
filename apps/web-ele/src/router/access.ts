@@ -315,7 +315,8 @@ function localizeMenuTitles(
 const COMPONENT_ALIASES: Record<string, string> = {
   '/cmsContent/detail': '/cms/cmsContent/CmsContentEdit',
   '/cms/cmsContent/detail': '/cms/cmsContent/CmsContentEdit',
-  '/memberUser/detail': '/member/memberUser/MemberUserEdit',
+  // 会员新增/编辑已改为列表页弹窗，旧菜单里的详情路径统一落到列表页
+  '/memberUser/detail': '/member/memberUser/index',
   '/member/memberUserGroup': '/member/memberUserGroup/index',
   '/member/memberUserGroup/index': '/member/memberUserGroup/index',
   '/member/memberOrder/detail': '/member/memberOrder/MemberOrderView',

@@ -1,13 +1,14 @@
 <script>
   /**
    * 数据库连接配置：方片化管理；公开性、密码留空不改、会员授权分配
+ * 新建/编辑弹窗可直接用当前表单测试连接，不必先保存
    * @author yanch
    */
   import { computed, defineComponent, inject, onMounted, reactive, ref, watch } from 'vue'
   import { useRouter } from 'vue-router'
 
   import { getMemberUser } from '@/api/member/memberUser'
-  import { getInstances, getTableTree, testConnection } from '@/api/visual/database'
+  import { getInstances, getTableTree, testConnection, testConnectionDraft } from '@/api/visual/database'
   import {
     deleteDbConfig,
     editDbConfig,
@@ -39,6 +40,8 @@
       const loading = ref(false)
       const dialogVisible = ref(false)
       const dialogType = ref('add')
+      /** 弹窗内测试未保存连接时的等待态，避免连点重复建连 */
+      const testingDraft = ref(false)
       const formRef = ref(null)
       const totalNum = ref(0)
       const tableData = ref([])
@@ -241,6 +244,78 @@
         })
         sshAuthMode.value = row.sshPrivateKey ? 'key' : 'password'
         dialogVisible.value = true
+      }
+
+      /**
+       * 弹窗内测试当前填写内容。新建还没有 id，不能走已保存连接的测试接口。
+       * 编辑时密码留空，后端会按 id 补已保存凭据。
+       */
+      const testDraftConnection = async () => {
+        const missing = draftTestMissing()
+        if (missing) {
+          ElMessage.warning(missing)
+          return
+        }
+        testingDraft.value = true
+        try {
+          const res = await testConnectionDraft(draftTestPayload())
+          const data = res?.data ?? res
+          if (data?.success) {
+            ElMessage.success(data?.message || '连接成功')
+          } else {
+            ElMessage.error(data?.message || '连接失败')
+          }
+        } catch (error) {
+          ElMessage.error(error?.msg || error?.message || '连接失败')
+        } finally {
+          testingDraft.value = false
+        }
+      }
+
+      /** 测试前只检查建连必需项，中文名称等展示字段可以后填。 */
+      const draftTestMissing = () => {
+        if (!form.dbType) return '请选择数据库类型'
+        if (!form.jdbcUrl && !form.dbHost && !form.schemaName) {
+          return '请输入主机地址、默认数据库或连接URL'
+        }
+        if (!form.jdbcUrl && form.dbHost && !form.dbPort) return '请输入端口'
+        if (!form.username) return '请输入用户名'
+        if (dialogType.value === 'add' && !form.password) return '请输入密码'
+        if (form.sshEnabled === 1) {
+          if (!form.sshHost) return '请输入 SSH 主机'
+          if (!form.sshUsername) return '请输入 SSH 用户'
+          if (dialogType.value === 'add' && sshAuthMode.value === 'password' && !form.sshPassword) {
+            return '请输入 SSH 密码'
+          }
+          if (dialogType.value === 'add' && sshAuthMode.value === 'key' && !form.sshPrivateKey) {
+            return '请输入 SSH 私钥'
+          }
+        }
+        return ''
+      }
+
+      /** 只提交建连字段。密码模式不带私钥，私钥模式不带 SSH 密码，避免用错凭据。 */
+      const draftTestPayload = () => {
+        const payload = {
+          dbType: form.dbType,
+          dbHost: form.dbHost,
+          dbPort: form.dbPort,
+          schemaName: form.schemaName,
+          jdbcUrl: form.jdbcUrl,
+          username: form.username,
+          password: form.password,
+          sshEnabled: form.sshEnabled,
+          sshHost: form.sshHost,
+          sshPort: form.sshPort,
+          sshUsername: form.sshUsername,
+          sshPassword: sshAuthMode.value === 'password' ? form.sshPassword : '',
+          sshPrivateKey: sshAuthMode.value === 'key' ? form.sshPrivateKey : '',
+          sshPassphrase: form.sshPassphrase,
+        }
+        if (dialogType.value === 'edit' && form.id != null) {
+          payload.id = form.id
+        }
+        return payload
       }
 
       const testConnectionMethod = async (row) => {
@@ -699,6 +774,8 @@
         loading,
         dialogVisible,
         dialogType,
+        testingDraft,
+        testDraftConnection,
         formRef,
         form,
         rules,
@@ -1110,8 +1187,15 @@
         </el-form-item>
       </el-form>
       <template #footer>
-        <el-button @click="dialogVisible = false">{{ $tr('取消') }}</el-button>
-        <el-button type="primary" @click="handleSubmit">{{ $tr('确定') }}</el-button>
+        <div class="config-dialog-footer">
+          <el-button :loading="testingDraft" @click="testDraftConnection">
+            {{ $tr('测试连接') }}
+          </el-button>
+          <div class="config-dialog-footer__actions">
+            <el-button @click="dialogVisible = false">{{ $tr('取消') }}</el-button>
+            <el-button type="primary" @click="handleSubmit">{{ $tr('确定') }}</el-button>
+          </div>
+        </div>
       </template>
     </el-dialog>
 
@@ -1357,6 +1441,19 @@
     padding: 20px 24px 28px;
     min-height: 100%;
     box-sizing: border-box;
+  }
+
+  /* 测试放左侧，取消和确定留在右侧，避免误把测试当成保存 */
+  .config-dialog-footer {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    width: 100%;
+  }
+
+  .config-dialog-footer__actions {
+    display: flex;
+    gap: 8px;
   }
 
   .db-config-toolbar {

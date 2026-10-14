@@ -1,14 +1,5 @@
 <script>
-  import {
-    defineComponent,
-    inject,
-    onMounted,
-    reactive,
-    toRefs,
-  } from 'vue'
-  import { useRoute, useRouter } from 'vue-router'
-
-  import { useTabbarStore } from '@vben/stores'
+  import { defineComponent, inject, nextTick, reactive, toRefs } from 'vue'
 
   import { getMemberUserGroupList } from '@/api/member/memberUserGroup'
   import {
@@ -19,16 +10,28 @@
   import { getOptionselect } from '@/api/roleManagement'
   import { ipWhitelistError } from '@/views/member/memberUser/ipWhitelist'
   import { getDictData } from '@/utils/convert'
-  import { backToListPage } from '@/utils/route-back'
-  import { Refresh } from '@element-plus/icons-vue'
 
+  /**
+   * 新增会员时的表单默认值；每次打开新增弹窗都生成新对象，避免沿用上一次编辑的数据
+   */
+  const createDefaultForm = () => ({
+    userStatus: '1',
+    /** 与自助注册一致：默认普通会员角色 */
+    roleId: 2,
+    password: '',
+    repassword: '',
+    ipWhitelist: '',
+  })
+
+  /**
+   * 会员用户新增/编辑弹窗
+   * 用法：父组件通过 ref 调用 showEdit(row)，row 为空表示新增；保存成功后触发 fetchData 事件刷新列表
+   */
   export default defineComponent({
-    name: 'MemberUserDetail',
-    setup() {
+    name: 'MemberUserDialog',
+    emits: ['fetchData'],
+    setup(props, { emit }) {
       const $baseMessage = inject('$baseMessage')
-      const route = useRoute()
-      const router = useRouter()
-      const tabbarStore = useTabbarStore()
 
       const passwordValidator = (rule, value, callback) => {
         if (!value) {
@@ -76,21 +79,21 @@
 
       const state = reactive({
         elForm: null,
+        title: '',
+        dialogFormVisible: false,
+        /** 打开弹窗时加载下拉选项、回显数据的 loading */
+        loading: false,
+        /** 保存中，防止重复提交 */
+        saving: false,
         userGroupOptions: [],
         /** 系统角色下拉（会员单角色 roleId） */
         roleOptions: [],
+        /** 下拉选项只需加载一次，后续打开弹窗直接复用 */
+        optionsLoaded: false,
         userStatusOptions: getDictData('userStatus').data,
-        route: { query: { title: '加载中' } },
         /** 编辑回显的原始用户名，用于跳过未改名时的唯一性请求 */
         originalUserName: '',
-        form: {
-          userStatus: '1',
-          /** 与自助注册一致：默认普通会员角色 */
-          roleId: 2,
-          password: '',
-          repassword: '',
-          ipWhitelist: '',
-        },
+        form: createDefaultForm(),
         rules: {
           userName: [
             { required: true, trigger: 'blur', validator: userNameValidator },
@@ -122,59 +125,86 @@
             },
           }],
         },
-        title: '加载中',
-        pageTitle: '会员用户',
       })
 
-      const goBack = async () => {
-        await backToListPage(route, router, {
-          listRouteName: 'MemberUser',
-          fallbackPath: '/member/memberUser',
-        })
-      }
-
-      const save = () => {
-        state.elForm.validate(async (valid) => {
-          if (valid) {
-            const { msg } = await doEdit(state.form)
-            $baseMessage(msg, 'success', 'vab-hey-message-success')
-            goBack()
-          }
-        })
-      }
-
-      const fetchData = async () => {
+      /** 加载会员分组、角色下拉选项（仅首次打开时请求） */
+      const loadOptions = async () => {
+        if (state.optionsLoaded) return
         const [groupRes, roleRes] = await Promise.all([
           getMemberUserGroupList({}),
           getOptionselect(),
         ])
         state.userGroupOptions = groupRes.data || []
         state.roleOptions = roleRes.data || []
-        if (route.query.id) {
-          const { data } = await getById({ id: route.query.id })
-          state.form = {
-            ...data,
-            repassword: data.password,
-            ipWhitelist: data.ipWhitelist || '',
-          }
-          state.originalUserName = (data.userName || '').trim()
-        } else {
-          state.originalUserName = ''
-        }
+        state.optionsLoaded = true
       }
 
-      onMounted(() => {
-        const title = route.query.title || '会员用户'
-        state.title = title
-        state.pageTitle = title
-        tabbarStore.setTabTitle(route, String(title))
-        fetchData()
-      })
+      /**
+       * 打开弹窗
+       * @param row 列表行数据；为空表示新增，否则按 id 拉取详情进行编辑
+       */
+      const showEdit = async (row) => {
+        const isEdit = !!(row && row.id)
+        state.title = isEdit ? `编辑会员用户【${row.userName || row.id}】` : '新增会员用户'
+        state.form = createDefaultForm()
+        state.originalUserName = ''
+        state.dialogFormVisible = true
+        state.loading = true
+        try {
+          await loadOptions()
+          if (isEdit) {
+            const { data } = await getById({ id: row.id })
+            if (!data) {
+              $baseMessage('未查到相关数据', 'error', 'vab-hey-message-error')
+              state.dialogFormVisible = false
+              return
+            }
+            state.form = {
+              ...data,
+              repassword: data.password,
+              ipWhitelist: data.ipWhitelist || '',
+            }
+            state.originalUserName = (data.userName || '').trim()
+          }
+        } finally {
+          state.loading = false
+        }
+        // 弹窗复用同一个表单实例，切换新增/编辑时清掉上一次残留的校验提示
+        await nextTick()
+        state.elForm?.clearValidate()
+      }
+
+      const close = () => {
+        state.dialogFormVisible = false
+      }
+
+      /** 弹窗完全关闭后重置表单，避免下次打开闪现旧数据 */
+      const onClosed = () => {
+        state.form = createDefaultForm()
+        state.originalUserName = ''
+        state.elForm?.clearValidate()
+      }
+
+      const save = () => {
+        state.elForm.validate(async (valid) => {
+          if (!valid) return
+          state.saving = true
+          try {
+            const { msg } = await doEdit(state.form)
+            $baseMessage(msg, 'success', 'vab-hey-message-success')
+            emit('fetchData')
+            close()
+          } finally {
+            state.saving = false
+          }
+        })
+      }
 
       return {
         ...toRefs(state),
-        goBack,
-        Refresh,
+        showEdit,
+        close,
+        onClosed,
         save,
       }
     },
@@ -182,21 +212,22 @@
 </script>
 
 <template>
-  <div class="detail-container">
-    <el-page-header :content="pageTitle" @back="goBack">
-      <template #extra>
-        <div class="flex items-center">
-          <el-button class="ml-2" type="primary" @click="save">{{ $tr('保存') }}</el-button>
-        </div>
-      </template>
-    </el-page-header>
+  <el-dialog
+    v-model="dialogFormVisible"
+    append-to-body
+    :close-on-click-modal="false"
+    :title="title"
+    top="6vh"
+    width="860px"
+    @closed="onClosed"
+  >
     <el-form
       ref="elForm"
+      v-loading="loading"
       class="member-edit-form"
-      label-width="120px"
+      label-width="100px"
       :model="form"
       :rules="rules"
-      size="large"
     >
       <el-row :gutter="16">
         <el-col :span="12">
@@ -239,10 +270,11 @@
           <el-form-item :label="$tr('密码')" prop="password">
             <el-input
               v-model="form.password"
-              type="password"
+              autocomplete="new-password"
               maxlength="50"
               :placeholder="$tr('请输入密码')"
               show-password
+              type="password"
             />
           </el-form-item>
         </el-col>
@@ -250,10 +282,11 @@
           <el-form-item :label="$tr('重复密码')" prop="repassword">
             <el-input
               v-model="form.repassword"
-              type="password"
+              autocomplete="new-password"
               maxlength="50"
               :placeholder="$tr('请再次输入密码')"
               show-password
+              type="password"
             />
           </el-form-item>
         </el-col>
@@ -263,7 +296,6 @@
               v-model="form.userGroup"
               clearable
               :placeholder="$tr('请选择会员分组')"
-              style="width: 100%"
             >
               <el-option
                 v-for="item in userGroupOptions"
@@ -280,7 +312,6 @@
               v-model="form.roleId"
               filterable
               :placeholder="$tr('请选择角色（决定登录后菜单权限）')"
-              style="width: 100%"
             >
               <el-option
                 v-for="item in roleOptions"
@@ -291,13 +322,13 @@
             </el-select>
           </el-form-item>
         </el-col>
-        <el-col :span="12">
+        <el-col :span="24">
           <el-form-item :label="$tr('状态')" prop="userStatus">
             <el-radio-group v-model="form.userStatus">
               <el-radio
-                border
                 v-for="(key, value) in userStatusOptions"
                 :key="value"
+                border
                 :value="value"
               >
                 {{ key }}
@@ -310,7 +341,7 @@
             <el-input
               v-model="form.ipWhitelist"
               :placeholder="$tr('留空不限制。每行一条，最多20条')"
-              :rows="4"
+              :rows="3"
               type="textarea"
             />
             <div class="ip-whitelist-tip">
@@ -332,16 +363,16 @@
         </el-col>
       </el-row>
     </el-form>
-  </div>
+    <template #footer>
+      <el-button @click="close">{{ $tr('取 消') }}</el-button>
+      <el-button :loading="saving" type="primary" @click="save">
+        {{ $tr('确 定') }}
+      </el-button>
+    </template>
+  </el-dialog>
 </template>
 
 <style scoped>
-.detail-container {
-  padding: 12px 16px 24px;
-}
-.member-edit-form :deep(.el-form-item) {
-  width: 100%;
-}
 .member-edit-form :deep(.el-form-item__content) {
   flex: 1;
   min-width: 0;

@@ -8,13 +8,13 @@
  */
 import { computed, reactive, ref, watch } from 'vue';
 
+import { startDbBackup, type DbBackupTaskVO } from '#/api/visual/dbBackup';
 import { exportSqlDump, getTables } from '#/api/visual/database';
 import {
   downloadBlobAsFile,
   readBlobErrorMessage,
   unwrapFileBlob,
 } from '#/utils/blobDownload';
-import { visualClientConfig } from '../config';
 import { resolveSqlDialect } from '../dialect/sqlDialect';
 
 import { ElMessage } from 'element-plus';
@@ -23,6 +23,8 @@ defineOptions({ name: 'SqlDumpDialog' });
 
 const props = defineProps<{
   modelValue: boolean;
+  /** 库级导出使用后台任务，保留进度、取消与大文件压缩。 */
+  background?: boolean;
   dbConfigId?: number | string | null;
   dbName?: string;
   /** 连接库类型：用于选项文案按方言显示 */
@@ -34,6 +36,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   'update:modelValue': [boolean];
+  started: [DbBackupTaskVO];
 }>();
 
 const visible = computed({
@@ -52,17 +55,64 @@ const fileName = ref('dump.sql');
 
 const form = reactive({
   mode: 'both' as 'structure' | 'data' | 'both',
-  includeUseDatabase: true,
+  engine: 'jdbc' as 'jdbc' | 'native',
+  pureSql: false,
+  includeDatabaseObjects: true,
+  targetCollation: '',
+  limitRows: false,
+  maxRows: 50000,
+  includeUseDatabase: false,
   includeCreateDatabase: false,
   foreignKeyChecks0: true,
   createBulkInsert: true,
   oneRowPerLine: true,
   includeDrop: true,
   includeVersionInfo: true,
-  convertBlobToHex: false,
+  convertBlobToHex: true,
+});
+
+/** 纯净模式按已验证的产品能力展示，避免把厂商 SQL 宣称为跨产品通用 SQL。 @author yanch */
+const supportsPureSql = computed(() => dialect.value.family === 'MYSQL_LIKE');
+const nativeMysql = computed(() => form.engine === 'native' && supportsPureSql.value);
+/** 工具的固定能力先在界面说明，是否安装由后台任务继续检查。 */
+const nativeUnavailableReason = computed(() => {
+  if (['MYSQL_LIKE', 'POSTGRES_LIKE'].includes(dialect.value.family)) return '';
+  if (['SQLITE_LIKE', 'MONGODB_LIKE'].includes(dialect.value.family)) {
+    return form.mode === 'both' && checkedTables.value.length === 1
+      ? '' : '当前客户端仅支持单表/集合的结构和数据导出，请调整选择或使用 Java。';
+  }
+  return '当前数据库的选表导出暂不支持官方客户端，请使用 Java。';
+});
+/** 附属对象只服务于明确的库级标准结构导出，部分表选择不扩大范围。 */
+const canIncludeDatabaseObjects = computed(() => !!props.background && form.engine === 'jdbc'
+  && !form.pureSql && form.mode !== 'data' && checkedTables.value.length === tableOptions.value.length);
+const includeDatabaseObjects = computed(() => form.includeDatabaseObjects && canIncludeDatabaseObjects.value);
+watch(checkedTables, () => {
+  if (!loadingTables.value && checkedTables.value.length !== tableOptions.value.length) form.includeDatabaseObjects = false;
+}, { deep: true });
+const search = ref('');
+const filteredTables = computed(() => tableOptions.value.filter((table) =>
+  table.label.toLowerCase().includes(search.value.trim().toLowerCase()),
+));
+/** 纯净模式由 Java 生成，服务端再次校验，不能靠隐藏复选框保证文件纯净。 */
+watch(() => form.pureSql, (pure) => {
+  if (!pure) return;
+  form.engine = 'jdbc';
+  form.includeUseDatabase = false;
+  form.includeCreateDatabase = false;
+  form.foreignKeyChecks0 = false;
+  form.includeDrop = false;
+  form.includeVersionInfo = false;
+});
+watch(() => form.engine, (engine) => {
+  if (engine !== 'native') return;
+  form.convertBlobToHex = true;
+  form.limitRows = false;
+  if (dialect.value.family === 'SQLITE_LIKE') form.includeDrop = false;
 });
 
 const dumpExtension = computed(() => {
+  if (form.engine === 'jdbc') return props.dbType === 'MONGODB' ? '.js' : '.sql';
   if (props.dbType === 'MONGODB') return '.archive';
   if (
     props.dbType === 'SQL_SERVER' &&
@@ -111,10 +161,11 @@ async function loadTables() {
                 name.endsWith(`.${key}`),
             ),
           );
-    checkedTables.value = resolved.length ? resolved : [...keys];
+    checkedTables.value = props.preselectedTables?.length ? resolved : [...keys];
   } catch {
     tableOptions.value = [];
     checkedTables.value = [];
+    ElMessage.error('读取表清单失败，请关闭后重试');
   } finally {
     loadingTables.value = false;
   }
@@ -135,13 +186,17 @@ watch(
   async (v) => {
     if (!v) return;
     form.mode = 'both';
+    form.includeDatabaseObjects = true;
+    search.value = '';
+    if (!supportsPureSql.value) form.pureSql = false;
     await loadTables();
     syncFileName();
   },
+  { immediate: true },
 );
 
 watch(
-  [checkedTables, () => form.mode, () => props.dbType],
+  [checkedTables, () => form.mode, () => props.dbType, () => form.engine],
   () => syncFileName(),
   { deep: true },
 );
@@ -173,22 +228,32 @@ function withExtension(name: string, extension: string) {
   return clean.replace(/\.[a-z0-9]+$/i, '') + extension;
 }
 
+/** 校验选择并下载完整文件，避免重复提交。 @author yanch */
 async function onExport() {
+  if (exporting.value || loadingTables.value) return;
+  if (form.engine === 'native' && nativeUnavailableReason.value) {
+    ElMessage.warning(nativeUnavailableReason.value);
+    return;
+  }
   if (!props.dbConfigId) {
     ElMessage.warning('无有效连接');
     return;
   }
-  if (!checkedTables.value.length) {
+  if (!checkedTables.value.length && !includeDatabaseObjects.value) {
     ElMessage.warning('请至少选择一张表');
     return;
   }
   exporting.value = true;
   try {
-    const res: any = await exportSqlDump({
+    const request: Parameters<typeof exportSqlDump>[0] = {
       dbConfigId: props.dbConfigId,
       instanceName: props.instanceName,
       tableNames: checkedTables.value,
       mode: form.mode,
+      engine: form.engine,
+      pureSql: form.pureSql,
+      ...(props.background ? { includeDatabaseObjects: includeDatabaseObjects.value } : {}),
+      targetCollation: form.pureSql && form.mode !== 'data' ? form.targetCollation || undefined : undefined,
       includeUseDatabase: form.includeUseDatabase,
       includeCreateDatabase: form.includeCreateDatabase,
       foreignKeyChecks0: form.foreignKeyChecks0,
@@ -197,8 +262,19 @@ async function onExport() {
       includeDrop: form.includeDrop,
       includeVersionInfo: form.includeVersionInfo,
       convertBlobToHex: form.convertBlobToHex,
-      maxRows: visualClientConfig.exportMaxRows,
-    });
+      maxRows: form.limitRows ? form.maxRows : 0,
+    };
+    if (props.background) {
+      const { dbConfigId, engine, ...options } = request;
+      const response: any = await startDbBackup({ dbConfigId, instanceName: props.instanceName, engine,
+        options: { ...options, fileName: fileName.value } });
+      const task = response?.data ?? response;
+      if (!task?.taskId) throw new Error(task?.msg || '未获取到导出任务');
+      emit('started', task);
+      visible.value = false;
+      return;
+    }
+    const res: any = await exportSqlDump(request);
     // 兼容直出 Blob 与历史 { data: Blob } 包装，避免伪 .sql 文件
     // @author yanch
     const fileBlob = unwrapFileBlob(res);
@@ -229,12 +305,16 @@ async function onExport() {
 <template>
   <ElDialog
     v-model="visible"
-    :title="$tr('SQL转储')"
-    width="860px"
+    :title="$tr('数据库导出')"
+    width="960px"
+    :close-on-click-modal="!exporting"
+    :close-on-press-escape="!exporting"
+    :show-close="!exporting"
     destroy-on-close
     append-to-body
     class="sql-dump-dialog"
   >
+    <fieldset class="dump-fields" :disabled="exporting" :aria-busy="exporting">
     <div class="dump-toolbar">
       <div class="mode-row">
         <span class="label">{{ $tr('SQL导出') }}</span>
@@ -261,11 +341,16 @@ async function onExport() {
             <ElButton link size="small" @click="toggleAll(false)">{{ $tr('清空') }}</ElButton>
           </span>
         </div>
+        <ElInput v-model="search" :placeholder="$tr('搜索表名')" :aria-label="$tr('搜索表名')" clearable />
+        <div class="folder">{{ $tr('已选择') }} {{ checkedTables.length }} / {{ tableOptions.length }}</div>
         <ElScrollbar height="360px">
+          <!-- 全选控件独立于 CheckboxGroup，避免把它自身当作待导出表。 -->
+          <ElCheckbox :model-value="checkedTables.length > 0 && checkedTables.length === tableOptions.length"
+            :indeterminate="checkedTables.length > 0 && checkedTables.length < tableOptions.length"
+            @change="(checked: boolean | number | string) => toggleAll(!!checked)">{{ $tr('表（全选）') }}</ElCheckbox>
           <ElCheckboxGroup v-model="checkedTables" class="table-checks">
-            <div class="folder">{{ $tr('表') }}</div>
             <ElCheckbox
-              v-for="item in tableOptions"
+              v-for="item in filteredTables"
               :key="item.key"
               :value="item.key"
             >
@@ -277,40 +362,74 @@ async function onExport() {
 
       <div class="opt-pane">
         <div class="opt-group">
+          <div class="opt-title">{{ $tr('导出方式') }}</div>
+          <ElRadioGroup v-model="form.engine" :aria-label="$tr('导出方式')">
+            <ElRadio value="jdbc">{{ $tr('Java 导出') }}</ElRadio>
+            <ElRadio value="native" :disabled="form.pureSql || !!nativeUnavailableReason">{{ $tr('官方客户端') }}</ElRadio>
+          </ElRadioGroup>
+          <ElCheckbox v-if="background" v-model="form.includeDatabaseObjects" :disabled="!canIncludeDatabaseObjects">{{ $tr('包含视图、独立序列和程序对象（全部表）') }}</ElCheckbox>
+          <ElCheckbox v-model="form.pureSql" :disabled="!supportsPureSql">{{ $tr('纯净 SQL（仅建表语句和 INSERT）') }}</ElCheckbox>
+          <div v-if="form.pureSql" class="mt-2">
+            <span>{{ $tr('目标排序规则') }}</span>
+            <ElSelect v-model="form.targetCollation" :disabled="form.mode === 'data'" :aria-label="$tr('目标排序规则')" style="width: 100%">
+              <ElOption :label="$tr('保留源定义（默认）')" value="" />
+              <ElOption label="utf8mb4_unicode_ci" value="utf8mb4_unicode_ci" />
+              <ElOption label="utf8mb4_general_ci" value="utf8mb4_general_ci" />
+              <ElOption label="utf8mb4_bin" value="utf8mb4_bin" />
+            </ElSelect>
+            <div class="hint">{{ $tr('迁到 MariaDB 或旧版 MySQL 时可明确选择兼容规则；更换规则会改变比较与排序语义。') }}</div>
+          </div>
+          <div class="hint">{{ $tr(supportsPureSql
+            ? '纯净版使用源数据库方言，不含 USE、CREATE DATABASE、DROP、SET、触发器和存储过程。导入前选择目标库；导出结构时外键依赖表需一起勾选；仅数据可选择子表。'
+            : '当前纯净 SQL 支持 MySQL 兼容数据库，其他数据库可使用标准导出。') }}</div>
+          <ElAlert v-if="form.engine === 'native'" type="info" :closable="false"
+            :title="$tr('使用服务端配置的官方客户端；不可用时会提示错误。客户端负责会话及文件格式，精细选项请使用 Java 导出。')" />
+          <ElAlert v-if="nativeUnavailableReason" type="info" :closable="false" :title="$tr(nativeUnavailableReason)" />
+        </div>
+        <ElDivider />
+        <div class="opt-group">
           <div class="opt-title">{{ $tr('把选项写进文件') }}</div>
-          <ElCheckbox v-model="form.includeUseDatabase">{{
+          <ElCheckbox v-model="form.includeUseDatabase" :disabled="form.pureSql || form.engine === 'native'">{{
             dialect.dumpUseOptionLabel
           }}</ElCheckbox>
-          <ElCheckbox v-model="form.includeCreateDatabase">{{ $tr('包含创建库/Schema 语句') }}</ElCheckbox>
-          <ElCheckbox v-model="form.foreignKeyChecks0">{{
+          <ElCheckbox v-model="form.includeCreateDatabase" :disabled="form.pureSql || form.engine === 'native'">{{ $tr('包含创建库/Schema 语句') }}</ElCheckbox>
+          <ElCheckbox v-model="form.foreignKeyChecks0" :disabled="form.pureSql || form.engine === 'native'">{{
             dialect.dumpFkOptionLabel
           }}</ElCheckbox>
-          <ElCheckbox v-model="form.createBulkInsert">{{ $tr('创建批量插入语句') }}</ElCheckbox>
+          <ElCheckbox v-model="form.createBulkInsert" :disabled="form.engine === 'native' && !nativeMysql">{{ $tr('创建批量插入语句') }}</ElCheckbox>
           <ElCheckbox
             v-model="form.oneRowPerLine"
-            :disabled="!form.createBulkInsert"
+            :disabled="!form.createBulkInsert || form.engine === 'native'"
             class="indent"
           >
             {{ $tr('每行一条记录') }}
           </ElCheckbox>
-          <ElCheckbox v-model="form.includeDrop">{{ $tr('包含 "DROP" 语句') }}</ElCheckbox>
-          <ElCheckbox v-model="form.includeVersionInfo">{{ $tr('在备份文件中包含版本信息') }}</ElCheckbox>
-          <ElCheckbox v-model="form.convertBlobToHex">{{ $tr('将 BLOB 转为 HEX') }}</ElCheckbox>
+          <ElCheckbox v-model="form.includeDrop" :disabled="form.pureSql || (form.engine === 'native' && !nativeMysql && dialect.family !== 'POSTGRES_LIKE')">{{ $tr('包含 "DROP" 语句') }}</ElCheckbox>
+          <ElCheckbox v-model="form.includeVersionInfo" :disabled="form.pureSql || (form.engine === 'native' && !nativeMysql)">{{ $tr('在备份文件中包含版本信息') }}</ElCheckbox>
+          <ElCheckbox v-model="form.convertBlobToHex" :disabled="form.engine === 'native'">{{ $tr('将 BLOB 转为 HEX') }}</ElCheckbox>
         </div>
         <div class="hint">
-          {{ $tr('导出由服务端重新读取表结构与数据生成，不使用前端缓存数据。 单表数据上限') }} {{ visualClientConfig.exportMaxRows }} {{ $tr('行。') }}
+          <ElCheckbox v-model="form.limitRows" :disabled="form.engine === 'native' || form.mode === 'structure'">{{ $tr('限制每表数据行数') }}</ElCheckbox>
+          <ElInputNumber v-if="form.limitRows" v-model="form.maxRows" :min="1" :max="2147483647" :aria-label="$tr('每表数据行数上限')" />
+          <p>{{ $tr('默认导出所选表的全部数据。导出文件供同类型数据库导入；不同产品之间迁移请使用复制到不同主机。') }}</p>
         </div>
       </div>
     </div>
 
+    </fieldset>
     <template #footer>
-      <ElButton :loading="exporting" type="primary" @click="onExport">{{ $tr('导出') }}</ElButton>
-      <ElButton @click="visible = false">{{ $tr('关闭') }}</ElButton>
+      <ElButton :loading="exporting" :disabled="loadingTables || (!checkedTables.length && !includeDatabaseObjects)" type="primary" @click="onExport">{{ $tr('导出') }}</ElButton>
+      <ElButton :disabled="exporting" @click="visible = false">{{ $tr('关闭') }}</ElButton>
     </template>
   </ElDialog>
 </template>
 
 <style scoped>
+.dump-fields { border: 0; margin: 0; padding: 0; min-width: 0; }
+.sql-dump-dialog { max-width: calc(100vw - 32px); }
+.opt-pane { max-height: 65vh; overflow-y: auto; }
+@media (max-width: 680px) { .dump-body { grid-template-columns: 1fr !important; } }
+
 .dump-toolbar {
   margin-bottom: 12px;
 }

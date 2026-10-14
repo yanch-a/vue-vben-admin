@@ -6,24 +6,25 @@
     reactive,
     toRefs,
   } from 'vue'
-  import { useRouter } from 'vue-router'
 
   import { getMemberUserGroupList } from '@/api/member/memberUserGroup'
   import { doDelete, getPage } from '@/api/member/memberUserApi'
+  import MemberUserDialog from '@/views/member/memberUser/MemberUserDialog.vue'
   import { formatIpWhitelist } from '@/views/member/memberUser/ipWhitelist'
   import { getDictData } from '@/utils/convert'
   import { Delete, Edit as EditIcon, Plus, Search } from '@element-plus/icons-vue'
 
   export default defineComponent({
     name: 'MemberUserManage',
-    components: {},
+    components: { MemberUserDialog },
     setup() {
       const $baseConfirm = inject('$baseConfirm')
       const $baseMessage = inject('$baseMessage')
-      const router = useRouter()
       const userStatusMap = getDictData('userStatus')?.data || {}
 
       const state = reactive({
+        /** 新增/编辑弹窗实例 */
+        editRef: null,
         list: [],
         listLoading: true,
         layout: 'total, sizes, prev, pager, next, jumper',
@@ -41,25 +42,11 @@
         state.selectRows = val
       }
 
+      /**
+       * 打开新增/编辑弹窗；工具栏按钮点击时传入的是事件对象，没有 id 即视为新增
+       */
       const handleEdit = (row) => {
-        if (row && row.id) {
-          router.push({
-            path: '/memberUser/detail',
-            query: {
-              id: row.id,
-              title: '编辑-会员用户',
-              timestamp: new Date().getTime(),
-            },
-          })
-        } else {
-          router.push({
-            path: '/memberUser/detail',
-            query: {
-              title: '新增-会员用户',
-              timestamp: new Date().getTime(),
-            },
-          })
-        }
+        state.editRef.showEdit(row && row.id ? row : null)
       }
 
       const handleDelete = (row) => {
@@ -291,5 +278,6 @@
       @current-change="handleCurrentChange"
       @size-change="handleSizeChange"
     />
+    <member-user-dialog ref="editRef" @fetch-data="fetchData" />
   </div>
 </template>
