@@ -46,9 +46,13 @@ export async function memberLoginApi(data: AuthApi.LoginParams) {
  * 刷新 accessToken（lemon 无此接口，保留兼容）
  */
 export async function refreshTokenApi() {
-  return baseRequestClient.post<AuthApi.RefreshTokenResult>('/auth/refresh', {
-    withCredentials: true,
-  });
+  return baseRequestClient.post<AuthApi.RefreshTokenResult>(
+    '/auth/refresh',
+    undefined,
+    {
+      withCredentials: true,
+    },
+  );
 }
 
 /** 管理员退出 */

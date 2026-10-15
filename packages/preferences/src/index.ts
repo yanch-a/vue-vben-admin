@@ -22,11 +22,15 @@ function definePreferencesExtension<
   return extension;
 }
 
-/** 应用级 ICP 备案配置，供各 app 的 preferences 覆盖使用 */
+/** 应用级版权配置，供各 app 的 preferences 覆盖使用 */
 const appCopyrightPreferences = {
   companyName: 'Lemon',
+  companySiteLink: 'https://www.vben.pro',
+  date: '2024',
+  enable: true,
   icp: '',
   icpLink: 'https://beian.miit.gov.cn/',
+  settingShow: true,
 } satisfies DeepPartial<Preferences>['copyright'];
 
 export {
