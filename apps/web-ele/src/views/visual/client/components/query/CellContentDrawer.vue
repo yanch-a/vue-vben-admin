@@ -265,10 +265,12 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
+  <!-- 默认占视口 30% 宽度；resizable 开启左边缘拖拽调宽，拖出的宽度在本页面会话内保留 -->
   <ElDrawer
     v-model="visible"
     direction="rtl"
-    size="560px"
+    size="30%"
+    resizable
     append-to-body
     destroy-on-close
     class="cell-content-drawer"

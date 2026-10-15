@@ -7,6 +7,7 @@
  * - 复制行：把当前行字段复制成底部新行，改完后同样按 INSERT 保存
  * - 单击单元格：选中行 + 单元格边框高亮；Ctrl+C 复制当前单元格
  * - 表格编辑：同一张结果表点单元格改，脏行底色，保存时按原值 WHERE 逐行 UPDATE（主键可改）
+ * - 单表没有可用主键：按本次查询里可回写的全部字段旧值定位；保存前先数每一行匹配条数，多条则整批不改
  * - 联表：改哪张表就必须带上该表主键，只按主键 UPDATE，不按全列定位
  * - 结果表用虚拟滚动（非 ElTable）：避免 1000 行 × N 列挂上万个单元格组件把页面打到 GB 级
  *
@@ -254,9 +255,21 @@ const pkInResult = computed(() =>
     .filter((k): k is string => !!k),
 );
 const tableHasPk = computed(() => (props.primaryKeys || []).length > 0);
-/** 定位要求完整主键；生成 SQL 时额外加入查询中可写列的原值检测冲突。 */
+/**
+ * 结果里带齐主键，才按主键定位。
+ * 表没有主键，或主键列没出现在本次 SELECT 里，都改按查出来的可回写字段定位。
+ */
+const pkLocated = computed(
+  () => tableHasPk.value && pkInResult.value.length === (props.primaryKeys || []).length,
+);
+/**
+ * 有完整主键时 WHERE 至少带上主键，生成 SQL 时再并入全部可写列的原值。
+ * 否则定位条件就是本次查询里可回写的全部字段旧值。
+ */
 const whereCols = computed(() =>
-  tableHasPk.value ? pkInResult.value : columns.value,
+  pkLocated.value
+    ? pkInResult.value
+    : columns.value.filter((name) => columnBindings.value.get(name)?.writable),
 );
 
 const isJoinQuery = computed(() => {
@@ -345,8 +358,10 @@ const canEnterSheet = computed(
 );
 
 /**
- * 修改/删除前检查完整主键；无主键禁止自动回写，不用全列旧值猜测行身份。
- * 联表不走「无主键全列 WHERE」，改哪张表就要求该表主键出现在结果中（保存时再校验）。
+ * 修改/删除前确认能定位到原行。
+ * 结果里带齐主键时按主键定位；主键缺失时按本次查询的可回写字段旧值定位，不再拦住编辑。
+ * 真正有没有主键、一行会不会匹配到多条，由保存时的数据库核对决定，匹配多条则整批不改。
+ * 联表仍不走全列 WHERE，改哪张表就要求该表主键出现在结果中（保存时再校验）。
  * 进入编辑前会再拉一次主键，避免空缓存把有主键的表当成无主键。
  */
 async function confirmRowMutation(action: '修改' | '删除'): Promise<boolean> {
@@ -370,14 +385,8 @@ async function confirmRowMutation(action: '修改' | '删除'): Promise<boolean>
     }
     return true;
   }
-  if (tableHasPk.value && pkInResult.value.length !== (props.primaryKeys || []).length) {
-    ElMessage.warning(
-      `当前结果未包含主键（${(props.primaryKeys || []).join(', ')}），无法按主键定位。请在 SELECT 中带上主键列后再${action}`,
-    );
-    return false;
-  }
-  if (!tableHasPk.value && !isMongo.value) {
-    ElMessage.warning('当前表没有可确认的主键，已禁止直接修改或删除。请添加主键，或在 SQL 编辑器中明确编写条件');
+  if (!pkLocated.value && !isMongo.value && !whereCols.value.length) {
+    ElMessage.warning('当前结果没有可回写的字段，无法按查询列定位原行');
     return false;
   }
   return true;
@@ -858,9 +867,9 @@ function onCopyUpdate() {
     );
     copyText(
       sql,
-      tableHasPk.value
+      pkLocated.value
         ? '已复制 UPDATE 语句（按主键）'
-        : '已复制 UPDATE 语句（无主键，WHERE 为结果列旧值）',
+        : '已复制 UPDATE 语句（按查询字段旧值定位）',
     );
   } catch (e: any) {
     ElMessage.warning(e?.message || '生成失败');
@@ -1040,9 +1049,13 @@ async function onDelete() {
         ? `将删除已勾选的 ${count} 行，未勾选的行不会删除。`
         : `将删除已勾选的 ${count} 行。右键所在行没有勾选，不会删除。`
       : '当前没有勾选，将只删除右键所在的这一行。';
+  const noPkLocate =
+    sources.stored.length > 0 && !isJoinQuery.value && !isMongo.value && !pkLocated.value
+      ? '按本次查询的全部字段旧值定位。保存前会核对匹配条数，匹配到多条则不会删除。'
+      : '';
   const locateText = sources.stored.length === 0
     ? '这些行还没写入数据库，只会从表格里去掉。'
-    : `${sources.local.length ? `其中 ${sources.local.length} 行还没保存，只从表格去掉。` : ''}${editMode.value ? '其它未保存修改会保留。' : ''}${isMongo.value ? 'MongoDB 按行删除，失败时已成功的删除会保留。' : '校验原值，每条必须准确定位一行；定位冲突则整批回滚。成功提交后不可恢复。'}`;
+    : `${noPkLocate}${sources.local.length ? `其中 ${sources.local.length} 行还没保存，只从表格去掉。` : ''}${editMode.value ? '其它未保存修改会保留。' : ''}${isMongo.value ? 'MongoDB 按行删除，失败时已成功的删除会保留。' : '校验原值，每条必须准确定位一行；定位冲突则整批回滚。成功提交后不可恢复。'}`;
   try {
     await ElMessageBox.confirm(`${scopeText}${locateText}`, '删除确认', {
       type: 'warning',
@@ -1170,20 +1183,29 @@ async function onSaveEdit() {
       }
       sheetSaving.value = true;
       setResultSaving(origin, true);
-      await props.executeRowDmlBatch(sqls, parameters);
-      if (origin !== props.result) { if (origin && index >= 0) origin.rows[index] = edited; return; }
+      const saved = await props.executeRowDmlBatch(sqls, parameters) as { affectedRows?: number; data?: { affectedRows?: number } } | null;
+      const affected = Number(saved?.affectedRows ?? saved?.data?.affectedRows);
+      const doneText = Number.isFinite(affected) ? `已保存，影响 ${affected} 行` : '已保存';
+      if (origin !== props.result) {
+        if (origin && index >= 0) origin.rows[index] = edited;
+        ElMessage.success(doneText);
+        return;
+      }
       editVisible.value = false;
       expectResultRefresh.value = true;
       emit('refresh-result');
+      ElMessage.success(doneText);
       return;
     }
     if (!props.executeRowDml) throw new Error('当前页未提供文档更新接口，已禁止写入');
     const run = props.executeRowDml;
     sheetSaving.value = true; setResultSaving(origin, true);
     await run(sqls[0]!);
-    if (origin !== props.result) { if (origin && index >= 0) origin.rows[index] = edited; return; }
+    if (origin !== props.result) { if (origin && index >= 0) origin.rows[index] = edited; ElMessage.success('已保存'); return; }
     editVisible.value = false;
-    expectResultRefresh.value = true; emit('refresh-result');
+    expectResultRefresh.value = true;
+    emit('refresh-result');
+    ElMessage.success('已保存');
   } catch (e: any) {
     ElMessage.warning(e?.message || '生成 UPDATE 失败');
   } finally {
@@ -1406,7 +1428,11 @@ function markRowsSaved(rowIndexes: number[]) {
 }
 
 async function confirmLeaveSheet(action: string): Promise<boolean> {
-  if (sheetSaving.value) { ElMessage.warning('结果正在保存，请等待完成'); return false; }
+  // 保存成功后马上刷新结果，这次刷新不属于「中途离开」。
+  if (sheetSaving.value && !expectResultRefresh.value) {
+    ElMessage.warning('结果正在保存，请等待完成');
+    return false;
+  }
   const resultAtConfirm = props.result;
   if (!(await commitEditingCell())) return false;
   if (!editMode.value || dirtyCount.value <= 0) return true;
@@ -1455,7 +1481,7 @@ async function onExitSheet() {
 
 /**
  * 添加行 / 复制行共用：不在编辑模式时先进入。
- * 结果里已经有行时，编辑模式也能改旧行，所以仍做主键确认；空结果只插入，不弹无主键警告。
+ * 结果里已经有行时，编辑模式也能改旧行，所以仍确认能否定位；空结果只插入。
  */
 let sheetEntering = false;
 async function enterEditForInsert(): Promise<boolean> {
@@ -1557,18 +1583,18 @@ function describeSave(edits: DirtyRowEdit[]): { title: string; message: string }
   }
   if (updateCount) {
     detail.push(
-      tableHasPk.value
+      pkLocated.value
         ? '更新按修改前的主键定位。'
-        : '当前表没有主键，更新按结果列旧值定位。',
+        : '更新按本次查询的全部字段旧值定位。保存前会先数每一行匹配到几条，匹配到多条就取消保存，不会修改数据。',
     );
   }
   detail.push(isMongo.value ? 'MongoDB 按行提交，中途失败时已成功行保留，未提交行保留草稿。' : '本次全部修改在一个事务中提交，发生冲突时整批回滚；提交或回滚状态未知时必须重新查询核对。');
   const title =
     insertCount > 0 && updateCount === 0
       ? '保存新增行'
-      : tableHasPk.value
+      : pkLocated.value
         ? '保存表格修改（按主键定位）'
-        : '保存表格修改（无主键）';
+        : '保存表格修改（按查询字段定位）';
   return {
     title,
     message: `将${bits.join('、')}。${detail.join('')}是否继续？`,
@@ -2318,9 +2344,9 @@ defineExpose({ confirmLeaveSheet, isSaving: () => sheetSaving.value, hasPendingE
       :title="
         isJoinQuery
           ? '修改行（联表按各表主键更新）'
-          : tableHasPk
+          : pkLocated
             ? '修改行（按主键更新）'
-            : '修改行（无主键）'
+            : '修改行（按查询字段更新）'
       "
       width="860px"
       destroy-on-close
@@ -2333,11 +2359,11 @@ defineExpose({ confirmLeaveSheet, isSaving: () => sheetSaving.value, hasPendingE
       <p v-if="isJoinQuery" class="pk-hint">
         {{ $tr('联表只能按各表主键定位。改哪张表，结果里就要带上该表主键；同名 id 请写成 别名.id。') }}
       </p>
-      <p v-else-if="tableHasPk" class="pk-hint">
+      <p v-else-if="pkLocated" class="pk-hint">
         {{ $tr('WHERE 使用主键：') }}{{ pkInResult.join(', ') }}
       </p>
-      <p v-else class="pk-hint warn">
-        {{ $tr('当前表没有完整主键，无法安全定位原行，请补齐主键后重新查询。') }}
+      <p v-else class="pk-hint">
+        {{ $tr('将按本次查询的全部字段旧值定位原行。保存前会先核对每一行匹配条数，匹配到多条就取消，不会修改数据。') }}
       </p>
       <ElForm :label-width="editLabelWidth" class="edit-form">
         <ElFormItem v-for="col in columns" :key="col" :label="col">

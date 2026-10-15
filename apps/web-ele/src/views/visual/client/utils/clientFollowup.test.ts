@@ -35,8 +35,8 @@ describe('追加修复回归', () => {
     expect(oracle).toContain('DBMS_LOB.COMPARE("c", ?) = 0'); expect(oracle).toContain('DBMS_LOB.COMPARE("b", ?) = 0');
     expect(oracle).toContain('XMLSERIALIZE(CONTENT XMLTYPE(?) AS CLOB)');
     const sqlserver = buildDeleteSql({table:'t'},{id:1,c:typed('old',-1,'text'),x:typed('<a/>',2009,'xml')},['id','c','x'],['id'],'SQL_SERVER',[]);
-    expect(sqlserver).toContain('CONVERT(varbinary(max), CONVERT(nvarchar(max), [c]))');
-    expect(sqlserver).toContain('CONVERT(varbinary(max), CONVERT(nvarchar(max), [x]))');
+    expect(sqlserver).toContain('CAST(CAST([c] AS nvarchar(max)) AS varbinary(max))');
+    expect(sqlserver).toContain('CAST(CAST([x] AS nvarchar(max)) AS varbinary(max))');
   });
   it('字符串原值比较区分大小写/尾空格，未知对象明确拒绝而不是省略保护', () => {
     expect(buildUpdateSql({table:'t'},{id:1,v:typed('Old ',12,'varchar')},{v:typed('New',12,'varchar')},['v'],['id'],'MY_SQL',[])).toContain('CAST(`v` AS BINARY) = CAST(? AS BINARY)');

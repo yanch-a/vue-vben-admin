@@ -49,10 +49,10 @@ export function resultValuePredicate(column: string, value: any, dbType: string,
     if (/^(GEOMETRY|GEOGRAPHY)$/.test(name)) return `ST_AsEWKB(${column}${name === 'GEOGRAPHY' ? '::geometry' : ''}) = ST_AsEWKB(${operand}${name === 'GEOGRAPHY' ? '::geometry' : ''})`;
   }
   if (family === 'SQLSERVER_LIKE') {
-    if (name === 'XML' || jdbc === 2009 || /^(TEXT|NTEXT)$/.test(name)) return `CONVERT(varbinary(max), CONVERT(nvarchar(max), ${column})) = CONVERT(varbinary(max), CONVERT(nvarchar(max), ${operand}))`;
-    if (/^(IMAGE)$/.test(name)) return `CONVERT(varbinary(max), ${column}) = ${operand}`;
+    if (name === 'XML' || jdbc === 2009 || /^(TEXT|NTEXT)$/.test(name)) return `CAST(CAST(${column} AS nvarchar(max)) AS varbinary(max)) = CAST(CAST(${operand} AS nvarchar(max)) AS varbinary(max))`;
+    if (/^(IMAGE)$/.test(name)) return `CAST(${column} AS varbinary(max)) = ${operand}`;
     if (/^(GEOMETRY|GEOGRAPHY)$/.test(name)) throw new Error('该 SQL Server 空间字段暂不能安全校验原值，请使用原生 SQL');
-    if ([1, 12, -1, -9, -15, -16].includes(jdbc)) return `CONVERT(varbinary(max), ${column}) = CONVERT(varbinary(max), ${operand})`;
+    if ([1, 12, -1, -9, -15, -16].includes(jdbc)) return `CAST(${column} AS varbinary(max)) = CAST(${operand} AS varbinary(max))`;
   }
   if (family === 'MYSQL_LIKE' && ([1, 12, -1, -9, -15, -16].includes(jdbc) || /GEOMETRY|GEOGRAPHY|POINT|POLYGON|LINESTRING/.test(name))) return `CAST(${column} AS BINARY) = CAST(${operand} AS BINARY)`;
   return `${column} = ${operand}`;

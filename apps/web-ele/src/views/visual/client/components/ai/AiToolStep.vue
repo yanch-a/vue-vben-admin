@@ -54,7 +54,7 @@ const summary = computed(() => {
     const firstLine = s.split(/\r?\n/)[0] || '';
     return firstLine.length > 60 ? `${firstLine.slice(0, 60)}…` : firstLine;
   };
-  const preferred = ['table', 'tables', 'sql', 'keyword', 'title'];
+  const preferred = ['table', 'tables', 'sql', 'keywords', 'keyword', 'title'];
   for (const k of preferred) {
     if (a[k] != null && a[k] !== '') return pick(a[k]);
   }

@@ -50,14 +50,47 @@ describe('结果编辑交互修复',()=>{
     expect(document.querySelector<HTMLTextAreaElement>('.result-edit-dialog textarea:nth-child(1)')).not.toBeNull();
     expect(inputs[1]!.value).toBe('keep');expect(inputs[1]!.disabled).toBe(false);
   });
-  it('复合主键缺少一列时拒绝进入编辑，表达式伪装主键也拒绝',async()=>{
-    await mount({primaryKeys:['id','tenant_id']});await click('表格编辑');expect(document.body.textContent).not.toContain('退出编辑');
+  it('结果未带齐主键时按查询字段进入编辑并保存',async()=>{
+    const {batch}=await mount({primaryKeys:['id','tenant_id']});
+    await click('表格编辑');expect(document.body.textContent).toContain('退出编辑');
+    await editValue('new');vi.spyOn(ElMessageBox,'confirm').mockResolvedValue('confirm' as never);
+    await click('保存修改');for(let i=0;i<8;i++)await Promise.resolve();
+    expect(batch).toHaveBeenCalledOnce();
+    expect(batch.mock.calls[0]![0]).toEqual(['UPDATE `t` SET `v` = ? WHERE `id` = ? AND `v` = ?;']);
+    expect(String(batch.mock.calls[0]![0])).not.toContain('tenant_id');
+    expect(batch.mock.calls[0]![1][0].map((parameter:any)=>parameter.value)).toEqual(['new','9007199254740993','old']);
   });
-  it('无主键结果不能通过旧值猜测行身份',async()=>{
-    vi.spyOn(ElMessageBox,'confirm').mockResolvedValue('confirm' as never);
-    localStorage.setItem('lemon-visual-client:skip-no-pk-warn-until',String(Date.now()+86400000));
-    await mount({primaryKeys:[],tableMetas:[{ref:{table:'t'},columns:['id','v'],primaryKeys:[]}]});
-    await click('表格编辑');expect(document.body.textContent).not.toContain('退出编辑');
+  it('无主键结果按本次查询的全部字段旧值修改和删除',async()=>{
+    const {batch}=await mount({primaryKeys:[],tableMetas:[{ref:{table:'t'},columns:['id','v'],primaryKeys:[]}],
+      result:{columns:['id','v'],rows:[{id:1,v:'old'}],rowCount:1,sourceSql:'SELECT id,v FROM t'}});
+    await click('表格编辑');expect(document.body.textContent).toContain('退出编辑');
+    await editValue('new');vi.spyOn(ElMessageBox,'confirm').mockResolvedValue('confirm' as never);
+    await click('保存修改');for(let i=0;i<8;i++)await Promise.resolve();
+    expect(batch).toHaveBeenCalledOnce();
+    expect(batch.mock.calls[0]![0]).toEqual(['UPDATE `t` SET `v` = ? WHERE `id` = ? AND `v` = ?;']);
+    expect(batch.mock.calls[0]![1][0].map((parameter:any)=>parameter.value)).toEqual(['new',1,'old']);
+    batch.mockClear();
+    await deleteFromMenu('删除');
+    expect(batch).toHaveBeenCalledOnce();
+    expect(batch.mock.calls[0]![0]).toEqual(['DELETE FROM `t` WHERE `id` = ? AND `v` = ?;']);
+    expect(batch.mock.calls[0]![1][0].map((parameter:any)=>parameter.value)).toEqual([1,'new']);
+  });
+  it('无主键右键修改按全部查询字段定位，表达式列不参与回写',async()=>{
+    const {batch}=await mount({primaryKeys:[],tableMetas:[{ref:{table:'t'},columns:['id','v'],primaryKeys:[]}],
+      result:{columns:['id','name'],rows:[{id:1,name:'OLD'}],rowCount:1,sourceSql:'SELECT id, UPPER(v) AS name FROM t'}});
+    document.querySelector<HTMLElement>('.vrt-td[title="OLD"]')!.dispatchEvent(new MouseEvent('contextmenu',{bubbles:true}));
+    await nextTick();
+    const item=[...document.querySelectorAll<HTMLElement>('.item')].find((element)=>element.textContent?.trim()==='修改…');
+    expect(item).toBeDefined();item!.click();for(let i=0;i<8;i++)await Promise.resolve();await nextTick();
+    expect(document.body.textContent).toContain('按本次查询的全部字段旧值定位原行');
+    const inputs=document.querySelectorAll<HTMLTextAreaElement>('.result-edit-dialog textarea');
+    inputs[0]!.value='2';inputs[0]!.dispatchEvent(new Event('input',{bubbles:true}));await nextTick();
+    vi.spyOn(ElMessageBox,'confirm').mockImplementation(async()=>'confirm' as never);
+    const save=[...document.querySelectorAll<HTMLButtonElement>('.result-edit-dialog button')].find((button)=>button.textContent?.trim()==='保存')!;
+    save.click();for(let i=0;i<8;i++)await Promise.resolve();await nextTick();
+    expect(batch).toHaveBeenCalledOnce();
+    expect(batch.mock.calls[0]![0]).toEqual(['UPDATE `t` SET `id` = ? WHERE `id` = ?;']);
+    expect(batch.mock.calls[0]![1][0].map((parameter:any)=>parameter.value)).toEqual(['2',1]);
   });
   it('主键读取期间切换结果，取消发起结果的进入编辑操作',async()=>{
     let release:()=>void=()=>{};const read=new Promise<void>((resolve)=>{release=resolve;});
@@ -74,11 +107,16 @@ describe('结果编辑交互修复',()=>{
     // 后一项 id+1 是只读表达式，不允许污染 WHERE 中真实主键 1。
     expect(batch).toHaveBeenCalledOnce();expect(batch.mock.calls[0]![1][0].map((p:any)=>p.value)).toEqual(['new',1,'old']);
   });
-  it('大小写不同的普通字段不能冒充真实主键', async () => {
-    await mount({ dbType: 'POSTGRE_SQL', primaryKeys: ['ID'],
+  it('结果里没有真实主键列时按查出来的字段定位', async () => {
+    const { batch } = await mount({ dbType: 'POSTGRE_SQL', primaryKeys: ['ID'],
       tableMetas: [{ ref: { table: 't' }, columns: ['ID', 'id', 'v'], primaryKeys: ['ID'] }],
       result: { columns: ['id', 'v'], rows: [{ id: 2, v: 'old' }], rowCount: 1, sourceSql: 'SELECT "id",v FROM t' } });
-    await click('表格编辑'); expect(document.body.textContent).not.toContain('退出编辑');
+    await click('表格编辑'); expect(document.body.textContent).toContain('退出编辑');
+    await editValue('new'); vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm' as never);
+    await click('保存修改'); for (let i = 0; i < 8; i++) await Promise.resolve();
+    expect(batch).toHaveBeenCalledOnce();
+    expect(batch.mock.calls[0]![0][0]).toContain('WHERE "id" = ? AND "v" = ?');
+    expect(batch.mock.calls[0]![0][0]).not.toContain('"ID"');
   });
   it('切换标签后恢复草稿，保存使用物理字段和原值条件',async()=>{
     const {props,batch,result}=await mount();await click('表格编辑');await editValue('new');
