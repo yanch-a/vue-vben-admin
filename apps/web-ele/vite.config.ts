@@ -47,9 +47,14 @@ export default defineConfig(async ({ command }) => {
         },
       },
       optimizeDeps: {
+        // dayjs locale 走动态 import，未预先 include 时 Vite 会中途重优化，
+        // 浏览器仍请求旧 hash → 504 Outdated Optimize Dep，登录页直接挂掉。
         include: [
           '@logicflow/core',
           '@logicflow/extension',
+          'dayjs',
+          'dayjs/locale/en',
+          'dayjs/locale/zh-cn',
           'monaco-editor',
         ],
       },

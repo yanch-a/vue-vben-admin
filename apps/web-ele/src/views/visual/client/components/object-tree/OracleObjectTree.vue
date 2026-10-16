@@ -23,9 +23,9 @@ const treeRef = ref<InstanceType<typeof ObjectTree>>();
 /** 向工作台透传对象树命令。 */
 defineExpose({
   reload: () => treeRef.value?.reload?.(),
-  reloadInstance: (instanceName: string) => treeRef.value?.reloadInstance?.(instanceName),
+  reloadInstance: (instanceName: string, schemaName?: string) => treeRef.value?.reloadInstance?.(instanceName, schemaName),
   reloadQueries: (instanceName: string) => treeRef.value?.reloadQueries?.(instanceName),
-  reloadTables: (instanceName: string) => treeRef.value?.reloadTables?.(instanceName),
+  reloadTables: (instanceName: string, schemaName?: string) => treeRef.value?.reloadTables?.(instanceName, schemaName),
   reloadFolder: (kind: string, instanceName: string) => treeRef.value?.reloadFolder?.(kind, instanceName),
   locateTarget: (options: any) => treeRef.value?.locateTarget?.(options),
   closeContextMenu: () => treeRef.value?.closeContextMenu?.(),

@@ -3,6 +3,7 @@
  * 查询结果面板
  * - 工具栏：表格编辑、添加行、导出 Excel/SQL、复制全部/选定行（TSV 可粘贴 Excel）
  * - 选中行/单元格右键：修改 / 复制单元格 / 格式化显示 / 拷贝 INSERT·UPDATE / 复制行 / 删除
+ * - 格式化抽屉可把当前单元格压成一行后写回；定位规则与右键修改相同
  * - 添加行：进入编辑，在最底部追加空行；填过的字段保存时 INSERT，留空字段不写入
  * - 复制行：把当前行字段复制成底部新行，改完后同样按 INSERT 保存
  * - 单击单元格：选中行 + 单元格边框高亮；Ctrl+C 复制当前单元格
@@ -166,12 +167,16 @@ const ctxMenu = reactive({
   y: 0,
 });
 
-/** 单元格格式化 / JSON 编辑抽屉 */
+/** 单元格格式化 / JSON 编辑抽屉。originalRow 是打开时的旧值，更新 WHERE 用它。 */
 const formatDrawer = reactive({
   visible: false,
   col: '',
   rawText: '',
+  originalRow: null as Record<string, any> | null,
+  rowIndex: -1,
+  result: null as QueryResultState | null,
 });
+const formatSaving = ref(false);
 
 const editVisible = ref(false);
 const editForm = ref<Record<string, any>>({});
@@ -769,7 +774,66 @@ function onFormatDisplay() {
   }
   formatDrawer.col = selectedCol.value || '';
   formatDrawer.rawText = text;
+  formatDrawer.originalRow = selectedRow.value ? { ...selectedRow.value } : null;
+  formatDrawer.rowIndex = selectedIndex.value;
+  formatDrawer.result = props.result;
   formatDrawer.visible = true;
+}
+
+/**
+ * 格式化抽屉点「保存/更新到数据库」。
+ * 入参已经是压缩后的一行，不能再取编辑器里的缩进文本。
+ * 写入走和右键修改相同的更新：有主键按主键定位，没有主键按本次查出的可回写字段旧值定位。
+ */
+async function onSaveFormattedCell(compactText: string) {
+  if (formatSaving.value || sheetSaving.value || props.executing) return;
+  const original = formatDrawer.originalRow;
+  const col = formatDrawer.col;
+  if (!original || !col) {
+    ElMessage.warning('请先选中要更新的单元格');
+    return;
+  }
+  if (editMode.value && (dirtyCount.value > 0 || newRowIndexes.value.size > 0 || editingCell.value)) {
+    ElMessage.warning('请先保存或退出表格编辑，再从格式化视图更新');
+    return;
+  }
+  if (!props.tableRef?.table && !(props.tableMetas?.length || 0)) {
+    ElMessage.warning('无法识别结果对应的表，请先执行带 FROM 的查询后再修改');
+    return;
+  }
+  formatSaving.value = true;
+  try {
+    const origin = props.result;
+    const allowed = await confirmRowMutation('修改');
+    if (props.result !== origin || formatDrawer.result !== origin) {
+      if (allowed) ElMessage.warning('结果已切换，已取消更新');
+      return;
+    }
+    if (!allowed) return;
+    let nextValue: unknown;
+    try {
+      nextValue = coerceSheetValue(original[col], compactText);
+    } catch (error: any) {
+      ElMessage.warning(error?.message || '字段值格式无效');
+      return;
+    }
+    if (sameDbValue(original[col], nextValue)) {
+      ElMessage.info('没有需要保存的修改');
+      return;
+    }
+    await commitRowUpdate({
+      original,
+      edited: { ...original, [col]: nextValue },
+      changedColumns: [col],
+      rowIndex: formatDrawer.rowIndex,
+      onSuccess: () => {
+        formatDrawer.visible = false;
+        formatDrawer.originalRow = null;
+      },
+    });
+  } finally {
+    formatSaving.value = false;
+  }
 }
 
 /**
@@ -1150,31 +1214,28 @@ async function onDelete() {
   ElMessage.success(`已删除勾选的 ${count} 行`);
 }
 
-async function onSaveEdit() {
-  if (sheetSaving.value || props.executing) return;
-  if (!editOriginal.value) return;
-  if (editInvalidFields.value.size) {
-    ElMessage.warning(`请先修正字段的 JSON：${[...editInvalidFields.value].join(', ')}`);
-    return;
-  }
+/**
+ * 右键修改和格式化抽屉共用这一次写入。
+ * SQL、参数和定位条件都由 buildEditsSqls 生成：结果里带齐主键就按主键，否则按查出的可回写字段。
+ * JSON、XML 以及其他字段值都作为绑定参数提交，不拼进 SQL 文本。
+ */
+async function commitRowUpdate(input: {
+  original: Record<string, any>;
+  edited: Record<string, any>;
+  changedColumns: string[];
+  rowIndex: number;
+  onSuccess?: () => void;
+}) {
   const origin = props.result;
-  const index = editRowIndex.value;
-  const edited = { ...editForm.value };
-  const changedColumns = columns.value.filter(
-    (c) => !sameDbValue(editOriginal.value![c], editForm.value[c]),
-  );
-  if (!changedColumns.length) {
-    ElMessage.info('没有需要保存的修改');
-    editVisible.value = false;
-    return;
-  }
+  const index = input.rowIndex;
+  const edited = { ...input.edited };
   try {
     const parameters: ResultEditParameter[][] = [];
     const sqls = buildEditsSqls({
-      rowIndex: editRowIndex.value,
-      original: editOriginal.value,
-      edited: editForm.value,
-      changedColumns,
+      rowIndex: input.rowIndex,
+      original: input.original,
+      edited: input.edited,
+      changedColumns: input.changedColumns,
     }, isMongo.value ? undefined : parameters);
     if (!isMongo.value) {
       if (!props.executeRowDmlBatch) {
@@ -1189,9 +1250,10 @@ async function onSaveEdit() {
       if (origin !== props.result) {
         if (origin && index >= 0) origin.rows[index] = edited;
         ElMessage.success(doneText);
+        input.onSuccess?.();
         return;
       }
-      editVisible.value = false;
+      input.onSuccess?.();
       expectResultRefresh.value = true;
       emit('refresh-result');
       ElMessage.success(doneText);
@@ -1201,8 +1263,13 @@ async function onSaveEdit() {
     const run = props.executeRowDml;
     sheetSaving.value = true; setResultSaving(origin, true);
     await run(sqls[0]!);
-    if (origin !== props.result) { if (origin && index >= 0) origin.rows[index] = edited; ElMessage.success('已保存'); return; }
-    editVisible.value = false;
+    if (origin !== props.result) {
+      if (origin && index >= 0) origin.rows[index] = edited;
+      ElMessage.success('已保存');
+      input.onSuccess?.();
+      return;
+    }
+    input.onSuccess?.();
     expectResultRefresh.value = true;
     emit('refresh-result');
     ElMessage.success('已保存');
@@ -1213,6 +1280,32 @@ async function onSaveEdit() {
     setResultSaving(origin, false);
     sheetSaving.value = false;
   }
+}
+
+async function onSaveEdit() {
+  if (sheetSaving.value || props.executing) return;
+  if (!editOriginal.value) return;
+  if (editInvalidFields.value.size) {
+    ElMessage.warning(`请先修正字段的 JSON：${[...editInvalidFields.value].join(', ')}`);
+    return;
+  }
+  const changedColumns = columns.value.filter(
+    (c) => !sameDbValue(editOriginal.value![c], editForm.value[c]),
+  );
+  if (!changedColumns.length) {
+    ElMessage.info('没有需要保存的修改');
+    editVisible.value = false;
+    return;
+  }
+  await commitRowUpdate({
+    original: editOriginal.value,
+    edited: editForm.value,
+    changedColumns,
+    rowIndex: editRowIndex.value,
+    onSuccess: () => {
+      editVisible.value = false;
+    },
+  });
 }
 
 function cloneRows(rows: Record<string, any>[]): Record<string, any>[] {
@@ -1939,6 +2032,7 @@ watch(
     closeCtxMenu();
     closeFind();
     formatDrawer.visible = false;
+    if (!sheetSaving.value && !formatSaving.value) formatDrawer.originalRow = null;
     editVisible.value = false;
     editOriginal.value = null;
     editRowIndex.value = -1;
@@ -2337,6 +2431,8 @@ defineExpose({ confirmLeaveSheet, isSaving: () => sheetSaving.value, hasPendingE
       v-model="formatDrawer.visible"
       :column-name="formatDrawer.col"
       :raw-text="formatDrawer.rawText"
+      :saving="formatSaving || sheetSaving"
+      @save="onSaveFormattedCell"
     />
 
     <ElDialog

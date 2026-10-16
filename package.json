@@ -95,6 +95,7 @@
     "cross-env": "catalog:",
     "cspell": "catalog:",
     "eslint": "catalog:",
+    "fake-indexeddb": "^6.2.5",
     "happy-dom": "catalog:",
     "is-ci": "catalog:",
     "lefthook": "catalog:",

@@ -132,6 +132,69 @@ SELECT 1;`;
     expect(parts[1]).toBe('SELECT 1');
   });
 
+  it('分号后未闭合的反引号不会把后面的语句粘成一条', () => {
+    const sql = [
+      'SELECT BIDDER_NAME FROM BID_LIST WHERE BID_SECTION_CODE="E1300000915501559A01B01"  GROUP BY bidder_name ;`~!',
+      'SELECT legal_idcard ,LENGTH(legal_idcard)FROM BID_LIST WHERE BID_SECTION_CODE="E1300000915504294A01B01"   ORDER BY DATA_TIMESTAMP DESC;',
+      'SELECT project_leader_idcard ,LENGTH(project_leader_idcard)FROM BID_LIST WHERE BID_SECTION_CODE="E1300000915502595A01B01"   ORDER BY DATA_TIMESTAMP DESC;',
+      'SELECT project_leader_phone FROM BID_LIST WHERE BID_SECTION_CODE="E1300000915501463A01B01" ORDER BY DATA_TIMESTAMP DESC;',
+    ].join('\n');
+    const parts = listSqlStatements(sql);
+    expect(parts[0]).toBe(
+      'SELECT BIDDER_NAME FROM BID_LIST WHERE BID_SECTION_CODE="E1300000915501559A01B01"  GROUP BY bidder_name',
+    );
+    expect(parts).toContain(
+      'SELECT legal_idcard ,LENGTH(legal_idcard)FROM BID_LIST WHERE BID_SECTION_CODE="E1300000915504294A01B01"   ORDER BY DATA_TIMESTAMP DESC',
+    );
+    expect(parts).toContain(
+      'SELECT project_leader_idcard ,LENGTH(project_leader_idcard)FROM BID_LIST WHERE BID_SECTION_CODE="E1300000915502595A01B01"   ORDER BY DATA_TIMESTAMP DESC',
+    );
+    expect(parts).toContain(
+      'SELECT project_leader_phone FROM BID_LIST WHERE BID_SECTION_CODE="E1300000915501463A01B01" ORDER BY DATA_TIMESTAMP DESC',
+    );
+    expect(extractExecutableSql(sql, sql.indexOf('legal_idcard'))).toBe(
+      'SELECT legal_idcard ,LENGTH(legal_idcard)FROM BID_LIST WHERE BID_SECTION_CODE="E1300000915504294A01B01"   ORDER BY DATA_TIMESTAMP DESC',
+    );
+    expect(extractExecutableSql(sql, sql.indexOf('project_leader_phone'))).toBe(
+      'SELECT project_leader_phone FROM BID_LIST WHERE BID_SECTION_CODE="E1300000915501463A01B01" ORDER BY DATA_TIMESTAMP DESC',
+    );
+    expect(extractExecutableSql(sql, sql.indexOf('legal_idcard'))).not.toContain('project_leader');
+  });
+
+  it('闭合的多行字符串和跨行反引号仍然保持在同一条语句里', () => {
+    expect(listSqlStatements("SELECT 'a\nSELECT 1';\nSELECT 2;")).toEqual([
+      "SELECT 'a\nSELECT 1'",
+      'SELECT 2',
+    ]);
+    expect(listSqlStatements('SELECT `a\nb` FROM t;\nSELECT 2;')).toEqual([
+      'SELECT `a\nb` FROM t',
+      'SELECT 2',
+    ]);
+  });
+
+  it('未闭合引号同一行后面的新语句也会切开', () => {
+    expect(listSqlStatements('SELECT 1; `~! SELECT 2;\nSELECT 3;')).toEqual([
+      'SELECT 1',
+      '`~!',
+      'SELECT 2',
+      'SELECT 3',
+    ]);
+  });
+
+  it('过程体里未闭合的字符串不会把过程结束之后的语句吞掉', () => {
+    const sql = `CREATE PROCEDURE p()
+BEGIN
+  SELECT 'oops
+  SELECT 1;
+END;
+SELECT 2;`;
+    const parts = listSqlStatements(sql);
+    expect(parts).toHaveLength(2);
+    expect(parts[0]).toContain('CREATE PROCEDURE p()');
+    expect(parts[0]).toContain('END');
+    expect(parts[1]).toBe('SELECT 2');
+  });
+
   it('DELIMITER 只切换终止符，不作为要执行的语句', () => {
     const sql = `DELIMITER $$
 CREATE PROCEDURE p()
@@ -146,6 +209,130 @@ BEGIN
   SELECT 1;
 END`,
       'CALL p()',
+    ]);
+  });
+});
+
+describe('原有切分不被未闭合引号恢复影响', () => {
+  it('闭合的多行动态 SQL 里出现 SELECT 仍然是一条', () => {
+    const sql = "SET @sql = 'SELECT id\nFROM t\nWHERE x = 1';\nSELECT 1;";
+    expect(listSqlStatements(sql)).toEqual([
+      "SET @sql = 'SELECT id\nFROM t\nWHERE x = 1'",
+      'SELECT 1',
+    ]);
+    expect(extractExecutableSql(sql, sql.indexOf('FROM t'))).toBe(
+      "SET @sql = 'SELECT id\nFROM t\nWHERE x = 1'",
+    );
+  });
+
+  it('字符串、注释、反引号里的分号不切开', () => {
+    const sql = [
+      "SELECT 'a;b', \"c;d\", `e;f`;",
+      "SELECT 'it\\'s', 'it''s';",
+      'SELECT 1; -- \'; `~!',
+      'SELECT 2; /* \'; ` */',
+      '# ; `',
+      'SELECT 3;',
+    ].join('\n');
+    expect(listSqlStatements(sql)).toEqual([
+      "SELECT 'a;b', \"c;d\", `e;f`",
+      "SELECT 'it\\'s', 'it''s'",
+      'SELECT 1',
+      'SELECT 2',
+      'SELECT 3',
+    ]);
+  });
+
+  it('换行的 SELECT、ORDER BY、DESC 仍属于同一条', () => {
+    const sql = 'SELECT *\nFROM t\nWHERE a = 1\nORDER BY id\nDESC\nLIMIT 1;\nSELECT 2;';
+    const parts = listSqlStatements(sql);
+    expect(parts).toEqual([
+      'SELECT *\nFROM t\nWHERE a = 1\nORDER BY id\nDESC\nLIMIT 1',
+      'SELECT 2',
+    ]);
+    expect(extractExecutableSql(sql, sql.indexOf('DESC'))).toBe(parts[0]);
+    expect(extractExecutableSql(sql, sql.lastIndexOf('FROM'))).toBe(parts[0]);
+  });
+
+  it('INSERT SELECT、WITH、UNION 不按中间的关键字拆开', () => {
+    expect(listSqlStatements('INSERT INTO t (id)\nSELECT 1 FROM dual;\nSELECT 2;')).toEqual([
+      'INSERT INTO t (id)\nSELECT 1 FROM dual',
+      'SELECT 2',
+    ]);
+    expect(listSqlStatements('WITH c AS (\n  SELECT 1\n)\nSELECT * FROM c;\nSELECT 2;')).toEqual([
+      'WITH c AS (\n  SELECT 1\n)\nSELECT * FROM c',
+      'SELECT 2',
+    ]);
+    expect(listSqlStatements('SELECT 1\nUNION\nSELECT 2;\nSELECT 3;')).toEqual([
+      'SELECT 1\nUNION\nSELECT 2',
+      'SELECT 3',
+    ]);
+    expect(listSqlStatements('CREATE\nTABLE t (id int);\nINSERT INTO t VALUES (1);')).toEqual([
+      'CREATE\nTABLE t (id int)',
+      'INSERT INTO t VALUES (1)',
+    ]);
+  });
+
+  it('过程注释里的 BEGIN 和字符串里的 END 不会把过程拆开', () => {
+    const sql = `CREATE PROCEDURE p()
+COMMENT 'see
+BEGIN later'
+BEGIN
+  SET @s = 'END
+SELECT 1;';
+  SELECT 1;
+END;
+SELECT 2;`;
+    const parts = listSqlStatements(sql);
+    expect(parts).toHaveLength(2);
+    expect(parts[0]).toContain("COMMENT 'see");
+    expect(parts[0]).toContain('BEGIN later');
+    expect(parts[0]).toContain('SELECT 1;');
+    expect(parts[0]).toContain('END');
+    expect(parts[1]).toBe('SELECT 2');
+    expect(extractExecutableSql(sql, sql.indexOf('SET @s'))).toBe(parts[0]);
+  });
+
+  it('BEGIN 后直接跟字符串，END 仍然能结束这个块', () => {
+    const sql = "BEGIN\n  'x'\nEND;\nSELECT 2;";
+    expect(listSqlStatements(sql)).toEqual(["BEGIN\n  'x'\nEND", 'SELECT 2']);
+  });
+
+  it('嵌套 BEGIN 和事务 BEGIN 保持原来的边界', () => {
+    const nested = listSqlStatements('BEGIN\n  BEGIN\n    SELECT 1;\n  END;\n  SELECT 2;\nEND;\nSELECT 3;');
+    expect(nested).toHaveLength(2);
+    expect(nested[0]).toContain('SELECT 1');
+    expect(nested[0]).toContain('SELECT 2');
+    expect(nested[1]).toBe('SELECT 3');
+    expect(listSqlStatements('BEGIN WORK;\nINSERT INTO t VALUES (1);\nCOMMIT;\nSELECT 1;')).toEqual([
+      'BEGIN WORK',
+      'INSERT INTO t VALUES (1)',
+      'COMMIT',
+      'SELECT 1',
+    ]);
+    expect(listSqlStatements('SELECT 1\nGO')).toEqual(['SELECT 1']);
+    expect(listSqlStatements('SELECT 1\nGO\nSELECT 2\nGO')).toEqual(['SELECT 1', 'SELECT 2']);
+    expect(listSqlStatements('SELECT 1\nGO; -- batch\nSELECT 2;')).toEqual(['SELECT 1', 'SELECT 2']);
+    expect(listSqlStatements("SELECT 'GO'\nFROM t;")).toEqual(["SELECT 'GO'\nFROM t"]);
+    expect(listSqlStatements('BEGIN\n  NULL;\nEND;\n/\nSELECT 1;')).toEqual([
+      'BEGIN\n  NULL;\nEND',
+      'SELECT 1',
+    ]);
+  });
+
+  it('反引号后面的语句用 Windows 换行也能单独执行', () => {
+    const sql = 'SELECT 1; `~!\r\nSELECT 2;\r\nSELECT 3;';
+    expect(extractExecutableSql(sql, sql.indexOf('SELECT 2'))).toBe('SELECT 2');
+    expect(extractExecutableSql(sql, sql.indexOf('SELECT 3'))).toBe('SELECT 3');
+    expect(extractExecutableSql(sql, sql.indexOf('SELECT 1'))).toBe('SELECT 1');
+  });
+
+  it('杂符夹在 SET 和查询之间时，用户变量仍然能配对', () => {
+    const sql = 'SET @a := 1; `~!\nSELECT @a;\nSELECT 2;';
+    const cursor = sql.indexOf('SELECT @a');
+    expect(listSqlStatements(expandSessionChain(sql, extractExecutableSql(sql, cursor), cursor))).toEqual([
+      'SET @a := 1',
+      'SELECT @a',
     ]);
   });
 });

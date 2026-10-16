@@ -217,6 +217,81 @@ describe('结果编辑交互修复',()=>{
     expect(document.querySelector('.vrt-td[title="old"]')).not.toBeNull();
     expect(document.body.textContent).toContain('退出编辑');
   });
+  async function saveFormattedCell(titlePart: string) {
+    const cell = [...document.querySelectorAll<HTMLElement>('.vrt-td')].find((element) => element.title.includes(titlePart));
+    expect(cell).toBeDefined();
+    cell!.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true }));
+    await nextTick();
+    const item = [...document.querySelectorAll<HTMLElement>('.result-ctx-menu .item')].find((element) => element.textContent?.trim() === '格式化显示');
+    expect(item).toBeDefined();
+    expect(item!.classList.contains('disabled')).toBe(false);
+    item!.click();
+    let save: HTMLButtonElement | undefined;
+    for (let i = 0; i < 20; i++) {
+      await Promise.resolve();
+      await nextTick();
+      save = [...document.querySelectorAll<HTMLButtonElement>('button')].find((button) => button.textContent?.includes('保存/更新到数据库'));
+      if (save) break;
+    }
+    expect(save).toBeDefined();
+    const drawer = document.querySelector<HTMLElement>('.cell-content-drawer');
+    expect(drawer).not.toBeNull();
+    expect(drawer!.style.width).toBe('40%');
+    save!.click();
+    for (let i = 0; i < 12; i++) await Promise.resolve();
+    await nextTick();
+  }
+  it('格式化抽屉按主键把 JSON 压成一行后作为参数更新', async () => {
+    const pretty = '{\n  "a": 1\n}';
+    const { batch } = await mount({
+      primaryKeys: ['id'],
+      tableMetas: [{ ref: { table: 't' }, columns: ['id', 'payload'], primaryKeys: ['id'] }],
+      result: {
+        columns: ['id', 'payload'],
+        rows: [{ id: 7, payload: pretty }],
+        rowCount: 1,
+        sourceSql: 'SELECT id, payload FROM t',
+        columnMetadata: [
+          { label: 'id', name: 'id', jdbcType: 4, typeName: 'INT' },
+          { label: 'payload', name: 'payload', jdbcType: 12, typeName: 'VARCHAR' },
+        ],
+      },
+    });
+    await saveFormattedCell('"a"');
+    expect(batch).toHaveBeenCalledOnce();
+    const sql = String(batch.mock.calls[0]![0][0]);
+    expect(sql).toContain('SET `payload` = ?');
+    expect(sql).toContain('WHERE `id` = ?');
+    expect(sql).not.toContain('{');
+    const values = batch.mock.calls[0]![1][0];
+    expect(values[0]).toMatchObject({ value: '{"a":1}', jdbcType: 12, typeName: 'VARCHAR' });
+    expect(values.map((parameter: { value: unknown }) => parameter.value)).toContain(7);
+    expect(values.map((parameter: { value: unknown }) => parameter.value)).toContain(pretty);
+  });
+  it('结果没有主键列时按查出的字段更新，XML 压缩后仍是绑定参数', async () => {
+    const xml = '<root>\n  <a>1</a>\n</root>';
+    const { batch } = await mount({
+      dbType: 'POSTGRE_SQL',
+      primaryKeys: ['id'],
+      tableMetas: [{ ref: { table: 't' }, columns: ['id', 'payload'], primaryKeys: ['id'] }],
+      result: {
+        columns: ['payload'],
+        rows: [{ payload: xml }],
+        rowCount: 1,
+        sourceSql: 'SELECT payload FROM t',
+        columnMetadata: [{ label: 'payload', name: 'payload', jdbcType: 2009, typeName: 'xml' }],
+      },
+    });
+    await saveFormattedCell('<a>1</a>');
+    expect(batch).toHaveBeenCalledOnce();
+    const sql = String(batch.mock.calls[0]![0][0]);
+    expect(sql).toContain('SET "payload" = ?');
+    expect(sql).not.toContain('"id"');
+    expect(sql).not.toContain('<root>');
+    const values = batch.mock.calls[0]![1][0];
+    expect(values[0]).toMatchObject({ value: '<root><a>1</a></root>', jdbcType: 2009, typeName: 'xml' });
+    expect(values.map((parameter: { value: unknown }) => parameter.value)).toContain(xml);
+  });
   it('非法数组 JSON 保留单元格输入并阻止保存，不抛出未处理异步错误',async()=>{
     const {batch}=await mount({dbType:'POSTGRE_SQL',primaryKeys:['id'],tableRef:{table:'t'},tableMetas:[{ref:{table:'t'},columns:['id','v'],primaryKeys:['id']}],
       result:{columns:['id','v'],rows:[{id:1,v:[1,2]}],rowCount:1,sourceSql:'SELECT id,v FROM t'}});

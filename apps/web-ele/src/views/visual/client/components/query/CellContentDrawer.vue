@@ -17,6 +17,7 @@ import {
   watch,
 } from 'vue';
 
+import { compactCellContent } from './cellContentCompact';
 import JsonEditorPanel from './JsonEditorPanel.vue';
 
 defineOptions({ name: 'CellContentDrawer' });
@@ -27,10 +28,14 @@ const props = defineProps<{
   columnName?: string;
   /** 单元格原始文本 */
   rawText?: string;
+  /** 父级正在把压缩后的内容写回数据库 */
+  saving?: boolean;
 }>();
 
 const emit = defineEmits<{
   'update:modelValue': [boolean];
+  /** 已压成一行的文本。父级按常规结果更新写入，不能直接存格式化文本。 */
+  save: [text: string];
 }>();
 
 const { isDark } = usePreferences();
@@ -209,11 +214,20 @@ function onFormatClick() {
   }
 }
 
+/** 取编辑器当前文本。JSON 树模式 getText 可能仍是缩进结果，回写前还要再压缩。 */
+function currentEditorText(): string {
+  if (viewMode.value === 'json') {
+    try {
+      return jsonEditorRef.value?.getText?.() ?? editText.value;
+    } catch {
+      return editText.value;
+    }
+  }
+  return monacoEditor?.getValue() ?? editText.value;
+}
+
 async function copyCurrent() {
-  const text =
-    viewMode.value === 'json'
-      ? jsonEditorRef.value?.getText?.() ?? editText.value
-      : editText.value;
+  const text = currentEditorText();
   try {
     await navigator.clipboard.writeText(text);
   } catch {
@@ -225,6 +239,18 @@ async function copyCurrent() {
     document.body.removeChild(ta);
   }
   ElMessage.success('已复制');
+}
+
+/** 复制看的是格式化文本；更新必须先压成一行，再交给结果表的常规更新。 */
+function onSaveClick() {
+  if (props.saving) return;
+  const compacted = compactCellContent(viewMode.value, currentEditorText());
+  if (!compacted.ok) {
+    hint.value = compacted.message;
+    ElMessage.warning(compacted.message);
+    return;
+  }
+  emit('save', compacted.text);
 }
 
 function resetFromProps() {
@@ -265,11 +291,11 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <!-- 默认占视口 30% 宽度；resizable 开启左边缘拖拽调宽，拖出的宽度在本页面会话内保留 -->
+  <!-- 默认占视口 40% 宽度；resizable 开启左边缘拖拽调宽，拖出的宽度在本页面会话内保留 -->
   <ElDrawer
     v-model="visible"
     direction="rtl"
-    size="30%"
+    size="40%"
     resizable
     append-to-body
     destroy-on-close
@@ -305,6 +331,16 @@ onBeforeUnmount(() => {
           <ElButton size="small" @click="onFormatClick">{{ $tr('格式化') }}</ElButton>
           <ElButton size="small" type="primary" plain @click="copyCurrent">
             {{ $tr('复制') }}
+          </ElButton>
+          <ElButton
+            size="small"
+            type="primary"
+            :loading="saving"
+            :disabled="saving"
+            :title="$tr('压缩为一行后按常规结果更新写回：有主键按主键定位，没有主键按本次查询字段旧值定位')"
+            @click="onSaveClick"
+          >
+            {{ $tr('保存/更新到数据库') }}
           </ElButton>
         </div>
       </div>

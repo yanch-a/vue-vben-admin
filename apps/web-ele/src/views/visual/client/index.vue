@@ -20,6 +20,7 @@ import {
 import { useRouter } from 'vue-router';
 
 import { executeDdl, executeDml, executeDmlBatch, executeSql, executeSqlBatch, cancelSql, explainPlan, exportSqlExcel, exportSqlInsert, exportTableSchemaExcel, getInstances, getObjectScript, getTableColumns, getTableDDL, getTableInfo, getTables } from '#/api/visual/database';
+import { getDatabaseMetadataScope } from '#/api/visual/databaseMetadataCache';
 import { feedbackSchemaDoc } from '#/api/ai/agent';
 import {
   addSavedQuery,
@@ -143,18 +144,19 @@ import {
   primaryKeysFromIndexes,
 } from './utils/resultPrimaryKeys';
 import {
-  clearColumnCache,
+  bindEditorMetadataScope,
   expandSessionChain,
-  getCachedColumns,
   getRememberedTables,
   isEditorSessionSql,
   isPreparedScriptSql,
   listSqlStatements,
   rememberInstanceTables,
-  setCachedColumns,
 } from './utils/sqlEditorAssist';
 
 defineOptions({ name: 'VisualClient' });
+
+// 同步表名索引与 API 缓存共用服务器和用户范围。@author yanch
+bindEditorMetadataScope(getDatabaseMetadataScope);
 
 const router = useRouter();
 const {
@@ -705,7 +707,6 @@ watch(
     let stale = false;
     onCleanup(() => { stale = true; });
     instanceOptions.value = [];
-    clearColumnCache();
     if (id == null) return;
     try {
       const res: any = await getInstances(id);
@@ -829,16 +830,6 @@ async function fetchTableMeta(
     } catch (e) {
       console.warn('getTableInfo 读主键失败', e);
     }
-  }
-  if (columns.length || keys.length) {
-    const cached = getCachedColumns(conn.id, instanceName, tableName);
-    setCachedColumns(
-      conn.id,
-      instanceName,
-      tableName,
-      columns.length ? columns : cached?.columns || [],
-      keys,
-    );
   }
   if (!columns.length) throw new Error('无法确认表列和主键，已禁止结果回写');
   return { columns, primaryKeys: keys };
@@ -1196,6 +1187,8 @@ async function refreshBrowseObjects(
   } catch {
     // 配置拉取失败仍继续刷对象树
   }
+  // 对象树先清理当前 dbId 并重载实例，下拉框随后复用同一份新缓存。@author yanch
+  await objectTreeRef.value?.reload?.();
   try {
     const res: any = await getInstances(conn.id);
     const trees = res?.data || res || [];
@@ -1206,7 +1199,6 @@ async function refreshBrowseObjects(
   } catch {
     instanceOptions.value = [];
   }
-  await objectTreeRef.value?.reload?.();
   if (!opts?.silent) ElMessage.success('已刷新浏览对象');
 }
 
@@ -1502,7 +1494,7 @@ async function onTreeContextAction(payload: {
         return;
       }
       try {
-        await objectTreeRef.value?.reloadInstance?.(instanceName);
+        await objectTreeRef.value?.reloadInstance?.(instanceName, node.schemaName);
         ElMessage.success(`已刷新 ${instanceName}`);
       } catch (e: any) {
         ElMessage.error(e?.msg || e?.message || '刷新失败');
@@ -1516,7 +1508,7 @@ async function onTreeContextAction(payload: {
         ElMessage.warning(`请先选择${instanceLabel.value}`);
         return;
       }
-      if (await objectTreeRef.value?.reloadTables?.(instanceName)) {
+      if (await objectTreeRef.value?.reloadTables?.(instanceName, node.schemaName)) {
         ElMessage.success('已刷新 Tables');
       }
       return;
@@ -2983,18 +2975,15 @@ async function downloadFileBlob(
 }
 
 
-/** 补全：按需加载字段并写入客户端缓存 */
+/** 补全：统一通过 API 的 IndexedDB 缓存读取字段和主键。 */
 async function loadEditorColumns(instanceName: string, tableName: string) {
   const conn = activeConnection.value;
   if (!conn) return { columns: [] as string[], primaryKeys: [] as string[] };
-  const cached = getCachedColumns(conn.id, instanceName, tableName);
-  if (cached?.primaryKeys?.length) return cached;
   const res: any = await getTableColumns(conn.id, instanceName, tableName);
   const list = res?.data || res || [];
   const arr = Array.isArray(list) ? list : [];
   const columns = arr.map((c: any) => c.fieldName).filter(Boolean);
   const primaryKeys = primaryKeysFromColumns(arr);
-  setCachedColumns(conn.id, instanceName, tableName, columns, primaryKeys);
   return { columns, primaryKeys };
 }
 

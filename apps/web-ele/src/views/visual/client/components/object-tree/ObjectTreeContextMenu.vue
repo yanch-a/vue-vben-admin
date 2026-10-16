@@ -114,6 +114,10 @@ function onAction(action: TreeCtxAction) {
         <div class="item" @click="onAction('createDatabase')">{{ $tr('创建数据库') }}</div>
         <div class="item" @click="onAction('refreshTree')">{{ $tr('刷新') }}</div>
       </template>
+      <!-- Schema/Owner 刷新沿用实例动作，父级携带 schemaName 精确清理缓存。 -->
+      <template v-else-if="targetType === 'schema'">
+        <div class="item" @click="onAction('refreshInstance')">{{ $tr('刷新') }} Schema</div>
+      </template>
       <template v-else-if="isDb()">
         <div class="item" @click="onAction('refreshInstance')">
           {{ $tr('刷新') }}{{ instanceLabel }}

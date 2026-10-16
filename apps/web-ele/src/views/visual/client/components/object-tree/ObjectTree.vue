@@ -13,19 +13,17 @@
  *
  * 检索按当前选中节点决定范围：选中实例则加载并过滤其下全部分类，
  * 选中 Tables 等目录则只过滤这一类，其它目录保持完整列表。
- * 已经加载过的实例、目录和字段缓存在当前会话；切换桌面端地址或登录用户后失效。
- * 右键刷新、建表、建视图等主动刷新会重新请求并覆盖缓存。
+ * 实例、表及字段由 API 层 IndexedDB 缓存；按服务端、用户、连接和 schema 隔离。
+ * 主动刷新先按范围清缓存，再加载并缓存新元数据。
  *
  * @author yanch
  */
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
 
-import { useUserStore } from '@vben/stores';
 import { ElMessage } from 'element-plus';
 
-import { getDesktopServerStorageKey } from '#/desktop/runtime';
-
 import {
+  clearDatabaseMetadataCache,
   getEvents,
   getFunctions,
   getInstances,
@@ -39,13 +37,8 @@ import {
 import { listSavedQueries } from '#/api/visual/savedQuery';
 
 import { instanceLabelOf, resolveCapabilities } from '../../dialect/dbTypes';
-import { rememberInstanceTables } from '../../utils/sqlEditorAssist';
+import { invalidateEditorMetadata, rememberInstanceTables } from '../../utils/sqlEditorAssist';
 import { useClientPreferences } from '../../composables/useClientPreferences';
-import {
-  bindObjectTreeCacheScope,
-  objectTreeCache,
-  resolveObjectTreeSessionScope,
-} from './objectTreeCache';
 import ObjectTreeContextMenu, {
   type TreeCtxAction,
 } from './ObjectTreeContextMenu.vue';
@@ -60,24 +53,6 @@ import {
 defineOptions({ name: 'ObjectTree' });
 
 const { preferences } = useClientPreferences();
-
-/**
- * 缓存范围 = 桌面端服务地址 + 登录用户。
- * 地址或用户变了，下一次读取会丢掉旧缓存并重新请求。
- */
-bindObjectTreeCacheScope(() => {
-  let userKey = '';
-  try {
-    const info = useUserStore().userInfo as {
-      userId?: number | string;
-      username?: string;
-    } | null;
-    userKey = String(info?.userId ?? info?.username ?? '').trim();
-  } catch {
-    userKey = '';
-  }
-  return resolveObjectTreeSessionScope(getDesktopServerStorageKey(), userKey);
-});
 
 const props = defineProps<{
   dbConfigId: number | string;
@@ -128,9 +103,6 @@ const locateKey = ref('');
 let locateTimer: null | ReturnType<typeof setTimeout> = null;
 /** 左侧树当前点中的节点，决定检索只查表还是查整个实例 */
 const currentData = ref<any>(null);
-/** 同一目录并发请求时，只让最后一次结果写入缓存 */
-const folderRequestGen = new Map<string, number>();
-const schemaRequestGen = new Map<string, number>();
 let searchSeq = 0;
 let searchTimer: null | ReturnType<typeof setTimeout> = null;
 /** 切换连接后作废进行中的加载，避免旧请求把目录写进当前树 */
@@ -157,14 +129,6 @@ const propsTree = {
   children: 'children',
   isLeaf: 'isLeaf',
 };
-
-function cacheIdentity() {
-  return {
-    dbConfigId: props.dbConfigId,
-    dbType: props.dbType || '',
-    schemaMode: props.schemaMode || '',
-  };
-}
 
 /**
  * 实例下的对象文件夹，按当前库的能力开关裁剪。
@@ -218,22 +182,14 @@ function rememberSchemaTables(
 
 /**
  * 加载连接下的库/模式列表。
- * force=false 时优先用会话缓存；主动刷新传入 force，清掉该连接的目录缓存后再请求。
+ * 缓存读取由 API 负责；主动刷新先清掉当前连接的全部元数据。
  */
 async function loadInstances(force = false) {
   const epoch = treeEpoch;
   loading.value = true;
-  const identity = cacheIdentity();
   const dbConfigId = props.dbConfigId;
   try {
-    if (force) objectTreeCache.invalidateConnection(identity);
-    if (!force) {
-      const cached = objectTreeCache.readInstances(identity);
-      if (cached) {
-        if (epoch === treeEpoch) treeData.value = cached;
-        return;
-      }
-    }
+    if (force) await invalidateMetadata();
     const res: any = await getInstances(dbConfigId);
     const trees = res?.data || res || [];
     const instances = trees[0]?.instances || [];
@@ -244,9 +200,8 @@ async function loadInstances(force = false) {
       instanceName: ins.instanceName,
       isLeaf: false,
     }));
-    objectTreeCache.writeInstances(identity, nodes);
     if (epoch !== treeEpoch) return;
-    treeData.value = objectTreeCache.readInstances(identity) || nodes;
+    treeData.value = nodes;
   } catch (error: any) {
     if (epoch !== treeEpoch) return;
     ElMessage.error(error?.message || '加载实例失败');
@@ -333,7 +288,7 @@ async function readOptionalList(loader: () => Promise<any>): Promise<any[]> {
   }
 }
 
-/** 向后台拉取某个库下的 Schema/Owner 以及各分类对象，不写缓存。 */
+/** 通过 API 缓存读取 Schema/Owner 及各分类对象，保存查询实时读取。 */
 async function fetchSchemaChildren(instanceName: string, dbConfigId: number | string) {
   const caps = capabilities.value;
   const [schemas, views, procedures, functions, triggers, events, queries] = await Promise.all([
@@ -399,30 +354,13 @@ async function fetchSchemaChildren(instanceName: string, dbConfigId: number | st
 
 /**
  * 读取 Schema 分层的实例子节点。
- * 已缓存且不是主动刷新时直接返回；force 会重新请求并清掉该库的字段缓存。
+ * 原始元数据缓存由 API 维护，树节点只负责展示和编辑器表名补全。
  */
-async function storeSchemaChildren(instanceName: string, force: boolean) {
-  const identity = cacheIdentity();
+async function storeSchemaChildren(instanceName: string) {
   const dbConfigId = props.dbConfigId;
-  if (!force) {
-    const cached = objectTreeCache.readSchemaChildren(identity, instanceName);
-    if (cached) {
-      rememberSchemaTables(dbConfigId, instanceName, cached);
-      return cached;
-    }
-  }
-  const genKey = `${dbConfigId}::${instanceName}`;
-  const gen = (schemaRequestGen.get(genKey) || 0) + 1;
-  schemaRequestGen.set(genKey, gen);
   const nodes = await fetchSchemaChildren(instanceName, dbConfigId);
-  if (schemaRequestGen.get(genKey) !== gen) {
-    return objectTreeCache.readSchemaChildren(identity, instanceName) || nodes;
-  }
-  objectTreeCache.writeSchemaChildren(identity, instanceName, nodes);
-  if (force) objectTreeCache.invalidateColumns(identity, instanceName);
-  const stored = objectTreeCache.readSchemaChildren(identity, instanceName) || nodes;
-  rememberSchemaTables(dbConfigId, instanceName, stored);
-  return stored;
+  rememberSchemaTables(dbConfigId, instanceName, nodes);
+  return nodes;
 }
 
 /**
@@ -437,7 +375,7 @@ async function loadInstanceChildren(instanceName: string, resolve: (data: any[])
     return;
   }
   try {
-    const nodes = await storeSchemaChildren(instanceName, false);
+    const nodes = await storeSchemaChildren(instanceName);
     if (epoch !== treeEpoch) {
       resolve([]);
       return;
@@ -480,53 +418,28 @@ async function fetchFolderChildren(
 }
 
 /**
- * 读取目录子节点。force 表示建表、建视图或右键刷新，必须请求后台并覆盖缓存。
- * 普通展开只在没有缓存时请求。检索不裁剪这份列表，过滤只影响显示。
+ * 读取目录子节点，API 优先读取 IndexedDB。检索只影响显示，不裁剪缓存。
  */
 async function loadFolderNodes(
-  folderId: string,
   objectKind: string,
   instanceName: string,
-  force: boolean,
 ) {
-  const identity = cacheIdentity();
   const dbConfigId = props.dbConfigId;
-  if (!force) {
-    const cached = objectTreeCache.readFolder(identity, folderId);
-    if (cached) {
-      if (objectKind === 'tables') {
-        rememberInstanceTables(
-          dbConfigId,
-          instanceName,
-          cached.map((node: any) => node.name).filter(Boolean),
-        );
-      }
-      return cached;
-    }
-  }
-  const genKey = `${dbConfigId}::${folderId}`;
-  const gen = (folderRequestGen.get(genKey) || 0) + 1;
-  folderRequestGen.set(genKey, gen);
   const list = await fetchFolderChildren(objectKind, instanceName, dbConfigId);
-  if (folderRequestGen.get(genKey) !== gen) {
-    return objectTreeCache.readFolder(identity, folderId) || list;
-  }
-  objectTreeCache.writeFolder(identity, folderId, list);
   if (objectKind === 'tables') {
     rememberInstanceTables(
       dbConfigId,
       instanceName,
       list.map((node: any) => node.name).filter(Boolean),
     );
-    if (force) objectTreeCache.invalidateColumns(identity, instanceName);
   }
-  return objectTreeCache.readFolder(identity, folderId) || list;
+  return list;
 }
 
 /** 展开「Tables/Views/...」文件夹时拉取对应对象列表 */
 async function loadFolder(node: any, resolve: (data: any[]) => void) {
   const epoch = treeEpoch;
-  const { objectKind, instanceName, prefetchedNodes, id } = node.data;
+  const { objectKind, instanceName, prefetchedNodes } = node.data;
   try {
     if (Array.isArray(prefetchedNodes)) {
       // schema 下各分类已在实例展开时并行预取，避免重复扫描数据库目录。
@@ -535,7 +448,7 @@ async function loadFolder(node: any, resolve: (data: any[]) => void) {
       if (keyword) applyTreeVisibility(keyword);
       return;
     }
-    const list = await loadFolderNodes(String(id), objectKind, instanceName, false);
+    const list = await loadFolderNodes(objectKind, instanceName);
     if (epoch !== treeEpoch) {
       resolve([]);
       return;
@@ -556,17 +469,8 @@ async function loadFolder(node: any, resolve: (data: any[]) => void) {
 /** 展开表节点时加载字段；改表后的主动刷新会先清掉这里的缓存。 */
 async function loadColumns(node: any, resolve: (data: any[]) => void) {
   const epoch = treeEpoch;
-  const { instanceName, name, schemaName, id } = node.data;
-  const cacheKey = String(id || '');
-  const identity = cacheIdentity();
+  const { instanceName, name, schemaName } = node.data;
   const dbConfigId = props.dbConfigId;
-  const cached = objectTreeCache.readColumns(identity, cacheKey);
-  if (cached) {
-    resolve(cached);
-    const keyword = (props.filterText || '').trim();
-    if (keyword) applyTreeVisibility(keyword);
-    return;
-  }
   try {
     const res: any = await getTableColumns(dbConfigId, instanceName, name);
     if (epoch !== treeEpoch) {
@@ -583,8 +487,7 @@ async function loadColumns(node: any, resolve: (data: any[]) => void) {
       tableName: name,
       isLeaf: true,
     }));
-    objectTreeCache.writeColumns(identity, cacheKey, list);
-    resolve(objectTreeCache.readColumns(identity, cacheKey) || list);
+    resolve(list);
     const keyword = (props.filterText || '').trim();
     if (keyword) applyTreeVisibility(keyword);
   } catch {
@@ -824,29 +727,37 @@ function findTreeNode(tree: any, id: string) {
   return null;
 }
 
-/**
- * 主动刷新某个目录：重新请求并覆盖会话缓存，再让树上已展开的节点显示新数据。
- * Schema 分层的对象是随实例一起预取的，所以刷新任意一类都会更新该实例的整份缓存。
- */
+/** 同步清理 API 元数据和编辑器派生表名，范围可精确到一个 schema。 */
+async function invalidateMetadata(instanceName?: string, schemaName?: string) {
+  invalidateEditorMetadata(props.dbConfigId, instanceName, schemaName);
+  await clearDatabaseMetadataCache(props.dbConfigId, instanceName, schemaName);
+}
+
+/** 主动刷新目录并替换对应树节点，保留其它实例/schema 的展开状态。 */
 async function reloadFolder(
   objectKind: string,
   instanceName: string,
   refreshSearch = true,
+  schemaName?: string,
 ): Promise<boolean> {
   if (!instanceName) return false;
+  const epoch = treeEpoch;
   try {
+    // 保存查询不改变数据库结构，刷新 Queries 时继续复用元数据。
+    if (objectKind !== 'queries') await invalidateMetadata(instanceName, schemaName);
     if (hasSchemaLayer.value) {
-      await reloadSchemaInstance(instanceName);
+      await reloadSchemaInstance(instanceName, schemaName);
       if (refreshSearch) await applyObjectSearch();
       else refilterTree();
       return true;
     }
     const folderId = `${objectKind}-${instanceName}`;
-    await loadFolderNodes(folderId, objectKind, instanceName, true);
+    const list = await loadFolderNodes(objectKind, instanceName);
+    if (epoch !== treeEpoch) return false;
     const node = findTreeNode(treeRef.value, folderId);
     if (node) {
-      node.loaded = false;
-      if (node.expanded) node.collapse?.();
+      treeRef.value.updateKeyChildren(folderId, list);
+      node.loaded = true;
       await waitExpand(node);
     }
     if (refreshSearch) await applyObjectSearch();
@@ -858,37 +769,54 @@ async function reloadFolder(
   }
 }
 
-/** 主动刷新 Schema 分层实例，并覆盖该实例的目录缓存。 */
-async function reloadSchemaInstance(instanceName: string) {
-  await storeSchemaChildren(instanceName, true);
+/** 更新指定 schema 或实例的展示节点，数据已由调用方按范围失效。 */
+async function reloadSchemaInstance(instanceName: string, schemaName?: string) {
+  const epoch = treeEpoch;
+  const nodes = await storeSchemaChildren(instanceName);
+  if (epoch !== treeEpoch) return;
   const ins = findTreeNode(treeRef.value, `ins-${instanceName}`);
   if (!ins) return;
-  ins.loaded = false;
-  if (ins.expanded) ins.collapse?.();
+  if (schemaName !== undefined) {
+    const schemaKey = `schema-${instanceName}-${schemaName}`;
+    const schema = findTreeNode(treeRef.value, schemaKey);
+    const fresh = nodes.find((node) => node.schemaName === schemaName);
+    if (schema && fresh) {
+      schema.data.objectNodes = fresh.objectNodes;
+      treeRef.value.updateKeyChildren(schemaKey, buildFolderNodes(instanceName, schemaName, fresh.objectNodes));
+      schema.loaded = true;
+      await waitExpand(schema);
+    } else if (schema) {
+      treeRef.value.remove(schema);
+    } else if (fresh) {
+      treeRef.value.append(fresh, ins);
+    }
+    return;
+  }
+  treeRef.value.updateKeyChildren(`ins-${instanceName}`, nodes);
+  ins.loaded = true;
   await waitExpand(ins);
 }
 
-/**
- * 右键刷新当前数据库/模式：重新拉实例列表，并重载该实例下的对象目录。
- */
-async function reloadInstance(instanceName: string) {
+/** 右键刷新只失效当前数据库/schema，再加载 Tables；不重新拉取整个实例列表。 */
+async function reloadInstance(instanceName: string, schemaName?: string) {
   const keep = String(instanceName || '').trim();
-  await loadInstances(true);
-  await nextTick();
   if (!keep) return;
+  const epoch = treeEpoch;
+  await invalidateMetadata(keep, schemaName);
+  if (epoch !== treeEpoch) return;
   const insNode = findTreeNode(treeRef.value, `ins-${keep}`);
   if (!insNode) return;
   if (hasSchemaLayer.value) {
-    await reloadSchemaInstance(keep);
+    await reloadSchemaInstance(keep, schemaName);
     await applyObjectSearch();
     return;
   }
-  insNode.loaded = false;
-  if (insNode.expanded) insNode.collapse?.();
+  const tables = await loadFolderNodes('tables', keep);
+  if (epoch !== treeEpoch) return;
+  treeRef.value.updateKeyChildren(`ins-${keep}`, buildFolderNodes(keep, undefined, { tables }));
+  insNode.loaded = true;
   await waitExpand(insNode);
-  for (const spec of folderSpecs()) {
-    await reloadFolder(spec.kind, keep, false);
-  }
+  await waitExpand(findTreeNode(treeRef.value, `tables-${keep}`));
   await applyObjectSearch();
 }
 
@@ -898,8 +826,8 @@ function reloadQueries(instanceName: string) {
 }
 
 /** 刷新某库下 Tables 文件夹（建表/删表后由父级调用），并覆盖本地缓存 */
-function reloadTables(instanceName: string) {
-  return reloadFolder('tables', instanceName);
+function reloadTables(instanceName: string, schemaName?: string) {
+  return reloadFolder('tables', instanceName, true, schemaName);
 }
 
 function clearLocateHighlight() {
@@ -1137,6 +1065,8 @@ function scheduleObjectSearch(immediate = false) {
 
 /** 工具栏和空白处右键「刷新」：重新拉取实例列表，并清掉该连接已缓存的目录。 */
 async function reload() {
+  treeEpoch += 1;
+  currentData.value = null;
   await loadInstances(true);
   await applyObjectSearch();
 }

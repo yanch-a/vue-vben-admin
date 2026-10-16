@@ -341,9 +341,10 @@ async function onExport() {
             <ElButton link size="small" @click="toggleAll(false)">{{ $tr('清空') }}</ElButton>
           </span>
         </div>
-        <ElInput v-model="search" :placeholder="$tr('搜索表名')" :aria-label="$tr('搜索表名')" clearable />
+        <ElInput v-model="search" class="obj-search" :placeholder="$tr('搜索表名')" :aria-label="$tr('搜索表名')" clearable />
         <div class="folder">{{ $tr('已选择') }} {{ checkedTables.length }} / {{ tableOptions.length }}</div>
-        <ElScrollbar height="360px">
+        <!-- 高度由 .obj-scroll 吃满左侧剩余空间，避免固定 360px 与面板对不齐 -->
+        <ElScrollbar class="obj-scroll">
           <!-- 全选控件独立于 CheckboxGroup，避免把它自身当作待导出表。 -->
           <ElCheckbox :model-value="checkedTables.length > 0 && checkedTables.length === tableOptions.length"
             :indeterminate="checkedTables.length > 0 && checkedTables.length < tableOptions.length"
@@ -427,8 +428,6 @@ async function onExport() {
 <style scoped>
 .dump-fields { border: 0; margin: 0; padding: 0; min-width: 0; }
 .sql-dump-dialog { max-width: calc(100vw - 32px); }
-.opt-pane { max-height: 65vh; overflow-y: auto; }
-@media (max-width: 680px) { .dump-body { grid-template-columns: 1fr !important; } }
 
 .dump-toolbar {
   margin-bottom: 12px;
@@ -450,7 +449,8 @@ async function onExport() {
   display: grid;
   grid-template-columns: 280px 1fr;
   gap: 12px;
-  min-height: 380px;
+  /* 主体固定高度，左右栏对齐，表列表在剩余空间内滚动 */
+  height: 480px;
 }
 .obj-pane,
 .opt-pane {
@@ -458,6 +458,26 @@ async function onExport() {
   border-radius: 6px;
   padding: 8px 10px;
   background: var(--el-bg-color);
+  min-height: 0;
+  overflow: hidden;
+}
+.obj-pane {
+  display: flex;
+  flex-direction: column;
+}
+.obj-search,
+.pane-title,
+.folder {
+  flex-shrink: 0;
+}
+.obj-scroll {
+  flex: 1;
+  /* flex 子项用 height:0 吃满左侧剩余高度并内部滚动 */
+  height: 0;
+  min-height: 0;
+}
+.opt-pane {
+  overflow-y: auto;
 }
 .pane-title {
   display: flex;
@@ -493,5 +513,16 @@ async function onExport() {
   font-size: var(--vc-ui-font-size-sm, 12px);
   color: var(--el-text-color-secondary);
   line-height: 1.5;
+}
+@media (max-width: 680px) {
+  .dump-body {
+    grid-template-columns: 1fr;
+    height: auto;
+    max-height: 70vh;
+    overflow-y: auto;
+  }
+  .obj-pane {
+    min-height: 260px;
+  }
 }
 </style>

@@ -1,6 +1,10 @@
 import { adminUrl } from '#/config';
 import request from '#/utils/request';
 
+import { withDatabaseMetadataCache } from './databaseMetadataCache';
+
+export { clearDatabaseMetadataCache } from './databaseMetadataCache';
+
 const databaseUrl = adminUrl + '/dataBaseOperate/'
 
 /**
@@ -74,18 +78,18 @@ export function getDbTypeProfiles() {
  * 获取数据库实例
  */
 export function getInstances(dbConfigId: any) {
-  return request({
+  return withDatabaseMetadataCache({ dbConfigId, resource: 'instances' }, () => request({
     url: databaseUrl + 'getInstances/' + dbConfigId,
     method: 'get',
     timeout: 0,
-  })
+  }))
 }
 
 /**
  * 获取数据库实例表
  */
 export function getTables(dbConfigId: any, instanceName: any) {
-  return request({
+  return withDatabaseMetadataCache({ dbConfigId, instanceName, resource: 'tables' }, () => request({
     url:
       databaseUrl +
       'getTables/' +
@@ -94,7 +98,7 @@ export function getTables(dbConfigId: any, instanceName: any) {
       encodeURIComponent(instanceName),
     method: 'get',
     timeout: 0,
-  })
+  }), true)
 }
 
 /**
@@ -102,7 +106,7 @@ export function getTables(dbConfigId: any, instanceName: any) {
  * PostgreSQL 族返回 schema，Oracle 族返回 owner，避免前端再从表名猜测命名空间。
  */
 export function getTableTree(dbConfigId: any, instanceName: any) {
-  return request({
+  return withDatabaseMetadataCache({ dbConfigId, instanceName, resource: 'tableTree' }, () => request({
     url:
       databaseUrl +
       'getTableTree/' +
@@ -111,14 +115,16 @@ export function getTableTree(dbConfigId: any, instanceName: any) {
       encodeURIComponent(instanceName),
     method: 'get',
     timeout: 0,
-  })
+  }), true)
 }
 
 /**
  * 获取表字段
  */
 export function getTableColumns(dbConfigId: any, instanceName: any, tableName: any) {
-  return request({
+  // schema 限定名与对象树一致；未限定的表属于实例级缓存。@author yanch
+  const schemaName = String(tableName).includes('.') ? String(tableName).split('.')[0] : undefined;
+  return withDatabaseMetadataCache({ dbConfigId, instanceName, schemaName, tableName, resource: 'columns' }, () => request({
     url:
       databaseUrl +
       'getTableColumns/' +
@@ -129,18 +135,18 @@ export function getTableColumns(dbConfigId: any, instanceName: any, tableName: a
       encodeURIComponent(tableName),
     method: 'get',
     timeout: 0,
-  })
+  }))
 }
 
 /**
  * 获取表和字段
  */
 export function getTablesWithColumns(dbConfigId: any, instanceName: any) {
-  return request({
+  return withDatabaseMetadataCache({ dbConfigId, instanceName, resource: 'tablesWithColumns' }, () => request({
     url: databaseUrl + 'getTablesWithColumns/' + dbConfigId + '/' + instanceName,
     method: 'get',
     timeout: 0,
-  })
+  }), true)
 }
 
 /**
@@ -161,7 +167,11 @@ export function getTableDDL(dbConfigId: any, instanceName: any, tableName: any) 
   })
 }
 
-/** 表详情：字段 / 索引 / DDL / 方言扩展属性 */
+/**
+ * 表详情：字段 / 索引 / DDL / 方言扩展属性。
+ * 右键「查看表信息」每次直接请求数据库，不读取对象树或 SQL 补全的元数据缓存。
+ * @author yanch
+ */
 export function getTableInfo(
   dbConfigId: number | string,
   instanceName: string,
@@ -181,7 +191,11 @@ export function getTableInfo(
   })
 }
 
-/** 执行只读自由 SQL（可长时间运行；传 requestId 便于取消） */
+/**
+ * 执行只读自由 SQL（可长时间运行；传 requestId 便于取消）。
+ * 「打开表」和查询结果刷新每次执行数据库查询，结果集不进入元数据缓存。
+ * @author yanch
+ */
 export function executeSql(data: {
   dbConfigId: number | string
   instanceName?: string
@@ -399,43 +413,43 @@ export function executeDmlBatch(data: {
 }
 
 export function getViews(dbConfigId: any, instanceName: any) {
-  return request({
+  return withDatabaseMetadataCache({ dbConfigId, instanceName, resource: 'views' }, () => request({
     url: databaseUrl + 'getViews/' + dbConfigId + '/' + instanceName,
     method: 'get',
     timeout: 0,
-  })
+  }), true)
 }
 
 export function getProcedures(dbConfigId: any, instanceName: any) {
-  return request({
+  return withDatabaseMetadataCache({ dbConfigId, instanceName, resource: 'procedures' }, () => request({
     url: databaseUrl + 'getProcedures/' + dbConfigId + '/' + instanceName,
     method: 'get',
     timeout: 0,
-  })
+  }), true)
 }
 
 export function getFunctions(dbConfigId: any, instanceName: any) {
-  return request({
+  return withDatabaseMetadataCache({ dbConfigId, instanceName, resource: 'functions' }, () => request({
     url: databaseUrl + 'getFunctions/' + dbConfigId + '/' + instanceName,
     method: 'get',
     timeout: 0,
-  })
+  }), true)
 }
 
 export function getTriggers(dbConfigId: any, instanceName: any) {
-  return request({
+  return withDatabaseMetadataCache({ dbConfigId, instanceName, resource: 'triggers' }, () => request({
     url: databaseUrl + 'getTriggers/' + dbConfigId + '/' + instanceName,
     method: 'get',
     timeout: 0,
-  })
+  }), true)
 }
 
 export function getEvents(dbConfigId: any, instanceName: any) {
-  return request({
+  return withDatabaseMetadataCache({ dbConfigId, instanceName, resource: 'events' }, () => request({
     url: databaseUrl + 'getEvents/' + dbConfigId + '/' + instanceName,
     method: 'get',
     timeout: 0,
-  })
+  }), true)
 }
 
 /**

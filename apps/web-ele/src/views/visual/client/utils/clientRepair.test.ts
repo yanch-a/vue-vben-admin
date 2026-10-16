@@ -2,7 +2,6 @@ import { describe, expect, it } from 'vitest';
 import { parseQueryTables, parseSelectHints, parseTableFromSql, quoteTable, metadataInstanceName, buildUpdateSql, physicalColumnEquals } from './resultRowSql';
 import { resolveSqlDialect } from '../dialect/sqlDialect';
 import { isSheetCellUnchanged, coerceSheetValue, toSheetText } from './resultSheetValue';
-import { columnCacheKey } from './sqlEditorAssist';
 import { useQueryTabs, isQueryTabDirty } from '../composables/useQueryTabs';
 import { getResultDraft, putResultDraft } from '../composables/resultDraftStore';
 
@@ -65,7 +64,6 @@ describe('数据库客户端修复回归', () => {
     expect(tab.sql).toBe('SELECT edited');
     state.markTabSaved(tab, 'SELECT submitted');
     expect(isQueryTabDirty(tab)).toBe(true);
-    expect(columnCacheKey(1,'db','Orders')).not.toBe(columnCacheKey(1,'db','orders'));
   });
   it('结果草稿按对象身份隔离', () => {
     const a = { columns:['id'], rows:[{id:1}], rowCount:1 };

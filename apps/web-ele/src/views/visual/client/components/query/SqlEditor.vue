@@ -24,12 +24,10 @@ import {
   extractExecutableSql,
   extractExecutableSqlRange,
   getAllRememberedTables,
-  getCachedColumns,
   getRememberedTables,
   matchColumnSuggestions,
   matchTableSuggestions,
   resolveTableTargetFromEditor,
-  setCachedColumns,
 } from '../../utils/sqlEditorAssist';
 import { translateUiText } from '#/locales/ui-text';
 
@@ -356,19 +354,9 @@ async function resolveColumns(
   const inst = schema || props.instanceName || '';
   if (dbId == null || !inst || !table) return [];
 
-  const cached = getCachedColumns(dbId, inst, table);
-  if (cached) return cached.columns;
-
   if (!props.loadColumns) return [];
   try {
     const res = await props.loadColumns(inst, table);
-    setCachedColumns(
-      dbId,
-      inst,
-      table,
-      res.columns || [],
-      res.primaryKeys || [],
-    );
     return res.columns || [];
   } catch {
     return [];

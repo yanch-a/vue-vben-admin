@@ -4,7 +4,7 @@
  * 设计要点：
  * 1. 根据光标前语义判断「写表名」还是「写字段名」，避免每次按键都打接口
  * 2. 表名补全优先用左侧已加载的表清单；支持 db.table 按库匹配
- * 3. 字段补全仅在识别到表之后按需请求，并写入客户端 LRU 缓存
+ * 3. 字段补全仅在识别到表之后按需读取 API 的 IndexedDB 缓存
  * 4. 执行时按分号切分：无选区只发「光标所在语句」；选区含多条时整段交给分步执行
  * 5. 光标落在 SET @变量 / PREPARE 上时，把前后依赖的语句收成一次执行，保证变量还在同一个连接上
  *
@@ -190,7 +190,12 @@ function skipSqlTrivia(text: string, pos: number): number {
   return p;
 }
 
-function skipQuotedSpan(text: string, pos: number, quote: string): number {
+/**
+ * 从引号开始扫描。
+ * closed 为 false 表示直到文本末尾都没有配对引号，end 停在末尾。
+ * 反引号标识符不做反斜杠转义；单引号和双引号按 MySQL 习惯跳过转义字符。
+ */
+function scanQuotedSpan(text: string, pos: number, quote: string): { end: number; closed: boolean } {
   let p = pos + 1;
   while (p < text.length) {
     const d = text[p]!;
@@ -200,11 +205,111 @@ function skipQuotedSpan(text: string, pos: number, quote: string): number {
         p++;
         continue;
       }
-      break;
+      return { end: p, closed: true };
     }
     if (d === '\\' && quote !== '`' && p < text.length) p++;
   }
-  return p;
+  return { end: text.length, closed: false };
+}
+
+function skipQuotedSpan(text: string, pos: number, quote: string): number {
+  return scanQuotedSpan(text, pos, quote).end;
+}
+
+/**
+ * 可以单独作为一条 SQL 开头的关键字。
+ * 未闭合的引号靠它们重新找到下一条语句，不能把 ORDER、FROM 算进来，否则正常换行会被切开。
+ */
+const SQL_STATEMENT_START_WORDS = [
+  'SELECT', 'INSERT', 'UPDATE', 'DELETE', 'REPLACE', 'WITH',
+  'CREATE', 'ALTER', 'DROP', 'TRUNCATE', 'RENAME',
+  'MERGE', 'CALL', 'EXEC', 'EXECUTE',
+  'SHOW', 'DESC', 'DESCRIBE', 'EXPLAIN',
+  'USE', 'SET', 'BEGIN', 'DECLARE', 'COMMIT', 'ROLLBACK', 'START',
+  'GRANT', 'REVOKE', 'PREPARE', 'DEALLOCATE',
+  'DO', 'VALUES', 'TABLE', 'LOCK', 'UNLOCK',
+  'ANALYZE', 'OPTIMIZE', 'OPTIMISE', 'COMMENT', 'HANDLER', 'LOAD',
+];
+
+function isSqlStatementStart(text: string, pos: number): boolean {
+  return SQL_STATEMENT_START_WORDS.some((word) => matchSqlWord(text, pos, word));
+}
+
+/** 关键字前面到行首只有空白或已经结束的块注释，才算这条语句从这里开始。 */
+function lineHasOnlyTriviaBefore(text: string, pos: number): boolean {
+  let j = pos - 1;
+  while (j >= 0) {
+    const c = text[j]!;
+    if (c === '\n' || c === '\r') return true;
+    if (c === ' ' || c === '\t') {
+      j--;
+      continue;
+    }
+    if (c === '/' && j > 0 && text[j - 1] === '*') {
+      j -= 2;
+      while (j > 0 && !(text[j] === '/' && text[j + 1] === '*')) j--;
+      if (j >= 0 && text[j] === '/' && text[j + 1] === '*') {
+        j--;
+        continue;
+      }
+    }
+    return false;
+  }
+  return true;
+}
+
+/**
+ * 引号没有闭合时，本行如果只剩下 ~! 这类符号，后面又接了一条新语句，就从那条语句切开。
+ * 引号紧贴着字母（例如没写完的 `column）不当成新语句。
+ */
+function keywordAfterBrokenSymbols(text: string, from: number): number {
+  let i = from;
+  const n = text.length;
+  let sawSymbol = false;
+  while (i < n && text[i] !== '\n' && text[i] !== '\r') {
+    const c = text[i]!;
+    if (c === ' ' || c === '\t') {
+      i++;
+      continue;
+    }
+    if (isSqlStatementStart(text, i)) return sawSymbol ? i : -1;
+    if (
+      isSqlIdentPart(c) ||
+      c === "'" ||
+      c === '"' ||
+      c === '`' ||
+      c === '-' ||
+      c === '/' ||
+      c === '#' ||
+      c === '('
+    ) {
+      return -1;
+    }
+    sawSymbol = true;
+    i++;
+  }
+  return -1;
+}
+
+/**
+ * 未闭合引号后面，下一条 SQL 的起点。
+ * 先看本行剩余是不是纯符号，再看后续行行首。找不到返回 -1。
+ */
+function findUnclosedQuoteResume(text: string, from: number): number {
+  const sameLine = keywordAfterBrokenSymbols(text, from);
+  if (sameLine >= 0) return sameLine;
+
+  let i = from;
+  const n = text.length;
+  while (i < n && text[i] !== '\n' && text[i] !== '\r') i++;
+  while (i < n) {
+    const token = skipSqlTrivia(text, i);
+    if (token >= n) return -1;
+    if (isSqlStatementStart(text, token) && lineHasOnlyTriviaBefore(text, token)) return token;
+    i = token;
+    while (i < n && text[i] !== '\n' && text[i] !== '\r') i++;
+  }
+  return -1;
 }
 
 /**
@@ -237,6 +342,33 @@ function atSqlLineStart(text: string, pos: number): boolean {
       continue;
     }
     return false;
+  }
+  return true;
+}
+
+/**
+ * 行首 GO 或 / 到换行前没有别的 SQL。
+ * 只认本行的空白、分号和 -- 注释，不能把下一行的语句也跳过去。
+ */
+function isAloneOnSqlLine(text: string, pos: number, allowSemicolon: boolean): boolean {
+  let p = pos;
+  const n = text.length;
+  while (p < n) {
+    const c = text[p]!;
+    const next = text[p + 1];
+    if (c === ' ' || c === '\t') {
+      p++;
+      continue;
+    }
+    if (allowSemicolon && c === ';') {
+      p++;
+      continue;
+    }
+    if (c === '-' && next === '-') {
+      while (p < n && text[p] !== '\n' && text[p] !== '\r') p++;
+      continue;
+    }
+    return c === '\n' || c === '\r';
   }
   return true;
 }
@@ -362,7 +494,10 @@ function hasMatchingBlockEnd(text: string, beginPos: number): boolean {
         continue;
       }
     }
-    if (atSqlLineStart(text, i) && (matchSqlWord(text, i, 'GO') || (c === '/' && next !== '*'))) {
+    if (atSqlLineStart(text, i) && matchSqlWord(text, i, 'GO') && isAloneOnSqlLine(text, skipSqlWord(text, i), true)) {
+      return false;
+    }
+    if (atSqlLineStart(text, i) && c === '/' && next !== '*' && isAloneOnSqlLine(text, i + 1, false)) {
       return false;
     }
     if (isSqlIdentStart(c)) {
@@ -505,6 +640,7 @@ function declareReachesBegin(text: string, pos: number): boolean {
  * 存储过程 / 函数 / 触发器 / 事件整段算一条：BEGIN...END 内部的分号不切开。
  * 匿名 BEGIN...END、DECLARE...BEGIN...END 同样保持一条。BEGIN; / BEGIN WORK 仍是单独的事务语句。
  * MySQL 的 DELIMITER 只改变终止符，本身不送给数据库。
+ * 引号没有闭合时，不能把后面的语句全部吞进这一条；下一行若是新的 SQL，就从那里重新切开。
  * 返回每条语句在原文中的 [start, end)（不含末尾终止符）。
  */
 export function splitSqlStatements(fullText: string): SqlRange[] {
@@ -545,19 +681,13 @@ export function splitSqlStatements(fullText: string): SqlRange[] {
     }
 
     // 单独一行的 GO 或 / 是客户端提交符，不作为 SQL
-    if (atSqlLineStart(text, i) && matchSqlWord(text, i, 'GO')) {
-      const after = skipSqlTrivia(text, skipSqlWord(text, i));
-      if (after >= n || text[after] === '\n' || text[after] === '\r' || text[after] === ';') {
-        skipRestOfLine();
-        continue;
-      }
+    if (atSqlLineStart(text, i) && matchSqlWord(text, i, 'GO') && isAloneOnSqlLine(text, skipSqlWord(text, i), true)) {
+      skipRestOfLine();
+      continue;
     }
-    if (atSqlLineStart(text, i) && text[i] === '/' && text[i + 1] !== '*') {
-      const after = skipSqlTrivia(text, i + 1);
-      if (after >= n || text[after] === '\n' || text[after] === '\r') {
-        skipRestOfLine();
-        continue;
-      }
+    if (atSqlLineStart(text, i) && text[i] === '/' && text[i + 1] !== '*' && isAloneOnSqlLine(text, i + 1, false)) {
+      skipRestOfLine();
+      continue;
     }
 
     const start = i;
@@ -589,7 +719,23 @@ export function splitSqlStatements(fullText: string): SqlRange[] {
         continue;
       }
       if (c === "'" || c === '"' || c === '`') {
-        i = skipQuotedSpan(text, i, c);
+        const quoted = scanQuotedSpan(text, i, c);
+        if (quoted.closed) {
+          // 闭合引号只跳过内容，不改语句起始标记。BEGIN 后直接写字符串时，END 仍要能配对。
+          i = quoted.end;
+          continue;
+        }
+        // 分号后面多出来的 `~! 会让反引号一直吞到文末，光标放在后面任意一行都会把剩余 SQL 整段发出去。
+        // 过程体内部仍按分号和 BEGIN/END 深度处理，避免把 END 前的语句拆碎。
+        const resume = depth === 0 && !holdingDeclare ? findUnclosedQuoteResume(text, i + 1) : -1;
+        if (resume > i) {
+          pushRange(start, resume);
+          i = resume;
+          closed = true;
+          break;
+        }
+        i++;
+        atStmtStart = false;
         continue;
       }
       if (delimiter === ';') {
@@ -600,21 +746,15 @@ export function splitSqlStatements(fullText: string): SqlRange[] {
         }
       }
       // SQL Server 的 GO、Oracle 的单独一行 /：结束当前过程，符号本身不执行
-      if (atSqlLineStart(text, i) && matchSqlWord(text, i, 'GO')) {
-        const afterGo = skipSqlTrivia(text, skipSqlWord(text, i));
-        if (afterGo >= n || text[afterGo] === '\n' || text[afterGo] === '\r' || text[afterGo] === ';') {
-          pushRange(start, i);
-          closed = true;
-          break;
-        }
+      if (atSqlLineStart(text, i) && matchSqlWord(text, i, 'GO') && isAloneOnSqlLine(text, skipSqlWord(text, i), true)) {
+        pushRange(start, i);
+        closed = true;
+        break;
       }
-      if (routine && atSqlLineStart(text, i) && c === '/' && next !== '*') {
-        const afterSlash = skipSqlTrivia(text, i + 1);
-        if (afterSlash >= n || text[afterSlash] === '\n' || text[afterSlash] === '\r') {
-          pushRange(start, i);
-          closed = true;
-          break;
-        }
+      if (routine && atSqlLineStart(text, i) && c === '/' && next !== '*' && isAloneOnSqlLine(text, i + 1, false)) {
+        pushRange(start, i);
+        closed = true;
+        break;
       }
       if (delimiter !== ';' && text.startsWith(delimiter, i)) {
         pushRange(start, i);
@@ -1534,11 +1674,18 @@ export function matchColumnSuggestions(
 
 // ─────────────────────────── 客户端表清单 / 字段缓存 ───────────────────────────
 
-/** 左侧树已加载的表：key = `${dbConfigId}::${instanceName}` */
+/** 表名作为同步补全的派生索引，原始元数据由 API 层 IndexedDB 维护。 */
 const tablesCatalog = new Map<string, TableNameItem[]>();
+let metadataScope: () => string = () => '';
 
+/** 主界面绑定 API 缓存范围，切换服务端或用户后不会复用旧的补全表名。 */
+export function bindEditorMetadataScope(reader: () => string) {
+  metadataScope = reader;
+}
+
+/** 表名索引保持数据库名称的大小写，并使用完整身份避免键碰撞。 */
 function tablesKey(dbConfigId: string | number, instanceName: string) {
-  return `${dbConfigId}::${instanceName}`;
+  return JSON.stringify([metadataScope(), String(dbConfigId), instanceName]);
 }
 
 /** 对象树加载 Tables 后写入，供表名补全使用 */
@@ -1565,78 +1712,23 @@ export function getRememberedTables(
 export function getAllRememberedTables(
   dbConfigId: string | number,
 ): TableNameItem[] {
-  const prefix = `${dbConfigId}::`;
   const out: TableNameItem[] = [];
   tablesCatalog.forEach((list, key) => {
-    if (key.startsWith(prefix)) out.push(...list);
+    const [scope, connection] = JSON.parse(key);
+    if (scope === metadataScope() && connection === String(dbConfigId)) out.push(...list);
   });
   return out;
 }
 
-interface ColumnCacheEntry {
-  key: string;
-  columns: string[];
-  primaryKeys: string[];
-  touchedAt: number;
-}
-
-const COLUMN_CACHE_MAX = 50;
-const COLUMN_CACHE_KEEP = 30;
-const columnCache = new Map<string, ColumnCacheEntry>();
-
-export function columnCacheKey(
-  dbConfigId: string | number,
-  instanceName: string,
-  tableName: string,
-) {
-  // v2：旧缓存可能把主键漏成空（Jackson primary / isPrimary），换 key 强制重拉
-  return `v3::${dbConfigId}::${instanceName}::${tableName}`;
-}
-
-function pruneColumnCache() {
-  if (columnCache.size <= COLUMN_CACHE_MAX) return;
-  const sorted = [...columnCache.values()].sort(
-    (a, b) => a.touchedAt - b.touchedAt,
-  );
-  const removeCount = columnCache.size - COLUMN_CACHE_KEEP;
-  for (let i = 0; i < removeCount; i++) {
-    const e = sorted[i];
-    if (e) columnCache.delete(e.key);
+/** 刷新元数据时同步清理对应范围的补全表名，其它实例/schema 保持可用。 */
+export function invalidateEditorMetadata(dbConfigId: string | number, instanceName?: string, schemaName?: string) {
+  for (const [key, list] of tablesCatalog) {
+    const [scope, connection, instance] = JSON.parse(key);
+    if (scope !== metadataScope() || connection !== String(dbConfigId)) continue;
+    if (instanceName !== undefined && instance !== instanceName) continue;
+    if (schemaName === undefined) tablesCatalog.delete(key);
+    else tablesCatalog.set(key, list.filter((item) => !item.tableName.startsWith(`${schemaName}.`)));
   }
-}
-
-export function getCachedColumns(
-  dbConfigId: string | number,
-  instanceName: string,
-  tableName: string,
-): { columns: string[]; primaryKeys: string[] } | null {
-  const key = columnCacheKey(dbConfigId, instanceName, tableName);
-  const hit = columnCache.get(key);
-  if (!hit) return null;
-  hit.touchedAt = Date.now();
-  return { columns: hit.columns, primaryKeys: hit.primaryKeys };
-}
-
-export function setCachedColumns(
-  dbConfigId: string | number,
-  instanceName: string,
-  tableName: string,
-  columns: string[],
-  primaryKeys: string[] = [],
-) {
-  const key = columnCacheKey(dbConfigId, instanceName, tableName);
-  columnCache.set(key, {
-    key,
-    columns: columns.slice(),
-    primaryKeys: primaryKeys.slice(),
-    touchedAt: Date.now(),
-  });
-  pruneColumnCache();
-}
-
-/** 关闭编辑器 / 切换连接时清空字段缓存 */
-export function clearColumnCache() {
-  columnCache.clear();
 }
 
 export function clearTablesCatalog() {
