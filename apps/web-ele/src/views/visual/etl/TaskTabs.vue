@@ -75,6 +75,8 @@ const props = defineProps<{
   tasks: EtlPipeline[];
   active: string;
   position: string;
+  /** 同步进来的任务 ID，渲染前收起，不占标签栏。 */
+  autoHideIds?: string[];
 }>();
 const emit = defineEmits<{
   select: [string];
@@ -125,6 +127,15 @@ function close(id: string) {
   if (props.active === id) emit('select', visible.value[0]?.id || '');
   menu.value = undefined;
 }
+
+/** 同步进来的新任务默认收起，不挤进当前标签栏。当前正在看的任务保持打开。 */
+function hide(ids: string[]) {
+  const extra = ids.filter(
+    (id) => id && id !== props.active && !closed.value.includes(id),
+  );
+  if (!extra.length) return;
+  closed.value = [...closed.value, ...extra];
+}
 function context(event: MouseEvent, id: string) {
   menu.value = {
     id,
@@ -173,8 +184,18 @@ watch(
   { deep: true },
 );
 
+/** 放在持久化之后，首次挂载时新任务也能写入已关闭列表。当前任务保持打开。 */
+watch(
+  () => (props.autoHideIds || []).join('\0'),
+  () => {
+    if (props.autoHideIds?.length) hide(props.autoHideIds);
+  },
+  { immediate: true },
+);
+
 onMounted(() => document.addEventListener('click', dismiss));
 onBeforeUnmount(() => document.removeEventListener('click', dismiss));
+defineExpose({ hide });
 </script>
 <template>
   <nav

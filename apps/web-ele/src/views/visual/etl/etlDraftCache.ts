@@ -16,6 +16,10 @@ export interface EtlLocalDraft {
   workspaceId: string;
   /** 生成此本地稿时所基于的服务端 revision */
   baseRevision: number;
+  /** 共同祖先文档。有它才能把对方的新版本合并进本地，而不是整份二选一。 */
+  baseJson?: string;
+  baseName?: string;
+  baseDescription?: string;
   workspaceName: string;
   description: string;
   draftJson: string;
@@ -78,7 +82,8 @@ export function saveEtlLocalDraft(
     updatedAt?: number;
   },
 ): boolean {
-  if (!draft.workspaceId || draft.draftJson.length > MAX_CHARS) return false;
+  const storedSize = draft.draftJson.length + (draft.baseJson?.length || 0);
+  if (!draft.workspaceId || storedSize > MAX_CHARS) return false;
   const store = readStore();
   store[String(draft.workspaceId)] = {
     ...draft,

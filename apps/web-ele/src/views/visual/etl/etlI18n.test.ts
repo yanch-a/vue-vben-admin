@@ -45,7 +45,7 @@ describe('ETL internationalization', () => {
     // 这些是 JSON 数据/表达式常量，不是界面文案，翻译会改变任务执行结果。
     const businessValues = new Set(['张三', '李四', '未知', '高', '普通']);
     const missing = new Set<string>();
-    for (const file of ['etlOperators.ts', 'etlSafeJson.ts', 'EtlOperatorEditor.vue', 'EtlConditionEditor.vue', 'EtlFieldRules.vue', 'TaskTabs.vue', 'index.vue']) {
+    for (const file of ['etlOperators.ts', 'etlSafeJson.ts', 'EtlOperatorEditor.vue', 'EtlConditionEditor.vue', 'EtlFieldRules.vue', 'TaskTabs.vue', 'index.vue', 'EtlShareDialog.vue', 'EtlMergeDialog.vue']) {
       const source = readFileSync(new URL(file, import.meta.url), 'utf8');
       for (const match of source.matchAll(/'([^'\r\n]*)'/g)) {
         const text = match[1]!;

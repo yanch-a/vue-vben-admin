@@ -265,8 +265,30 @@ export interface EtlWorkspaceRow {
   revision: number;
   publishedVersion: number;
   status: 'DRAFT' | 'PUBLISHED';
+  /** 当前用户是所有者还是被邀请的编辑者。旧数据可能没有该字段。 */
+  accessRole?: 'OWNER' | 'EDITOR';
   createTime?: string;
   updateTime?: string;
+  updateBy?: string;
+}
+
+/** 轮询结果。changed 为 false 时没有 draftJson。 */
+export interface EtlWorkspaceSync {
+  revision: number;
+  changed: boolean;
+  updateBy?: string;
+  updateTime?: string;
+  workspaceName?: string;
+  description?: string;
+  draftJson?: string;
+  accessRole?: 'OWNER' | 'EDITOR';
+}
+
+export interface EtlMember {
+  userId: number | string;
+  userName: string;
+  nickName?: string;
+  role: 'OWNER' | 'EDITOR';
 }
 
 export interface EtlValidationResult {
@@ -307,6 +329,41 @@ export function listEtlWorkspaces() {
 /** 获取任务区完整草稿。 */
 export function getEtlWorkspace(id: number | string) {
   return request({ url: `${url}${encodeURIComponent(id)}`, method: 'get' });
+}
+
+/** 查看服务端版本是否前进。未变化时不下载草稿。 */
+export function syncEtlWorkspace(id: number | string, revision: number) {
+  return request({
+    url: `${url}${encodeURIComponent(id)}/sync`,
+    method: 'get',
+    params: { revision },
+    showErrorMessage: false,
+  });
+}
+
+/** 工作区协同成员，含所有者。 */
+export function listEtlMembers(id: number | string) {
+  return request({
+    url: `${url}${encodeURIComponent(id)}/members`,
+    method: 'get',
+  });
+}
+
+/** 所有者按登录账号邀请可编辑成员。 */
+export function addEtlMember(id: number | string, userName: string) {
+  return request({
+    url: `${url}${encodeURIComponent(id)}/members`,
+    method: 'post',
+    data: { userName },
+  });
+}
+
+/** 所有者移除成员，不改草稿内容。 */
+export function removeEtlMember(id: number | string, userId: number | string) {
+  return request({
+    url: `${url}${encodeURIComponent(id)}/members/${encodeURIComponent(userId)}`,
+    method: 'delete',
+  });
 }
 
 /** 新建任务区。 */

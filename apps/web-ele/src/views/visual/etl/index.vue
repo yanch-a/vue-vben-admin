@@ -25,6 +25,7 @@ import type {
   EtlRun,
   EtlWorkspaceDocument,
   EtlWorkspaceRow,
+  EtlWorkspaceSync,
 } from '#/api/visual/etl';
 import {
   cancelEtlRun,
@@ -41,6 +42,7 @@ import {
   previewEtlStep,
   publishEtlWorkspace,
   saveEtlWorkspace,
+  syncEtlWorkspace,
   validateEtlWorkspace,
 } from '#/api/visual/etl';
 import { getTableColumns } from '#/api/visual/database';
@@ -51,6 +53,8 @@ import TaskTabs from './TaskTabs.vue';
 import KettleImportWizard from './KettleImportWizard.vue';
 import WorkspaceSchedule from './WorkspaceSchedule.vue';
 import WorkspaceNotify from './WorkspaceNotify.vue';
+import EtlShareDialog from './EtlShareDialog.vue';
+import EtlMergeDialog from './EtlMergeDialog.vue';
 import { translateUiText } from '#/locales/ui-text';
 import { createEtlRequestGate } from './etlRequestGate';
 import { createEtlPreviewSession } from './etlPreviewSession';
@@ -73,6 +77,11 @@ import {
   normalizeSqlDocument,
   syncStepDependencies,
 } from './etlModel';
+import {
+  mergeEtlCollaboration,
+  resolveEtlConflict,
+  type EtlMergeConflict,
+} from './etlCollabMerge';
 
 defineOptions({ name: 'EtlWorkspace' });
 const loading = ref(false),
@@ -184,8 +193,30 @@ const workspaceRequests = createEtlRequestGate();
 const draftOperations = createEtlPreviewSession(() => JSON.stringify([workspaceRequests.stamp(), activePipelineId.value, selectedNodeId.value, doc.value, jsonText.value, editorMode.value]));
 const previewRequests = createEtlPreviewSession(() => JSON.stringify([workspaceRequests.stamp(), activePipelineId.value, doc.value]));
 const tableInsertRequests = createEtlSqlDraftGuard(() => JSON.stringify([workspaceRequests.stamp(), activePipelineId.value, selectedNodeId.value, node.value?.config.sql, nodeResource.value]));
-/** 服务端 revision 已前进时保留本地稿，用户明确选择刷新/保留/导出，不自动丢弃。 */
+/** 没有共同祖先的旧本地稿：只能整份选择，不能自动合并。 */
 const draftConflict = ref<EtlWorkspaceRow>();
+/** 上次与服务端对齐的文档和名称，三方合并的共同祖先。 */
+const baseDocument = ref<EtlWorkspaceDocument>();
+const baseMeta = ref({ name: '', description: '' });
+/** 最近一次拉到的对方文档。冲突全部选择完后，用它作为新的共同祖先。 */
+const latestRemoteDocument = ref<EtlWorkspaceDocument>();
+const latestRemoteMeta = ref({ name: '', description: '' });
+const mergeConflicts = ref<EtlMergeConflict[]>([]);
+/** JSON 还没写完时不能解析本地稿，只能提示，不能用对方版本覆盖。 */
+const syncBlocked = ref(false);
+const shareDialog = ref<InstanceType<typeof EtlShareDialog>>();
+const mergeDialog = ref<InstanceType<typeof EtlMergeDialog>>();
+const syncing = ref(false);
+/** 本次同步新出现的任务 ID。标签栏在渲染前收起，避免先闪一下再关掉。 */
+const suppressedPipelineIds = ref<string[]>([]);
+/** 后台对齐对方保存的间隔。手动同步不受这个间隔限制。 */
+const COLLAB_SYNC_MS = 2 * 60 * 1000;
+let collabTimer: ReturnType<typeof setTimeout> | undefined;
+let collabPulling = false;
+let collabAlive = true;
+const isWorkspaceOwner = computed(
+  () => activeWorkspace.value?.accessRole !== 'EDITOR',
+);
 /** 打开/切换工作区期间暂停自动落盘，避免半成品覆盖缓存 */
 let cachePaused = false;
 let cacheTimer: ReturnType<typeof setTimeout> | undefined;
@@ -382,6 +413,9 @@ function flushActiveDraft(): boolean {
   const ok = saveEtlLocalDraft({
     workspaceId: String(row.id),
     baseRevision: savedRevision.value,
+    baseJson: baseDocument.value ? JSON.stringify(baseDocument.value) : undefined,
+    baseName: baseMeta.value.name,
+    baseDescription: baseMeta.value.description,
     workspaceName: row.workspaceName || '',
     description: row.description || '',
     draftJson: currentDraftJson(),
@@ -528,6 +562,7 @@ async function openWorkspace(
     const detail = unbox<EtlWorkspaceRow>(await getEtlWorkspace(row.id));
     if (!workspaceRequests.current(request)) return false;
     const document = normalizeSqlDocument(parseEtlJson(detail.draftJson || '{}'));
+    suppressedPipelineIds.value = [];
     activeWorkspace.value = detail;
     doc.value = document;
     draftConflict.value = undefined;
@@ -543,46 +578,14 @@ async function openWorkspace(
     validationWarnings.value = [];
     syncJson();
     markSaved();
-    // 本地稿永不因 revision 前进自动删除；冲突稿先恢复，阻止未经确认覆盖新版本。
+    const serverDoc = cloneDocument(doc.value);
+    rememberServerBase(serverDoc, detail);
+    mergeConflicts.value = [];
+    syncBlocked.value = false;
+    // 本地稿永不因 revision 前进自动删除；能对齐祖先时先合并，对不齐才整份保留。
     if (force) clearEtlLocalDraft(detail.id);
-    const local = force ? undefined : getEtlLocalDraft(detail.id);
-    if (local) {
-      try {
-        const rawMode = local.editorMode === 'json' ? 'json' : 'steps';
-        try {
-          doc.value = normalizeSqlDocument(parseEtlJson(local.draftJson || '{}'));
-        } catch {
-          if (rawMode !== 'json') throw new Error('本地草稿格式无效');
-          if (local.documentJson)
-            doc.value = normalizeSqlDocument(parseEtlJson(local.documentJson));
-        }
-        activeWorkspace.value = {
-          ...detail,
-          workspaceName: local.workspaceName || detail.workspaceName,
-          description: local.description ?? detail.description,
-        };
-        editorMode.value = rawMode;
-        activePipelineId.value =
-          local.activePipelineId || doc.value.pipelines[0]?.id || '';
-        selectedNodeId.value =
-          local.selectedNodeId || pipeline.value?.nodes[0]?.id || '';
-        if (rawMode === 'json') {
-          jsonText.value = local.draftJson;
-          try {
-            parseEtlJson(jsonText.value);
-            jsonValid.value = true;
-          } catch {
-            jsonValid.value = false;
-          }
-        } else syncJson();
-        savedRevision.value = Number(local.baseRevision);
-        if (savedRevision.value !== Number(detail.revision))
-          draftConflict.value = detail;
-        if (!dirty.value) clearEtlLocalDraft(detail.id);
-      } catch {
-        ElMessage.warning('本地草稿恢复失败，缓存已保留，请导出备份后处理');
-      }
-    }
+    else restoreLocalDraft(detail, serverDoc);
+    scheduleCollabPull();
     await refreshRuns();
     if (!workspaceRequests.current(request)) return false;
     return true;
@@ -596,6 +599,419 @@ async function openWorkspace(
       cachePaused = false;
     }
   }
+}
+
+/** 记下当前服务端文档，作为之后三方合并的共同祖先。 */
+function rememberServerBase(document: EtlWorkspaceDocument, detail: EtlWorkspaceRow) {
+  baseDocument.value = cloneDocument(document);
+  baseMeta.value = {
+    name: detail.workspaceName || '',
+    description: detail.description || '',
+  };
+  knownRemoteRevision.value = Number(detail.revision) || 0;
+  latestRemoteDocument.value = cloneDocument(document);
+  latestRemoteMeta.value = { ...baseMeta.value };
+}
+
+/** 与 snapshot 使用同一种包装，用来判断合并后是否还和某个版本不同。 */
+function snapshotOf(
+  document: EtlWorkspaceDocument,
+  name: string,
+  description: string,
+  mode: 'steps' | 'json',
+) {
+  return JSON.stringify({
+    document: mode === 'json' ? JSON.stringify(document, null, 2) : document,
+    name,
+    description: description || '',
+  });
+}
+
+function currentLocalDocument(): EtlWorkspaceDocument | undefined {
+  if (editorMode.value !== 'json') return doc.value;
+  try {
+    return normalizeSqlDocument(parseEtlJson(jsonText.value));
+  } catch {
+    return undefined;
+  }
+}
+
+/** 恢复本地稿。有共同祖先且服务端已前进时，先把对方的修改并进来。 */
+function restoreLocalDraft(detail: EtlWorkspaceRow, serverDoc: EtlWorkspaceDocument) {
+  const local = getEtlLocalDraft(detail.id);
+  if (!local) return;
+  try {
+    const rawMode = local.editorMode === 'json' ? 'json' : 'steps';
+    let localDoc: EtlWorkspaceDocument | undefined;
+    let invalidJson = false;
+    try {
+      localDoc = normalizeSqlDocument(parseEtlJson(local.draftJson || '{}'));
+    } catch {
+      if (rawMode !== 'json') throw new Error('本地草稿格式无效');
+      invalidJson = true;
+      if (local.documentJson) {
+        localDoc = normalizeSqlDocument(parseEtlJson(local.documentJson));
+      }
+    }
+    const serverRevision = Number(detail.revision) || 0;
+    const ancestorRevision = Number(local.baseRevision) || 0;
+    if (localDoc && local.baseJson && ancestorRevision !== serverRevision && !invalidJson) {
+      const ancestor = normalizeSqlDocument(parseEtlJson(local.baseJson));
+      const merged = mergeEtlCollaboration({
+        base: ancestor,
+        local: localDoc,
+        remote: serverDoc,
+        baseName: local.baseName ?? local.workspaceName,
+        localName: local.workspaceName || detail.workspaceName,
+        remoteName: detail.workspaceName,
+        baseDescription: local.baseDescription ?? local.description ?? '',
+        localDescription: local.description ?? '',
+        remoteDescription: detail.description || '',
+      });
+      applyCollaborationMerge(
+        detail,
+        serverDoc,
+        merged,
+        rawMode,
+        {
+          pipelineId: local.activePipelineId,
+          nodeId: local.selectedNodeId,
+          ancestor,
+          ancestorRevision,
+          ancestorName: local.baseName ?? local.workspaceName,
+          ancestorDescription: local.baseDescription ?? local.description ?? '',
+          // 重新打开时编辑器里暂存的是服务端稿，要以本地稿里的任务为准，只收起对方新增的任务。
+          keepVisiblePipelineIds: localDoc.pipelines.map((item) => item.id),
+        },
+        true,
+      );
+      return;
+    }
+    if (localDoc) doc.value = localDoc;
+    activeWorkspace.value = {
+      ...detail,
+      workspaceName: local.workspaceName || detail.workspaceName,
+      description: local.description ?? detail.description,
+    };
+    editorMode.value = rawMode;
+    activePipelineId.value = local.activePipelineId || doc.value.pipelines[0]?.id || '';
+    selectedNodeId.value = local.selectedNodeId || pipeline.value?.nodes[0]?.id || '';
+    if (rawMode === 'json') {
+      jsonText.value = invalidJson ? local.draftJson : JSON.stringify(doc.value, null, 2);
+      jsonValid.value = !invalidJson;
+      syncBlocked.value = invalidJson;
+    } else syncJson();
+    savedRevision.value = ancestorRevision;
+    if (ancestorRevision !== serverRevision) draftConflict.value = detail;
+    if (!dirty.value) clearEtlLocalDraft(detail.id);
+  } catch {
+    ElMessage.warning('本地草稿恢复失败，缓存已保留，请导出备份后处理');
+  }
+}
+
+/** 把合并结果放进编辑器。没有冲突时祖先推进到对方版本，有冲突时祖先停在原处。 */
+function applyCollaborationMerge(
+  detail: Pick<EtlWorkspaceRow, 'id' | 'revision' | 'workspaceName' | 'description' | 'accessRole'>,
+  remoteDoc: EtlWorkspaceDocument,
+  merged: ReturnType<typeof mergeEtlCollaboration>,
+  mode: 'steps' | 'json',
+  origin?: {
+    pipelineId?: string;
+    nodeId?: string;
+    ancestor: EtlWorkspaceDocument;
+    ancestorRevision: number;
+    ancestorName: string;
+    ancestorDescription: string;
+    /** 这些任务保持原标签状态；没传时按替换前编辑器里的任务计算。 */
+    keepVisiblePipelineIds?: string[];
+  },
+  hideIncoming = false,
+) {
+  const pipelineId = origin?.pipelineId || activePipelineId.value;
+  const nodeId = origin?.nodeId || selectedNodeId.value;
+  const previousPipelineIds =
+    origin?.keepVisiblePipelineIds ?? doc.value.pipelines.map((item) => item.id);
+  doc.value = merged.document;
+  if (activeWorkspace.value) {
+    activeWorkspace.value = {
+      ...activeWorkspace.value,
+      workspaceName: merged.name,
+      description: merged.description,
+      revision: detail.revision,
+      accessRole: detail.accessRole || activeWorkspace.value.accessRole,
+    };
+  }
+  editorMode.value = mode;
+  activePipelineId.value = doc.value.pipelines.some((item) => item.id === pipelineId)
+    ? pipelineId
+    : doc.value.pipelines[0]?.id || '';
+  selectedNodeId.value = pipeline.value?.nodes.some((item) => item.id === nodeId)
+    ? nodeId
+    : pipeline.value?.nodes[0]?.id || '';
+  if (hideIncoming) hideIncomingPipelines(previousPipelineIds);
+  syncJson();
+  if (mode === 'json') jsonValid.value = true;
+  mergeConflicts.value = merged.conflicts;
+  syncBlocked.value = false;
+  draftConflict.value = undefined;
+  knownRemoteRevision.value = Number(detail.revision) || 0;
+  const serverName = detail.workspaceName || '';
+  const serverDescription = detail.description || '';
+  latestRemoteDocument.value = cloneDocument(remoteDoc);
+  latestRemoteMeta.value = { name: serverName, description: serverDescription };
+  if (merged.conflicts.length && origin) {
+    baseDocument.value = cloneDocument(origin.ancestor);
+    baseMeta.value = {
+      name: origin.ancestorName,
+      description: origin.ancestorDescription,
+    };
+    savedRevision.value = origin.ancestorRevision;
+  } else {
+    baseDocument.value = cloneDocument(remoteDoc);
+    baseMeta.value = { name: serverName, description: serverDescription };
+    savedRevision.value = knownRemoteRevision.value;
+  }
+  saved.value = snapshotOf(remoteDoc, serverName, serverDescription, mode);
+  if (!dirty.value) clearEtlLocalDraft(detail.id);
+  const listed = workspaces.value.find((item) => String(item.id) === String(detail.id));
+  if (listed) listed.revision = detail.revision;
+}
+
+/** 对方新同步来的任务不占用标签栏，仍可从任务下拉打开。返回收起的数量。 */
+function hideIncomingPipelines(previousIds: string[]) {
+  const known = new Set(previousIds);
+  const incoming = doc.value.pipelines
+    .map((item) => item.id)
+    .filter((id) => id && !known.has(id));
+  if (!incoming.length) return 0;
+  suppressedPipelineIds.value = incoming;
+  return incoming.length;
+}
+
+function scheduleCollabPull() {
+  if (!collabAlive) return;
+  if (collabTimer) clearTimeout(collabTimer);
+  collabTimer = setTimeout(() => {
+    void pullRemoteWorkspace(false);
+  }, COLLAB_SYNC_MS);
+}
+
+/** 立即向服务端要一次对方的保存，并按共同祖先并入本地。 */
+async function syncNow() {
+  if (!activeWorkspace.value || syncing.value) return;
+  syncing.value = true;
+  try {
+    await pullRemoteWorkspace(true);
+  } finally {
+    syncing.value = false;
+  }
+}
+
+/** 对方保存后拉回新版本，和本地未保存修改按节点合并。 */
+async function pullRemoteWorkspace(manual: boolean) {
+  const row = activeWorkspace.value;
+  if (!row) return;
+  if (!manual && (saving.value || loading.value || cachePaused || document.hidden)) {
+    scheduleCollabPull();
+    return;
+  }
+  if (manual && (saving.value || loading.value || cachePaused)) {
+    ElMessage.info(
+      saving.value ? '正在保存，请稍后再同步' : '正在打开工作区，请稍后再同步',
+    );
+    return;
+  }
+  if (collabPulling) return;
+  collabPulling = true;
+  const request = workspaceRequests.stamp();
+  try {
+    const sync = unbox<EtlWorkspaceSync>(
+      await syncEtlWorkspace(row.id, knownRemoteRevision.value),
+    );
+    if (
+      !workspaceRequests.current(request) ||
+      String(activeWorkspace.value?.id) !== String(row.id)
+    ) {
+      return;
+    }
+    if (saving.value || loading.value || cachePaused) {
+      if (manual) {
+        ElMessage.info(
+          saving.value ? '正在保存，请稍后再同步' : '正在打开工作区，请稍后再同步',
+        );
+      }
+      return;
+    }
+    if (!sync.changed) {
+      if (sync.accessRole && activeWorkspace.value) {
+        activeWorkspace.value.accessRole = sync.accessRole;
+      }
+      if (manual) ElMessage.success('已是最新版本');
+      return;
+    }
+    // 保存已经推进到更新的版本时，丢掉这次更早的响应，避免把旧稿并回来。
+    if ((Number(sync.revision) || 0) < knownRemoteRevision.value) return;
+    if (editorMode.value === 'json' && !jsonValid.value) {
+      syncBlocked.value = true;
+      if (manual) {
+        ElMessage.warning(
+          'JSON 还没写完，暂时不能自动并入对方的更新。请先修好 JSON 或导出备份。',
+        );
+      }
+      return;
+    }
+    const remoteDoc = normalizeSqlDocument(parseEtlJson(sync.draftJson || '{}'));
+    remoteDoc.workspace = {
+      id: String(row.id),
+      name: sync.workspaceName || remoteDoc.workspace?.name || '',
+      description: sync.description || '',
+    };
+    const localDoc = currentLocalDocument();
+    if (!localDoc || !baseDocument.value) {
+      syncBlocked.value = !localDoc;
+      return;
+    }
+    const merged = mergeEtlCollaboration({
+      base: baseDocument.value,
+      local: localDoc,
+      remote: remoteDoc,
+      baseName: baseMeta.value.name,
+      localName: activeWorkspace.value?.workspaceName || '',
+      remoteName: sync.workspaceName || '',
+      baseDescription: baseMeta.value.description,
+      localDescription: activeWorkspace.value?.description || '',
+      remoteDescription: sync.description || '',
+    });
+    const before = snapshot();
+    const previousConflicts = mergeConflicts.value.map((item) => item.path).join('|');
+    const previousPipelineIds = doc.value.pipelines.map((item) => item.id);
+    applyCollaborationMerge(
+      {
+        id: row.id,
+        revision: sync.revision,
+        workspaceName: sync.workspaceName || '',
+        description: sync.description || '',
+        accessRole: sync.accessRole,
+      },
+      remoteDoc,
+      merged,
+      editorMode.value,
+      merged.conflicts.length
+        ? {
+            ancestor: baseDocument.value,
+            ancestorRevision: savedRevision.value,
+            ancestorName: baseMeta.value.name,
+            ancestorDescription: baseMeta.value.description,
+          }
+        : undefined,
+      true,
+    );
+    const hiddenCount = merged.document.pipelines.filter(
+      (item) => !previousPipelineIds.includes(item.id),
+    ).length;
+    if (snapshot() !== before) {
+      ElMessage.success(
+        hiddenCount
+          ? '对方的更新已并入本地，新任务在任务列表里，标签栏默认不打开'
+          : '对方的更新已并入本地',
+      );
+    }
+    else if (
+      merged.conflicts.length &&
+      merged.conflicts.map((item) => item.path).join('|') !== previousConflicts
+    ) {
+      ElMessage.warning('对方也改了相同内容，请选择保留哪一份');
+    }
+  } catch (error) {
+    if (manual) ElMessage.error(errorMessage(error));
+  } finally {
+    collabPulling = false;
+    if (collabAlive && String(activeWorkspace.value?.id) === String(row?.id)) {
+      scheduleCollabPull();
+    }
+  }
+}
+
+function conflictTitle(conflict: EtlMergeConflict) {
+  const label = {
+    resource: '数据源',
+    variable: '变量',
+    pipeline: '任务',
+    'pipeline-meta': '任务属性',
+    node: '节点',
+    edge: '连线',
+    name: '工作区名称',
+    description: '工作区说明',
+  }[conflict.kind];
+  return `${translateUiText(label)} ${conflict.title}`.trim();
+}
+
+/** 逐项选择后祖先推进到对方版本，保存时不会把没选过的冲突直接盖掉。 */
+function chooseConflict(conflict: EtlMergeConflict, choice: 'local' | 'remote') {
+  if (!baseDocument.value || !activeWorkspace.value) return;
+  const next = resolveEtlConflict(doc.value, baseDocument.value, conflict, choice);
+  doc.value = next.document;
+  baseDocument.value = next.base;
+  if (conflict.kind === 'name') {
+    const remoteName = String(conflict.remoteValue ?? '');
+    baseMeta.value = { ...baseMeta.value, name: remoteName };
+    if (choice === 'remote') activeWorkspace.value.workspaceName = remoteName;
+  } else if (conflict.kind === 'description') {
+    const remoteDescription = String(conflict.remoteValue ?? '');
+    baseMeta.value = { ...baseMeta.value, description: remoteDescription };
+    if (choice === 'remote') activeWorkspace.value.description = remoteDescription;
+  } else if (choice === 'remote') {
+    baseMeta.value = { ...baseMeta.value };
+  }
+  mergeConflicts.value = mergeConflicts.value.filter((item) => item.path !== conflict.path);
+  if (!mergeConflicts.value.length && latestRemoteDocument.value) {
+    baseDocument.value = cloneDocument(latestRemoteDocument.value);
+    baseMeta.value = { ...latestRemoteMeta.value };
+    savedRevision.value = knownRemoteRevision.value;
+  }
+  syncJson();
+  flushActiveDraft();
+}
+
+function chooseAllConflicts(choice: 'local' | 'remote') {
+  for (const conflict of [...mergeConflicts.value]) chooseConflict(conflict, choice);
+}
+
+function openShare() {
+  if (!activeWorkspace.value) return;
+  shareDialog.value?.open(activeWorkspace.value.id, isWorkspaceOwner.value);
+}
+
+function openShareFromMenu() {
+  const target = menuWorkspace() || activeWorkspace.value;
+  dismissWorkspaceMenu();
+  if (!target) return;
+  shareDialog.value?.open(target.id, target.accessRole !== 'EDITOR');
+}
+
+function openMergeWorkspaces() {
+  if (!activeWorkspace.value) return;
+  if (mergeConflicts.value.length || draftConflict.value) {
+    ElMessage.warning('请先处理协同冲突后再保存');
+    return;
+  }
+  if (editorMode.value === 'json' && !jsonValid.value) {
+    ElMessage.warning('JSON 还没写完，暂时不能自动并入对方的更新。请先修好 JSON 或导出备份。');
+    return;
+  }
+  mergeDialog.value?.open();
+}
+
+function applyImportedNodes(document: EtlWorkspaceDocument, summary: string) {
+  const pipelineId = document.pipelines.at(-1)?.id || activePipelineId.value;
+  doc.value = normalizeSqlDocument(document);
+  activePipelineId.value = doc.value.pipelines.some((item) => item.id === pipelineId)
+    ? pipelineId
+    : doc.value.pipelines[0]?.id || '';
+  selectedNodeId.value = pipeline.value?.nodes[0]?.id || '';
+  editorMode.value = 'steps';
+  syncJson();
+  ElMessage.success(summary || '节点已合并到当前工作区，确认后请保存');
 }
 
 /** 明确保留本地配置后才变更基准 revision；后续仍需点击保存且受服务端乐观锁保护。 */
@@ -664,66 +1080,145 @@ function incompleteDraftWarnings() {
 }
 async function saveDraft(): Promise<boolean> {
   if (!activeWorkspace.value || saving.value) return false;
+  if (mergeConflicts.value.length) {
+    ElMessage.warning('请先处理协同冲突后再保存');
+    return false;
+  }
   if (draftConflict.value) {
     ElMessage.warning('请先选择保留本地或使用服务端版本，也可导出本地备份');
+    return false;
+  }
+  if (syncBlocked.value) {
+    ElMessage.warning('JSON 还没写完，暂时不能自动并入对方的更新。请先修好 JSON 或导出备份。');
     return false;
   }
   saving.value = true;
   const request = workspaceRequests.stamp();
   try {
-    if (!(await prepare())) return false;
-    const row = activeWorkspace.value;
-    const base = snapshot();
+    return await commitDraft(request, false);
+  } finally {
+    saving.value = false;
+  }
+}
+
+/** 按当前已知的服务端版本保存。版本被别人推进时先合并，合并不了就停，不覆盖。 */
+async function commitDraft(request: number, retried: boolean): Promise<boolean> {
+  if (!(await prepare())) return false;
+  const row = activeWorkspace.value;
+  if (!row) return false;
+  const base = snapshot();
+  const payload = jsonText.value;
+  const revision = knownRemoteRevision.value || row.revision;
+  try {
     const committed = unbox<EtlWorkspaceRow>(
       await saveEtlWorkspace({
         id: row.id,
-        revision: row.revision,
+        revision,
         workspaceName: row.workspaceName,
         description: row.description,
-        draftJson: jsonText.value,
+        draftJson: payload,
       }),
     );
     if (
       !workspaceRequests.current(request) ||
-      String(activeWorkspace.value?.id) !== String(row.id)
+      String(activeWorkspace.value?.id) !== String(row.id) ||
+      !activeWorkspace.value
     )
       return false;
-    // 请求中途继续编辑时只更新已保存基准，不能把新编辑错误标记成已落盘。
     activeWorkspace.value = {
       ...activeWorkspace.value,
       revision: committed.revision,
     };
     savedRevision.value = Number(committed.revision);
+    knownRemoteRevision.value = savedRevision.value;
     saved.value = base;
+    try {
+      const savedDoc = normalizeSqlDocument(parseEtlJson(payload));
+      baseDocument.value = cloneDocument(savedDoc);
+      latestRemoteDocument.value = cloneDocument(savedDoc);
+    } catch {
+      /* 刚保存的 JSON 无法回读时，下一轮同步会重新对齐祖先。 */
+    }
+    baseMeta.value = {
+      name: activeWorkspace.value.workspaceName || '',
+      description: activeWorkspace.value.description || '',
+    };
+    latestRemoteMeta.value = { ...baseMeta.value };
     if (!dirty.value) clearEtlLocalDraft(row.id);
     else flushActiveDraft();
     await refreshWorkspaces();
-    ElMessage.success('已保存');
+    ElMessage.success(retried ? '已按最新版本合并并保存' : '已保存');
     return true;
   } catch (error) {
-    ElMessage.error(errorMessage(error));
     if (
+      !retried &&
       workspaceRequests.current(request) &&
-      /其他页面|revision|版本冲突|已变化/.test(errorMessage(error)) &&
+      /其他人|其他页面|revision|版本冲突|已变化|合并/.test(errorMessage(error)) &&
       activeWorkspace.value
     ) {
-      const id = activeWorkspace.value.id;
-      flushActiveDraft();
-      try {
-        const latest = unbox<EtlWorkspaceRow>(await getEtlWorkspace(id));
-        if (
-          workspaceRequests.current(request) &&
-          String(activeWorkspace.value?.id) === String(id)
-        )
-          draftConflict.value = latest;
-      } catch {
-        /* 读取最新版本失败时仍保留本地缓存，不自动覆盖。 */
+      const incorporated = await incorporateLatest(activeWorkspace.value.id, request);
+      if (incorporated === 'clean') return commitDraft(request, true);
+      if (incorporated === 'conflict') {
+        ElMessage.warning('保存时遇到新版本，无冲突的修改已并入');
+        return false;
       }
     }
+    ElMessage.error(errorMessage(error));
     return false;
-  } finally {
-    saving.value = false;
   }
+}
+
+/** 保存撞上新版本时，用共同祖先把对方的修改并进当前草稿。 */
+async function incorporateLatest(
+  id: string | number,
+  request: number,
+): Promise<'clean' | 'conflict' | 'failed'> {
+  const latest = unbox<EtlWorkspaceRow>(await getEtlWorkspace(id));
+  if (
+    !workspaceRequests.current(request) ||
+    String(activeWorkspace.value?.id) !== String(id)
+  )
+    return 'failed';
+  const remoteDoc = normalizeSqlDocument(parseEtlJson(latest.draftJson || '{}'));
+  remoteDoc.workspace = {
+    id: String(id),
+    name: latest.workspaceName || '',
+    description: latest.description || '',
+  };
+  const localDoc = currentLocalDocument();
+  if (!localDoc || !baseDocument.value) {
+    draftConflict.value = latest;
+    knownRemoteRevision.value = Number(latest.revision) || knownRemoteRevision.value;
+    return 'conflict';
+  }
+  const merged = mergeEtlCollaboration({
+    base: baseDocument.value,
+    local: localDoc,
+    remote: remoteDoc,
+    baseName: baseMeta.value.name,
+    localName: activeWorkspace.value?.workspaceName || '',
+    remoteName: latest.workspaceName || '',
+    baseDescription: baseMeta.value.description,
+    localDescription: activeWorkspace.value?.description || '',
+    remoteDescription: latest.description || '',
+  });
+  const ancestor = cloneDocument(baseDocument.value);
+  applyCollaborationMerge(
+    latest,
+    remoteDoc,
+    merged,
+    editorMode.value,
+    merged.conflicts.length
+      ? {
+          ancestor,
+          ancestorRevision: savedRevision.value,
+          ancestorName: baseMeta.value.name,
+          ancestorDescription: baseMeta.value.description,
+        }
+      : undefined,
+    true,
+  );
+  return merged.conflicts.length ? 'conflict' : 'clean';
 }
 async function changeMode(mode: 'steps' | 'json') {
   if (mode === editorMode.value) return;
@@ -791,6 +1286,8 @@ function menuWorkspace() {
     (item) => String(item.id) === String(workspaceMenu.value?.id),
   );
 }
+const menuTargetIsOwner = computed(() => menuWorkspace()?.accessRole !== 'EDITOR');
+const menuTargetIsOwner = computed(() => menuWorkspace()?.accessRole !== 'EDITOR');
 /** 丢掉目标工作区的本地未保存稿，重新加载服务端版本。 */
 async function abandonLocalDraft() {
   const target = menuWorkspace() || activeWorkspace.value;
@@ -895,6 +1392,8 @@ function onMore(command: string) {
     void refreshRuns();
   } else if (command === 'schedule') configureSchedule();
   else if (command === 'notify') configureNotify();
+  else if (command === 'share') openShare();
+  else if (command === 'merge') openMergeWorkspaces();
   else if (command === 'rename') void renameWorkspace();
   else if (command === 'abandon') void abandonLocalDraft();
   else if (command === 'delete') void deleteWorkspaceFromMenu();
@@ -1614,6 +2113,8 @@ onBeforeUnmount(() => {
   previewRequests.invalidate();
   tableInsertRequests.invalidate(); draftOperations.invalidate(); catalogRequest++;
   if (cacheTimer) clearTimeout(cacheTimer);
+  collabAlive = false;
+  if (collabTimer) clearTimeout(collabTimer);
   window.removeEventListener('beforeunload', beforeUnload);
   document.removeEventListener('click', dismissWorkspaceMenu);
   if (pollTimer) clearTimeout(pollTimer);
@@ -1655,7 +2156,14 @@ onBeforeUnmount(() => {
             @click="saveDraft"
             >{{ $tr('保存') }}</el-button
           >
-          <el-button :disabled="!activeWorkspace" @click="publish"
+          <el-button
+            :disabled="!activeWorkspace"
+            :loading="syncing"
+            :title="$tr('拉取对方已保存的更新')"
+            @click="syncNow"
+            >{{ $tr('同步') }}</el-button
+          >
+          <el-button :disabled="!activeWorkspace || !isWorkspaceOwner" @click="publish"
             >{{ $tr('发布') }}</el-button
           >
           <el-button
@@ -1691,13 +2199,15 @@ onBeforeUnmount(() => {
                 >
                 <el-dropdown-item command="export">{{ $tr('导出 JSON') }}</el-dropdown-item>
                 <el-dropdown-item command="runs">{{ $tr('运行记录') }}</el-dropdown-item>
-                <el-dropdown-item command="schedule">{{ $tr('定时执行') }}</el-dropdown-item>
-                <el-dropdown-item command="notify">{{ $tr('消息通知') }}</el-dropdown-item>
+                <el-dropdown-item command="share">{{ $tr('协同成员') }}</el-dropdown-item>
+                <el-dropdown-item command="merge">{{ $tr('合并其他工作区') }}</el-dropdown-item>
+                <el-dropdown-item v-if="isWorkspaceOwner" command="schedule">{{ $tr('定时执行') }}</el-dropdown-item>
+                <el-dropdown-item v-if="isWorkspaceOwner" command="notify">{{ $tr('消息通知') }}</el-dropdown-item>
                 <el-dropdown-item command="rename">{{ $tr('改名') }}</el-dropdown-item>
                 <el-dropdown-item v-if="dirty" command="abandon"
                   >{{ $tr('放弃本地未保存修改') }}</el-dropdown-item
                 >
-                <el-dropdown-item command="delete" divided
+                <el-dropdown-item v-if="isWorkspaceOwner" command="delete" divided
                   >{{ $tr('删除工作区') }}</el-dropdown-item
                 >
               </el-dropdown-menu>
@@ -1720,7 +2230,32 @@ onBeforeUnmount(() => {
         />
       </header>
       <el-alert
-        v-if="draftConflict"
+        v-if="syncBlocked"
+        type="warning"
+        :closable="false"
+        :title="$tr('JSON 还没写完，暂时不能自动并入对方的更新。请先修好 JSON 或导出备份。')"
+      >
+        <el-button @click="exportLocalDraft">{{ $tr('导出本地备份') }}</el-button>
+      </el-alert>
+      <el-alert
+        v-else-if="mergeConflicts.length"
+        type="warning"
+        :closable="false"
+        :title="$tr('同一处被双方改过，保存前请选择保留哪一份，不会直接覆盖。')"
+      >
+        <div v-for="conflict in mergeConflicts" :key="conflict.path" class="conflict-row">
+          <span>{{ conflictTitle(conflict) }}</span>
+          <el-button size="small" @click="chooseConflict(conflict, 'remote')">{{ $tr('采用对方') }}</el-button>
+          <el-button size="small" @click="chooseConflict(conflict, 'local')">{{ $tr('保留我的') }}</el-button>
+        </div>
+        <div class="conflict-actions">
+          <el-button size="small" @click="chooseAllConflicts('remote')">{{ $tr('全部采用对方') }}</el-button>
+          <el-button size="small" @click="chooseAllConflicts('local')">{{ $tr('全部保留我的') }}</el-button>
+          <el-button size="small" @click="exportLocalDraft">{{ $tr('导出本地备份') }}</el-button>
+        </div>
+      </el-alert>
+      <el-alert
+        v-else-if="draftConflict"
         type="warning"
         :closable="false"
         :title="$tr('服务端版本已变化，本地草稿已保留，尚未覆盖服务端。')"
@@ -1764,7 +2299,10 @@ onBeforeUnmount(() => {
               >{{ workspaceDisplayName(workspace)
               }}{{ isWorkspaceDirty(workspace) ? ' *' : '' }}</strong
             >
-            <small>{{ $tr('版本') }} {{ workspace.publishedVersion || 0 }}</small>
+            <small
+              >{{ workspace.accessRole === 'EDITOR' ? $tr('共享') + ' · ' : '' }}{{ $tr('版本') }}
+              {{ workspace.publishedVersion || 0 }}</small
+            >
             <el-button
               v-if="String(workspace.id) === String(activeWorkspace?.id)"
               size="small"
@@ -1788,8 +2326,9 @@ onBeforeUnmount(() => {
               }"
               @click.stop
             >
-              <button @click="configureSchedule">{{ $tr('定时执行配置') }}</button>
-              <button @click="configureNotify">{{ $tr('消息通知配置') }}</button>
+              <button v-if="menuTargetIsOwner" @click="configureSchedule">{{ $tr('定时执行配置') }}</button>
+              <button v-if="menuTargetIsOwner" @click="configureNotify">{{ $tr('消息通知配置') }}</button>
+              <button @click="openShareFromMenu">{{ $tr('协同成员') }}</button>
               <button @click="renameWorkspace">{{ $tr('改名') }}</button>
               <button
                 v-if="
@@ -1803,7 +2342,7 @@ onBeforeUnmount(() => {
               >
                 {{ $tr('放弃本地未保存修改') }}
               </button>
-              <button class="danger" @click="deleteWorkspaceFromMenu">
+              <button v-if="menuTargetIsOwner" class="danger" @click="deleteWorkspaceFromMenu">
                 {{ $tr('删除工作区') }}
               </button>
             </div>
@@ -1819,6 +2358,7 @@ onBeforeUnmount(() => {
             class="workspace-tabs"
             :workspace-id="activeWorkspace.id"
             :tasks="doc.pipelines"
+            :auto-hide-ids="suppressedPipelineIds"
             :active="activePipelineId"
             :position="taskPosition"
             @select="selectPipeline"
@@ -2509,6 +3049,14 @@ onBeforeUnmount(() => {
     </div>
     <WorkspaceSchedule ref="scheduleDialog" @logs="openScheduleLogs" />
     <WorkspaceNotify ref="notifyDialog" />
+    <EtlShareDialog ref="shareDialog" />
+    <EtlMergeDialog
+      ref="mergeDialog"
+      :workspaces="workspaces"
+      :current-id="activeWorkspace?.id"
+      :document="doc"
+      @apply="applyImportedNodes"
+    />
     <el-dialog
       v-model="newVisible"
       :title="$tr('新建工作区')"
@@ -2783,6 +3331,14 @@ onBeforeUnmount(() => {
 .workspace-source-btn {
   margin-top: 2px;
   width: 100%;
+}
+.conflict-row,
+.conflict-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
 }
 .workspace-context-menu {
   position: fixed;
