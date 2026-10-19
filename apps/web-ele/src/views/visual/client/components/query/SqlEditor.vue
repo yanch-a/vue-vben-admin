@@ -72,6 +72,11 @@ const props = defineProps<{
   ) => Promise<{ columns: string[]; primaryKeys?: string[] }>;
   /** 当前库表清单为空时，按需从远端拉一次表名 */
   loadTables?: (instanceName: string) => Promise<string[]>;
+  /**
+   * 嵌入其他页面时只保留编辑区（高亮、补全、格式化、拖入 SQL）。
+   * 不注册关闭页签、AI、执行计划、查看表、改变表等查询客户端动作。
+   */
+  embedded?: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -488,6 +493,19 @@ onMounted(() => {
   editor.addCommand(monaco.KeyCode.F12, () => {
     if (!props.readOnly) formatCurrentSql();
   });
+  // SQL 标识符含下划线，避免 Monaco 默认分词把 gp_t_project 拆成多段导致过滤异常
+  if (!(window as any).__lemonSqlWordPattern) {
+    (window as any).__lemonSqlWordPattern = true;
+    monaco.languages.setLanguageConfiguration('sql', {
+      wordPattern:
+        /(-?\d*\.\d\w*)|([^\`\~\!\@\#\%\^\&\*\(\)\-\=\+\[\{\]\}\\\|\;\:\'\"\,\.\<\>\/\?\s]+)/g,
+    });
+  }
+  // 嵌入场景只要编辑区，查询客户端的页签/AI/表操作不带到 ETL 等页面。
+  if (props.embedded) {
+    registerCompletion();
+    return;
+  }
   // 右键菜单项。快捷键由父级在捕获阶段处理，避免和这里各关一次。
   // 父级只认物理 Ctrl+Q（不含 Cmd）：Windows/Linux 上 CtrlCmd 即 Ctrl，
   // macOS 上 CtrlCmd 是 Cmd，需改用 WinCtrl（Mac 的 Ctrl 键）。
@@ -536,14 +554,6 @@ onMounted(() => {
     contextMenuOrder: 1.6,
     run: () => emitAlterTable(),
   });
-  // SQL 标识符含下划线，避免 Monaco 默认分词把 gp_t_project 拆成多段导致过滤异常
-  if (!(window as any).__lemonSqlWordPattern) {
-    (window as any).__lemonSqlWordPattern = true;
-    monaco.languages.setLanguageConfiguration('sql', {
-      wordPattern:
-        /(-?\d*\.\d\w*)|([^\`\~\!\@\#\%\^\&\*\(\)\-\=\+\[\{\]\}\\\|\;\:\'\"\,\.\<\>\/\?\s]+)/g,
-    });
-  }
   registerCompletion();
 });
 

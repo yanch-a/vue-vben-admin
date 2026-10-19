@@ -18,8 +18,16 @@ import {
 } from '#/api/visual/etl';
 import AiChatWindow from '#/views/visual/client/components/ai/AiChatWindow.vue';
 import ConnectionDialog from '#/views/visual/client/components/ConnectionDialog.vue';
+import { translateUiText } from '#/locales/ui-text';
 import { cloneDocument, etlId } from './etlModel';
 import { mergeKettleSelection, namespaceKettle } from './kettleMigration';
+
+function say(
+  type: 'success' | 'warning' | 'info' | 'error',
+  message: unknown,
+) {
+  ElMessage[type](translateUiText(message));
+}
 
 const props = defineProps<{
   document: EtlWorkspaceDocument;
@@ -175,7 +183,7 @@ async function refreshConnections() {
     const response: any = await listEtlSources();
     catalog.value = response.data ?? response;
   } catch (error: any) {
-    ElMessage.error(error.message || '连接目录加载失败');
+    say('error', error.message || '连接目录加载失败');
   } finally {
     busy.value = false;
   }
@@ -367,7 +375,7 @@ async function next() {
       throw new Error('请勾选要导入的任务');
     step.value++;
   } catch (error: any) {
-    ElMessage.warning(error.message);
+    say('warning', error.message);
     busy.value = false;
   }
 }
@@ -420,7 +428,7 @@ async function apply() {
       throw new Error((validation.errors || []).join('；'));
     emit('apply', document, baseJson.value);
   } catch (error: any) {
-    ElMessage.error(error.message || '导入配置校验失败');
+    say('error', error.message || '导入配置校验失败');
   } finally {
     busy.value = false;
   }
@@ -469,7 +477,7 @@ async function repair(taskId: string) {
         '请按 etl-kettle 技能修复当前迁移任务，解释每一项差异。先检查真实结构，保留任务 ID 和资源绑定，不能仅删除警告假装修复。原流程停用时必须保留停用，未被用户明确要求不得恢复同步。以完整候选配置结束，不保存、不执行。',
     });
   } catch (error: any) {
-    ElMessage.warning(error.message);
+    say('warning', error.message);
   }
 }
 /** 连接/实例失败也可交给 AI 查授权目录，AI 只能建议已有 ID，不能建连接或增加权限。 */
@@ -494,7 +502,7 @@ async function directoryHelp(prefill: string, stage: string, issues: string[]) {
     ([, value]) => value.dbConfigId && value.instance,
   );
   if (!resource) {
-    ElMessage.info(
+    say('info', 
       '请先匹配一个可用实例，AI 需要有权限的数据库上下文；也可通过“新建连接”人工配置',
     );
     return;
@@ -530,7 +538,7 @@ function aiContext() {
 }
 async function beforeAiSend() {
   if (!aiDocument.value || JSON.stringify(aiDocument.value).length > 64000) {
-    ElMessage.warning(
+    say('warning', 
       '当前任务配置超过 AI 上下文限制，请缩小任务或精简 SQL 后重试',
     );
     return false;
@@ -606,10 +614,10 @@ async function applyAi(candidate: {
     report.nodeCount = repaired.nodes.length;
     toggle(repaired.id, true);
     aiWindow.value?.close();
-    ElMessage.success('修复候选已确认，请完成最终导入');
+    say('success', '修复候选已确认，请完成最终导入');
   } catch (error: any) {
     if (error !== 'cancel' && error !== 'close')
-      ElMessage.error(error.message || '修复失败');
+      say('error', error.message || '修复失败');
   }
 }
 defineExpose({ open, complete });

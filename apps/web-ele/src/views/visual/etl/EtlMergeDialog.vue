@@ -23,8 +23,10 @@ const emit = defineEmits<{
 }>();
 
 const visible = ref(false);
-const loadingId = ref('');
+const loadingIds = ref<string[]>([]);
 const applying = ref(false);
+/** 每个工作区的加载代次。取消勾选后，晚返回的详情不能再写回来。 */
+const loadTokens = new Map<string, number>();
 /** 工作区 id -> 已加载文档，以及 nodeKey(pipelineId/nodeId) 是否选中 */
 const loaded = ref<
   Record<string, { document: EtlWorkspaceDocument; checked: Record<string, boolean> }>
@@ -43,21 +45,27 @@ function nodeKey(pipelineId: string, nodeId: string) {
 
 function open() {
   loaded.value = {};
+  loadTokens.clear();
+  loadingIds.value = [];
   visible.value = true;
 }
 
 async function toggleWorkspace(row: EtlWorkspaceRow, checked: boolean) {
   const id = String(row.id);
+  const token = (loadTokens.get(id) || 0) + 1;
+  loadTokens.set(id, token);
   if (!checked) {
     const next = { ...loaded.value };
     delete next[id];
     loaded.value = next;
+    loadingIds.value = loadingIds.value.filter((item) => item !== id);
     return;
   }
   if (loaded.value[id]) return;
-  loadingId.value = id;
+  loadingIds.value = [...loadingIds.value, id];
   try {
     const detail = unbox<EtlWorkspaceRow>(await getEtlWorkspace(row.id));
+    if (loadTokens.get(id) !== token) return;
     const document = normalizeSqlDocument(parseEtlJson(detail.draftJson || '{}'));
     const checks: Record<string, boolean> = {};
     for (const pipeline of document.pipelines) {
@@ -65,9 +73,12 @@ async function toggleWorkspace(row: EtlWorkspaceRow, checked: boolean) {
     }
     loaded.value = { ...loaded.value, [id]: { document, checked: checks } };
   } catch (error: any) {
+    if (loadTokens.get(id) !== token) return;
     ElMessage.error(error?.msg || error?.message || translateUiText('操作失败'));
   } finally {
-    loadingId.value = '';
+    if (loadTokens.get(id) === token) {
+      loadingIds.value = loadingIds.value.filter((item) => item !== id);
+    }
   }
 }
 
@@ -140,7 +151,7 @@ defineExpose({ open });
     <div v-for="row in candidates" :key="String(row.id)" class="merge-workspace">
       <el-checkbox
         :model-value="Boolean(loaded[String(row.id)])"
-        :disabled="loadingId === String(row.id)"
+        :disabled="loadingIds.includes(String(row.id))"
         @change="toggleWorkspace(row, Boolean($event))"
       >
         {{ row.workspaceName }}

@@ -21,6 +21,13 @@ import {
 } from '#/api/visual/etl';
 import { translateUiText } from '#/locales/ui-text';
 
+function say(
+  type: 'success' | 'warning' | 'info' | 'error',
+  message: unknown,
+) {
+  ElMessage[type](translateUiText(message));
+}
+
 const visible = ref(false);
 const loading = ref(false);
 const saving = ref(false);
@@ -117,7 +124,7 @@ async function load(reset = false) {
       };
     }
   } catch (error: any) {
-    ElMessage.error(error.msg || error.message || '消息通知加载失败');
+    say('error', error.msg || error.message || '消息通知加载失败');
   } finally {
     if (version === requestVersion) loading.value = false;
   }
@@ -151,15 +158,15 @@ function startEdit(row: NotifyChannelRow) {
 
 async function saveChannel() {
   if (!channelForm.value.channelName.trim()) {
-    ElMessage.warning('请填写渠道名称');
+    say('warning', '请填写渠道名称');
     return;
   }
   if (!channelForm.value.webhookUrl.trim()) {
-    ElMessage.warning('请填写 Webhook 地址');
+    say('warning', '请填写 Webhook 地址');
     return;
   }
   if (!channelForm.value.webhookUrl.trim().toLowerCase().startsWith('https://')) {
-    ElMessage.warning('Webhook 须为 https:// 官方地址');
+    say('warning', 'Webhook 须为 https:// 官方地址');
     return;
   }
   saving.value = true;
@@ -174,12 +181,12 @@ async function saveChannel() {
         : channelForm.value.secretInput?.trim() || undefined,
       clearSecret: clearSecret.value || undefined,
     });
-    ElMessage.success('渠道已保存');
+    say('success', '渠道已保存');
     editing.value = false;
     clearSecret.value = false;
     await load(false);
   } catch (error: any) {
-    ElMessage.error(error.msg || error.message || '渠道保存失败');
+    say('error', error.msg || error.message || '渠道保存失败');
   } finally {
     saving.value = false;
   }
@@ -200,10 +207,10 @@ async function removeChannel(row: NotifyChannelRow) {
     form.value.channelIds = form.value.channelIds.filter(
       (id) => String(id) !== String(row.id),
     );
-    ElMessage.success('渠道已删除');
+    say('success', '渠道已删除');
     await load(false);
   } catch (error: any) {
-    ElMessage.error(error.msg || error.message || '渠道删除失败');
+    say('error', error.msg || error.message || '渠道删除失败');
   }
 }
 
@@ -211,9 +218,9 @@ async function testChannel(row: NotifyChannelRow) {
   testingId.value = String(row.id);
   try {
     await testEtlNotifyChannel(row.id);
-    ElMessage.success('测试消息已发送');
+    say('success', '测试消息已发送');
   } catch (error: any) {
-    ElMessage.error(error.msg || error.message || '测试发送失败');
+    say('error', error.msg || error.message || '测试发送失败');
   } finally {
     testingId.value = '';
   }
@@ -222,7 +229,7 @@ async function testChannel(row: NotifyChannelRow) {
 async function save() {
   if (!target.value) return;
   if (form.value.enabled && enabledChannels.value.length === 0) {
-    ElMessage.warning('请先配置并启用至少一个消息渠道');
+    say('warning', '请先配置并启用至少一个消息渠道');
     return;
   }
   saving.value = true;
@@ -233,12 +240,12 @@ async function save() {
     });
     const row = response.data ?? response;
     form.value.revision = row?.revision ?? form.value.revision + 1;
-    ElMessage.success(
+    say('success', 
       form.value.enabled ? '已开启失败消息通知' : '已保存（通知关闭）',
     );
     await load(true);
   } catch (error: any) {
-    ElMessage.error(error.msg || error.message || '消息通知保存失败');
+    say('error', error.msg || error.message || '消息通知保存失败');
   } finally {
     saving.value = false;
   }

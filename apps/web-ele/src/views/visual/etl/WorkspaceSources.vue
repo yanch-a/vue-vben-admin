@@ -4,7 +4,15 @@ import { computed, ref } from 'vue';
 import { ElMessage } from 'element-plus';
 import type { EtlConnectionOption, EtlResource } from '#/api/visual/etl';
 import { listEtlInstances, listEtlTables } from '#/api/visual/etl';
+import { translateUiText } from '#/locales/ui-text';
 import { etlId } from './etlModel';
+
+function say(
+  type: 'success' | 'warning' | 'info' | 'error',
+  message: unknown,
+) {
+  ElMessage[type](translateUiText(message));
+}
 
 const props = defineProps<{
   modelValue: Record<string, EtlResource>;
@@ -37,7 +45,7 @@ async function changeConnection() {
     if (request === instanceRequest) instances.value = res.data ?? res;
   } catch (error: any) {
     if (request === instanceRequest)
-      ElMessage.error(error.message || '实例加载失败');
+      say('error', error.message || '实例加载失败');
   } finally {
     if (request === instanceRequest) busy.value = false;
   }
@@ -85,7 +93,7 @@ function patchSource(key: string, patch: Partial<EtlResource>) {
 /** 被流程引用的资源必须保留，避免用户在设置界面误删步骤的数据源。 */
 function removeSource(key: string) {
   if (props.usedRefs?.includes(key)) {
-    ElMessage.warning('该数据源正在被步骤使用，请先修改步骤的数据源');
+    say('warning', '该数据源正在被步骤使用，请先修改步骤的数据源');
     return;
   }
   const next = { ...props.modelValue };
@@ -116,7 +124,7 @@ async function loadSchemas(key: string, resource: EtlResource) {
       ),
     ];
   } catch (error: any) {
-    ElMessage.error(error.message || 'Schema 加载失败');
+    say('error', error.message || 'Schema 加载失败');
   }
 }
 </script>

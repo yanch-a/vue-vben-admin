@@ -17,11 +17,22 @@ import {
 import {
   getEtlRun,
   getEtlSchedule,
+  listEtlSchedulePipelines,
   pauseEtlSchedule,
   previewEtlSchedule,
   saveEtlSchedule,
 } from '#/api/visual/etl';
 import { translateUiText } from '#/locales/ui-text';
+
+function say(
+  type: 'success' | 'warning' | 'info' | 'error',
+  message: unknown,
+) {
+  ElMessage[type](translateUiText(message));
+}
+function sameWorkspace(left?: string | number | null, right?: string | number | null) {
+  return left != null && right != null && String(left) === String(right);
+}
 
 const emit = defineEmits<{
   logs: [workspaceId: string | number, runId: string];
@@ -118,7 +129,8 @@ async function load(reset = false) {
           };
     }
   } catch (error: any) {
-    ElMessage.error(error.msg || error.message || '定时配置加载失败');
+    if (version !== requestVersion) return;
+    say('error', error.msg || error.message || '定时配置加载失败');
   } finally {
     if (version === requestVersion) loading.value = false;
   }
@@ -161,12 +173,14 @@ function preTaskOptions(step: EtlScheduleStep) {
     : step.pipelines || [];
 }
 /** 追加一个前置工作区，默认勾选其全部已启用任务。 */
-function addPreStep() {
+async function addPreStep() {
+  const version = requestVersion;
+  const workspaceId = target.value?.id;
   const peer = (detail.value?.peerWorkspaces || []).find(
     (item) => String(item.id) === String(addingPeerId.value),
   );
   if (!peer) {
-    ElMessage.warning('请选择要先执行的工作区');
+    say('warning', '请选择要先执行的工作区');
     return;
   }
   if (
@@ -174,12 +188,24 @@ function addPreStep() {
       (step) => String(step.workspaceId) === String(peer.id),
     )
   ) {
-    ElMessage.warning('该工作区已在前置列表中');
+    say('warning', '该工作区已在前置列表中');
     return;
+  }
+  let pipelines = peer.latestPipelines;
+  if (!pipelines) {
+    try {
+      const response: any = await listEtlSchedulePipelines(peer.id, peer.publishedVersion);
+      if (version !== requestVersion || !sameWorkspace(target.value?.id, workspaceId)) return;
+      pipelines = response.data ?? response;
+      peer.latestPipelines = pipelines;
+    } catch (error: any) {
+      say('error', error.msg || error.message || '前置工作区任务加载失败');
+      return;
+    }
   }
   form.value.preSteps = [
     ...(form.value.preSteps || []),
-    peerToStep(peer),
+    peerToStep({ ...peer, latestPipelines: pipelines }),
   ];
   addingPeerId.value = undefined;
 }
@@ -189,9 +215,9 @@ function peerToStep(peer: EtlSchedulePeerWorkspace): EtlScheduleStep {
     workspaceName: peer.workspaceName,
     publishedVersion: peer.publishedVersion,
     latestPublishedVersion: peer.publishedVersion,
-    pipelines: peer.latestPipelines,
-    latestPipelines: peer.latestPipelines,
-    pipelineIds: peer.latestPipelines
+    pipelines: peer.latestPipelines || [],
+    latestPipelines: peer.latestPipelines || [],
+    pipelineIds: (peer.latestPipelines || [])
       .filter((task) => task.enabled)
       .map((task) => task.id),
   };
@@ -238,19 +264,21 @@ async function preview() {
 /** 独立保存计划，仍由服务端校验任务、版本和权限；开启必须用户明确操作开关。 */
 async function save() {
   if (!target.value || !detail.value) return;
+  const version = requestVersion;
+  const workspaceId = target.value.id;
   if (!form.value.pipelineIds.length) {
-    ElMessage.warning('请至少选择一个本工作区同步任务');
+    say('warning', '请至少选择一个本工作区同步任务');
     return;
   }
   for (const step of form.value.preSteps || []) {
     if (step.missing) {
-      ElMessage.warning(
+      say('warning', 
         `前置工作区「${step.workspaceName || step.workspaceId}」已不可用，请先移除`,
       );
       return;
     }
     if (!step.pipelineIds?.length) {
-      ElMessage.warning(
+      say('warning', 
         `前置工作区「${step.workspaceName || step.workspaceId}」请至少选择一个任务`,
       );
       return;
@@ -258,13 +286,15 @@ async function save() {
   }
   saving.value = true;
   try {
-    await saveEtlSchedule(target.value.id, schedulePayload(form.value));
-    ElMessage.success(
+    await saveEtlSchedule(workspaceId, schedulePayload(form.value));
+    if (version !== requestVersion || !sameWorkspace(target.value?.id, workspaceId)) return;
+    say(
+      'success',
       form.value.enabled ? '定时执行已启用' : '定时计划已保存，当前未启用',
     );
     await load(true);
   } catch (error: any) {
-    ElMessage.error(error.msg || error.message || '计划保存失败');
+    say('error', error.msg || error.message || '计划保存失败');
   } finally {
     saving.value = false;
   }
@@ -272,13 +302,17 @@ async function save() {
 /** 暂停只作用于未来触发，不取消已运行任务；旧的一次性时间可直接暂停。 */
 async function pause() {
   if (!target.value || !detail.value?.schedule) return;
+  const version = requestVersion;
+  const workspaceId = target.value.id;
+  const revision = detail.value.schedule.revision;
   saving.value = true;
   try {
-    await pauseEtlSchedule(target.value.id, detail.value.schedule.revision);
-    ElMessage.success('已暂停后续定时执行，当前批次继续');
+    await pauseEtlSchedule(workspaceId, revision);
+    if (version !== requestVersion || !sameWorkspace(target.value?.id, workspaceId)) return;
+    say('success', '已暂停后续定时执行，当前批次继续');
     await load(true);
   } catch (error: any) {
-    ElMessage.error(error.msg || error.message || '暂停失败');
+    say('error', error.msg || error.message || '暂停失败');
   } finally {
     saving.value = false;
   }
@@ -316,7 +350,7 @@ async function openRunLog(runId: string) {
     emit('logs', run.workspaceId ?? target.value!.id, runId);
     visible.value = false;
   } catch (error: any) {
-    ElMessage.error(error.msg || error.message || '运行记录加载失败');
+    say('error', error.msg || error.message || '运行记录加载失败');
   }
 }
 defineExpose({ open });

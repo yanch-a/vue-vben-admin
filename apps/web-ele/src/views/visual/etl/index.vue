@@ -5,7 +5,15 @@ import { parseEtlJson } from './etlSafeJson';
  * 步骤排成流水线并标出当前步骤；结果预览可停靠右侧/下方或隐藏。JSON 与步骤共用同一份文档。
  * @author yanch
  */
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import {
+  computed,
+  defineAsyncComponent,
+  nextTick,
+  onBeforeUnmount,
+  onMounted,
+  ref,
+  watch,
+} from 'vue';
 import { onBeforeRouteLeave } from 'vue-router';
 import { Page } from '@vben/common-ui';
 import { ElMessage, ElMessageBox } from 'element-plus';
@@ -84,6 +92,15 @@ import {
 } from './etlCollabMerge';
 
 defineOptions({ name: 'EtlWorkspace' });
+
+/**
+ * 查询步骤的 SQL 区复用查询页编辑器。
+ * 异步加载，并且模板里只在当前步骤是查询时挂载一个实例，切走即销毁。
+ * 编辑器不参与执行，同步吞吐仍由后端决定。
+ */
+const SqlEditor = defineAsyncComponent(
+  () => import('#/views/visual/client/components/query/SqlEditor.vue'),
+);
 const loading = ref(false),
   saving = ref(false),
   running = ref(false),
@@ -175,7 +192,19 @@ function setResultDock(next: ResultDock) {
 }
 const resources = computed(() => Object.entries(doc.value.resources));
 const queryColumns = ref<Record<string, string[]>>({});
-const sqlInput = ref<{ textarea?: HTMLTextAreaElement }>();
+/** 当前查询步骤的 SQL 编辑器，用来在光标处插入表名。 */
+const sqlEditorRef = ref<{ insertText: (text: string) => void }>();
+/** 当前查询步骤的编辑器页签。切换步骤时复用同一个实例并丢掉上一步的模型。 */
+const sqlEditorTabId = computed(() =>
+  `${activePipelineId.value}:${selectedNodeId.value}`,
+);
+/** 只把编辑器内容写回当前查询步骤，避免切换步骤时的迟到事件写到别的节点。 */
+function onSqlEditorInput(sql: string) {
+  const current = node.value;
+  if (!current || current.type !== 'database.query') return;
+  if (String(current.config.sql || '') === sql) return;
+  current.config.sql = sql;
+}
 const nodeResource = computed(
   () => doc.value.resources[node.value?.resourceRef || ''],
 );
@@ -189,6 +218,8 @@ const dirty = computed(
 );
 /** 上次与服务端对齐时的 revision，本地稿过期判定用 */
 const savedRevision = ref(0);
+/** 当前已知的服务端 revision。保存和协同拉取用它做乐观锁；有未解决冲突时可以比祖先版本更新。 */
+const knownRemoteRevision = ref(0);
 const workspaceRequests = createEtlRequestGate();
 const draftOperations = createEtlPreviewSession(() => JSON.stringify([workspaceRequests.stamp(), activePipelineId.value, selectedNodeId.value, doc.value, jsonText.value, editorMode.value]));
 const previewRequests = createEtlPreviewSession(() => JSON.stringify([workspaceRequests.stamp(), activePipelineId.value, doc.value]));
@@ -213,6 +244,13 @@ const suppressedPipelineIds = ref<string[]>([]);
 const COLLAB_SYNC_MS = 2 * 60 * 1000;
 let collabTimer: ReturnType<typeof setTimeout> | undefined;
 let collabPulling = false;
+/** 自动同步进行中又点了手动同步时，当前这次结束后再拉一次。 */
+let collabFollowUp = false;
+/**
+ * 用户明确保留本地稿后，在保存前不要用服务端文档当祖先做三方合并。
+ * 否则本地没有的任务会被当成用户删除。
+ */
+let preferLocalUntilSave = false;
 let collabAlive = true;
 const isWorkspaceOwner = computed(
   () => activeWorkspace.value?.accessRole !== 'EDITOR',
@@ -269,7 +307,7 @@ const variableName = ref(''), variableValue = ref('');
 /** 工作区变量值通过 JDBC 绑定；这里新增文本值，复杂值可使用原有 JSON 编辑器。 */
 function addVariable() {
   const name = variableName.value.trim();
-  if (!name || Object.hasOwn(doc.value.variables, name)) { ElMessage.warning('变量名不能为空或重复'); return; }
+  if (!name || Object.hasOwn(doc.value.variables, name)) { say('warning', '变量名不能为空或重复'); return; }
   doc.value.variables = { ...doc.value.variables, [name]: variableValue.value };
   variableName.value = ''; variableValue.value = '';
 }
@@ -295,10 +333,22 @@ const previews = ref<
       rowCount: number;
       sampled: boolean;
       stale?: boolean;
+      upstreamColumns?: Record<string, string[]>;
     }
   >
 >({});
 const previewResult = computed(() => previews.value[selectedNodeId.value]);
+/** 本次预览实际跑过的上游步骤，用来说明参数不是空值，而是前面步骤查出来的。 */
+const previewUpstreamLabels = computed(() => {
+  const columns = previewResult.value?.upstreamColumns;
+  if (!columns || !pipeline.value) return [];
+  return Object.keys(columns)
+    .filter((id) => id !== selectedNodeId.value)
+    .map(
+      (id) =>
+        pipeline.value?.nodes.find((item) => item.id === id)?.name || id,
+    );
+});
 /** 写入步骤右侧对照的是输入查询的样本，不是写入节点自己的预览。 */
 const inputPreview = computed(() => {
   const id = node.value?.config?.inputStepId;
@@ -314,6 +364,17 @@ const createBusy = ref(false);
 const runs = ref<EtlRun[]>([]),
   runsVisible = ref(false);
 const selectedRun = ref<EtlRun>();
+/** 当前这次单任务运行的实时日志。收起只藏内容，运行中仍继续拉取。 */
+const liveRunId = ref('');
+const liveRunSnapshot = ref<EtlRun>();
+const liveLogs = ref<any[]>([]);
+const liveConsoleOpen = ref(false);
+const liveLogBody = ref<HTMLElement>();
+let liveLogRequest = 0;
+/** 只取消还没返回的预览。正式运行一旦提交就不能靠断开 HTTP 停掉。 */
+let previewAbort: AbortController | undefined;
+/** 接口按时间倒序返回，页面从旧到新往下追加，便于跟着最新一行看。 */
+const liveLogLines = computed(() => [...liveLogs.value].reverse());
 const runLogs = ref<any[]>([]),
   logPage = ref(1),
   logTotal = ref(0),
@@ -337,7 +398,7 @@ async function refreshLogs() {
     runLogs.value = response.records || [];
     logTotal.value = response.total || 0;
   } catch (error) {
-    if (request === logRequest) ElMessage.error(errorMessage(error));
+    if (request === logRequest) say('error', errorMessage(error));
   } finally {
     if (request === logRequest) logsBusy.value = false;
   }
@@ -360,6 +421,8 @@ const runSteps = computed(() => {
   }
 });
 let pollTimer: ReturnType<typeof setTimeout> | undefined;
+/** 页面卸载后，进行中的轮询不能再预约下一次。 */
+let pageAlive = true;
 let catalogRequest = 0;
 const jsonInput = ref<HTMLInputElement>(),
   kettleInput = ref<HTMLInputElement>();
@@ -425,7 +488,7 @@ function flushActiveDraft(): boolean {
     selectedNodeId: selectedNodeId.value,
   });
   if (!ok)
-    ElMessage.warning(
+    say('warning', 
       '本地草稿缓存失败（可能超出存储上限），请保存或导出备份后再离开',
     );
   return ok;
@@ -467,6 +530,38 @@ function sourceLabel(ref?: string) {
 function errorMessage(error: any) {
   return error?.msg || error?.message || '操作失败';
 }
+/** 历史中文提示走界面文案表，英文界面不再弹出中文。 */
+function say(
+  type: 'success' | 'warning' | 'info' | 'error',
+  message: unknown,
+) {
+  ElMessage[type](translateUiText(message));
+}
+/** 雪花 ID 可能是 number 或 string，不能用 !== 比较。 */
+function sameWorkspace(
+  left?: string | number | null,
+  right?: string | number | null,
+) {
+  return left != null && right != null && String(left) === String(right);
+}
+function resetLiveConsole() {
+  liveLogRequest += 1;
+  liveRunId.value = '';
+  liveRunSnapshot.value = undefined;
+  liveLogs.value = [];
+  liveConsoleOpen.value = false;
+}
+function abortPreviewRequest() {
+  previewAbort?.abort();
+  previewAbort = undefined;
+}
+function isAbortError(error: any) {
+  return (
+    error?.name === 'CanceledError' ||
+    error?.name === 'AbortError' ||
+    error?.code === 'ERR_CANCELED'
+  );
+}
 /**
  * 切换工作区 / 离开页面前：把未保存修改落到本地，不再弹「放弃」以免丢稿。
  * 返回 true 表示可以继续切换。
@@ -478,18 +573,18 @@ async function discard(): Promise<boolean> {
 /** 创建前先完成数据源选择；直接提交完整文档，不产生配置为空的半成品。 */
 async function createWorkspace() {
   if (!newName.value.trim()) {
-    ElMessage.warning('请填写工作区名称');
+    say('warning', '请填写工作区名称');
     return;
   }
   if (!Object.keys(newResources.value).length) {
-    ElMessage.warning('请至少加入一个具体数据源');
+    say('warning', '请至少加入一个具体数据源');
     return;
   }
   const names = Object.values(newResources.value).map((item) =>
     item.displayName?.trim(),
   );
   if (names.some((name) => !name) || new Set(names).size !== names.length) {
-    ElMessage.warning('请设置不同且非空的数据源别名');
+    say('warning', '请设置不同且非空的数据源别名');
     return;
   }
   if (!(await discard())) return;
@@ -515,7 +610,7 @@ async function createWorkspace() {
     await refreshWorkspaces();
     await openWorkspace(row);
   } catch (error) {
-    ElMessage.error(errorMessage(error));
+    say('error', errorMessage(error));
   } finally {
     createBusy.value = false;
   }
@@ -574,6 +669,8 @@ async function openWorkspace(
     selectedRun.value = undefined;
     runLogs.value = [];
     logRequest++;
+    resetLiveConsole();
+    preferLocalUntilSave = false;
     validationErrors.value = [];
     validationWarnings.value = [];
     syncJson();
@@ -591,7 +688,7 @@ async function openWorkspace(
     return true;
   } catch (error) {
     if (workspaceRequests.current(request))
-      ElMessage.error(errorMessage(error));
+      say('error', errorMessage(error));
     return false;
   } finally {
     if (workspaceRequests.current(request)) {
@@ -702,10 +799,22 @@ function restoreLocalDraft(detail: EtlWorkspaceRow, serverDoc: EtlWorkspaceDocum
       syncBlocked.value = invalidJson;
     } else syncJson();
     savedRevision.value = ancestorRevision;
+    if (local.baseJson && !invalidJson) {
+      try {
+        // 保留本地后祖先是本地稿。重新打开时不能再退回服务端文档，否则缺失节点会被当成删除。
+        baseDocument.value = normalizeSqlDocument(parseEtlJson(local.baseJson));
+        baseMeta.value = {
+          name: local.baseName ?? local.workspaceName ?? '',
+          description: local.baseDescription ?? local.description ?? '',
+        };
+      } catch {
+        /* 祖先损坏时继续用刚打开的服务端文档。 */
+      }
+    }
     if (ancestorRevision !== serverRevision) draftConflict.value = detail;
     if (!dirty.value) clearEtlLocalDraft(detail.id);
   } catch {
-    ElMessage.warning('本地草稿恢复失败，缓存已保留，请导出备份后处理');
+    say('warning', '本地草稿恢复失败，缓存已保留，请导出备份后处理');
   }
 }
 
@@ -799,6 +908,11 @@ function scheduleCollabPull() {
 /** 立即向服务端要一次对方的保存，并按共同祖先并入本地。 */
 async function syncNow() {
   if (!activeWorkspace.value || syncing.value) return;
+  if (collabPulling) {
+    collabFollowUp = true;
+    say('info', '正在同步，请稍候');
+    return;
+  }
   syncing.value = true;
   try {
     await pullRemoteWorkspace(true);
@@ -811,17 +925,31 @@ async function syncNow() {
 async function pullRemoteWorkspace(manual: boolean) {
   const row = activeWorkspace.value;
   if (!row) return;
+  if (draftConflict.value) {
+    if (manual) say('warning', '请先选择保留本地或使用服务端版本，也可导出本地备份');
+    else scheduleCollabPull();
+    return;
+  }
+  if (!manual && preferLocalUntilSave) {
+    scheduleCollabPull();
+    return;
+  }
   if (!manual && (saving.value || loading.value || cachePaused || document.hidden)) {
     scheduleCollabPull();
     return;
   }
   if (manual && (saving.value || loading.value || cachePaused)) {
-    ElMessage.info(
+    say(
+      'info',
       saving.value ? '正在保存，请稍后再同步' : '正在打开工作区，请稍后再同步',
     );
     return;
   }
-  if (collabPulling) return;
+  if (collabPulling) {
+    if (manual) collabFollowUp = true;
+    return;
+  }
+  if (manual) preferLocalUntilSave = false;
   collabPulling = true;
   const request = workspaceRequests.stamp();
   try {
@@ -836,7 +964,7 @@ async function pullRemoteWorkspace(manual: boolean) {
     }
     if (saving.value || loading.value || cachePaused) {
       if (manual) {
-        ElMessage.info(
+        say('info', 
           saving.value ? '正在保存，请稍后再同步' : '正在打开工作区，请稍后再同步',
         );
       }
@@ -846,7 +974,7 @@ async function pullRemoteWorkspace(manual: boolean) {
       if (sync.accessRole && activeWorkspace.value) {
         activeWorkspace.value.accessRole = sync.accessRole;
       }
-      if (manual) ElMessage.success('已是最新版本');
+      if (manual) say('success', '已是最新版本');
       return;
     }
     // 保存已经推进到更新的版本时，丢掉这次更早的响应，避免把旧稿并回来。
@@ -854,7 +982,7 @@ async function pullRemoteWorkspace(manual: boolean) {
     if (editorMode.value === 'json' && !jsonValid.value) {
       syncBlocked.value = true;
       if (manual) {
-        ElMessage.warning(
+        say('warning', 
           'JSON 还没写完，暂时不能自动并入对方的更新。请先修好 JSON 或导出备份。',
         );
       }
@@ -910,7 +1038,7 @@ async function pullRemoteWorkspace(manual: boolean) {
       (item) => !previousPipelineIds.includes(item.id),
     ).length;
     if (snapshot() !== before) {
-      ElMessage.success(
+      say('success', 
         hiddenCount
           ? '对方的更新已并入本地，新任务在任务列表里，标签栏默认不打开'
           : '对方的更新已并入本地',
@@ -920,13 +1048,16 @@ async function pullRemoteWorkspace(manual: boolean) {
       merged.conflicts.length &&
       merged.conflicts.map((item) => item.path).join('|') !== previousConflicts
     ) {
-      ElMessage.warning('对方也改了相同内容，请选择保留哪一份');
+      say('warning', '对方也改了相同内容，请选择保留哪一份');
     }
   } catch (error) {
-    if (manual) ElMessage.error(errorMessage(error));
+    if (manual) say('error', errorMessage(error));
   } finally {
     collabPulling = false;
-    if (collabAlive && String(activeWorkspace.value?.id) === String(row?.id)) {
+    if (collabFollowUp && collabAlive && sameWorkspace(activeWorkspace.value?.id, row?.id)) {
+      collabFollowUp = false;
+      void pullRemoteWorkspace(true);
+    } else if (collabAlive && sameWorkspace(activeWorkspace.value?.id, row?.id)) {
       scheduleCollabPull();
     }
   }
@@ -992,11 +1123,11 @@ function openShareFromMenu() {
 function openMergeWorkspaces() {
   if (!activeWorkspace.value) return;
   if (mergeConflicts.value.length || draftConflict.value) {
-    ElMessage.warning('请先处理协同冲突后再保存');
+    say('warning', '请先处理协同冲突后再保存');
     return;
   }
   if (editorMode.value === 'json' && !jsonValid.value) {
-    ElMessage.warning('JSON 还没写完，暂时不能自动并入对方的更新。请先修好 JSON 或导出备份。');
+    say('warning', 'JSON 还没写完，暂时不能自动并入对方的更新。请先修好 JSON 或导出备份。');
     return;
   }
   mergeDialog.value?.open();
@@ -1011,7 +1142,7 @@ function applyImportedNodes(document: EtlWorkspaceDocument, summary: string) {
   selectedNodeId.value = pipeline.value?.nodes[0]?.id || '';
   editorMode.value = 'steps';
   syncJson();
-  ElMessage.success(summary || '节点已合并到当前工作区，确认后请保存');
+  say('success', summary || '节点已合并到当前工作区，确认后请保存');
 }
 
 /** 明确保留本地配置后才变更基准 revision；后续仍需点击保存且受服务端乐观锁保护。 */
@@ -1031,6 +1162,19 @@ async function keepConflictDraft() {
       return;
     activeWorkspace.value.revision = latest.revision;
     savedRevision.value = Number(latest.revision);
+    knownRemoteRevision.value = Number(latest.revision) || 0;
+    const localDoc = currentLocalDocument();
+    if (localDoc) {
+      // 祖先改成当前本地稿。之后的合并不再把“本地没有、服务端有”当成用户删除。
+      baseDocument.value = cloneDocument(localDoc);
+      latestRemoteDocument.value = cloneDocument(localDoc);
+    }
+    baseMeta.value = {
+      name: activeWorkspace.value.workspaceName || '',
+      description: activeWorkspace.value.description || '',
+    };
+    latestRemoteMeta.value = { ...baseMeta.value };
+    preferLocalUntilSave = true;
     draftConflict.value = undefined;
     flushActiveDraft();
   } catch {
@@ -1045,13 +1189,13 @@ async function prepare(): Promise<boolean> {
   let candidate = doc.value;
   if (editorMode.value === 'json') {
     if (!jsonValid.value) {
-      ElMessage.error('JSON 格式错误');
+      say('error', 'JSON 格式错误');
       return false;
     }
     try {
       candidate = parseEtlJson(jsonText.value);
     } catch {
-      ElMessage.error('JSON 格式错误');
+      say('error', 'JSON 格式错误');
       return false;
     }
   }
@@ -1059,13 +1203,13 @@ async function prepare(): Promise<boolean> {
     await validateEtlWorkspace(JSON.stringify(candidate)),
   );
   if (!workspaceRequests.current(request) || snapshot() !== base) {
-    ElMessage.info('配置或工作区已变化，请重新操作');
+    say('info', '配置或工作区已变化，请重新操作');
     return false;
   }
   validationErrors.value = result.errors || [];
   validationWarnings.value = result.warnings || [];
   if (!result.valid) {
-    ElMessage.error(result.errors[0] || '配置无效');
+    say('error', result.errors[0] || '配置无效');
     return false;
   }
   doc.value = candidate;
@@ -1081,15 +1225,15 @@ function incompleteDraftWarnings() {
 async function saveDraft(): Promise<boolean> {
   if (!activeWorkspace.value || saving.value) return false;
   if (mergeConflicts.value.length) {
-    ElMessage.warning('请先处理协同冲突后再保存');
+    say('warning', '请先处理协同冲突后再保存');
     return false;
   }
   if (draftConflict.value) {
-    ElMessage.warning('请先选择保留本地或使用服务端版本，也可导出本地备份');
+    say('warning', '请先选择保留本地或使用服务端版本，也可导出本地备份');
     return false;
   }
   if (syncBlocked.value) {
-    ElMessage.warning('JSON 还没写完，暂时不能自动并入对方的更新。请先修好 JSON 或导出备份。');
+    say('warning', 'JSON 还没写完，暂时不能自动并入对方的更新。请先修好 JSON 或导出备份。');
     return false;
   }
   saving.value = true;
@@ -1119,14 +1263,27 @@ async function commitDraft(request: number, retried: boolean): Promise<boolean> 
         draftJson: payload,
       }),
     );
+    const current = activeWorkspace.value;
     if (
       !workspaceRequests.current(request) ||
-      String(activeWorkspace.value?.id) !== String(row.id) ||
-      !activeWorkspace.value
-    )
-      return false;
+      !current ||
+      !sameWorkspace(current.id, row.id)
+    ) {
+      // 服务端已经保存成功。切走后仍要清掉这份本地稿，并回写列表版本。
+      clearEtlLocalDraft(row.id);
+      preferLocalUntilSave = false;
+      try {
+        await refreshWorkspaces();
+      } catch {
+        /* 列表刷新失败不影响已经提交的版本。 */
+      }
+      const listed = workspaces.value.find((item) => sameWorkspace(item.id, row.id));
+      if (listed) listed.revision = committed.revision;
+      say('success', retried ? '已按最新版本合并并保存' : '已保存');
+      return true;
+    }
     activeWorkspace.value = {
-      ...activeWorkspace.value,
+      ...current,
       revision: committed.revision,
     };
     savedRevision.value = Number(committed.revision);
@@ -1144,10 +1301,11 @@ async function commitDraft(request: number, retried: boolean): Promise<boolean> 
       description: activeWorkspace.value.description || '',
     };
     latestRemoteMeta.value = { ...baseMeta.value };
+    preferLocalUntilSave = false;
     if (!dirty.value) clearEtlLocalDraft(row.id);
     else flushActiveDraft();
     await refreshWorkspaces();
-    ElMessage.success(retried ? '已按最新版本合并并保存' : '已保存');
+    say('success', retried ? '已按最新版本合并并保存' : '已保存');
     return true;
   } catch (error) {
     if (
@@ -1159,11 +1317,11 @@ async function commitDraft(request: number, retried: boolean): Promise<boolean> 
       const incorporated = await incorporateLatest(activeWorkspace.value.id, request);
       if (incorporated === 'clean') return commitDraft(request, true);
       if (incorporated === 'conflict') {
-        ElMessage.warning('保存时遇到新版本，无冲突的修改已并入');
+        say('warning', '保存时遇到新版本，无冲突的修改已并入');
         return false;
       }
     }
-    ElMessage.error(errorMessage(error));
+    say('error', errorMessage(error));
     return false;
   }
 }
@@ -1238,17 +1396,26 @@ async function publish() {
   if (
     !activeWorkspace.value ||
     !workspaceRequests.current(request) ||
-    activeWorkspace.value.id !== id ||
+    !sameWorkspace(activeWorkspace.value.id, id) ||
     dirty.value
   )
     return;
   try {
     await publishEtlWorkspace(id!);
-    if (!workspaceRequests.current(request)) return;
-    ElMessage.success('发布成功');
+    if (!workspaceRequests.current(request) || !sameWorkspace(activeWorkspace.value?.id, id)) return;
+    say('success', '发布成功');
     await refreshWorkspaces();
+    const listed = workspaces.value.find((item) => sameWorkspace(item.id, id));
+    if (listed && activeWorkspace.value && sameWorkspace(activeWorkspace.value.id, id)) {
+      activeWorkspace.value = {
+        ...activeWorkspace.value,
+        revision: listed.revision ?? activeWorkspace.value.revision,
+        publishedVersion: listed.publishedVersion,
+        status: listed.status,
+      };
+    }
   } catch (error) {
-    ElMessage.error(errorMessage(error));
+    say('error', errorMessage(error));
   }
 }
 async function deleteWorkspace() {
@@ -1265,7 +1432,7 @@ async function deleteWorkspace() {
     if (workspaces.value[0]) await openWorkspace(workspaces.value[0]);
   } catch (error: any) {
     if (error !== 'cancel' && error !== 'close')
-      ElMessage.error(errorMessage(error));
+      say('error', errorMessage(error));
   }
 }
 
@@ -1287,7 +1454,6 @@ function menuWorkspace() {
   );
 }
 const menuTargetIsOwner = computed(() => menuWorkspace()?.accessRole !== 'EDITOR');
-const menuTargetIsOwner = computed(() => menuWorkspace()?.accessRole !== 'EDITOR');
 /** 丢掉目标工作区的本地未保存稿，重新加载服务端版本。 */
 async function abandonLocalDraft() {
   const target = menuWorkspace() || activeWorkspace.value;
@@ -1304,7 +1470,7 @@ async function abandonLocalDraft() {
     } else clearEtlLocalDraft(target.id);
   } catch (error: any) {
     if (error !== 'cancel' && error !== 'close')
-      ElMessage.error(errorMessage(error));
+      say('error', errorMessage(error));
   }
 }
 /** 定时和通知按右键选中的工作区打开，不因此切换当前草稿。 */
@@ -1326,7 +1492,7 @@ async function openScheduleLogs(workspaceId: string | number, runId: string) {
     (item) => String(item.id) === String(workspaceId),
   );
   if (!target) {
-    ElMessage.warning('运行所属工作区不在当前列表（可能已删除），无法打开日志');
+    say('warning', '运行所属工作区不在当前列表（可能已删除），无法打开日志');
     return;
   }
   if (
@@ -1340,7 +1506,7 @@ async function openScheduleLogs(workspaceId: string | number, runId: string) {
     runsVisible.value = true;
     await refreshLogs();
   } catch (error) {
-    ElMessage.error(errorMessage(error));
+    say('error', errorMessage(error));
   }
 }
 async function renameWorkspace() {
@@ -1364,7 +1530,7 @@ async function renameWorkspace() {
     activeWorkspace.value.workspaceName = value.trim().slice(0, 100);
   } catch (error: any) {
     if (error !== 'cancel' && error !== 'close')
-      ElMessage.error(errorMessage(error));
+      say('error', errorMessage(error));
   }
 }
 async function deleteWorkspaceFromMenu() {
@@ -1412,7 +1578,7 @@ async function addPipeline(conditional = false) {
   doc.value.pipelines.push(item);
   activePipelineId.value = item.id;
   selectedNodeId.value = item.nodes[0]!.id;
-  if (conditional) ElMessage.info('模板中的表名和字段需要改为你的实际数据结构');
+  if (conditional) say('info', '模板中的表名和字段需要改为你的实际数据结构');
 }
 function selectPipeline(id: string) {
   activePipelineId.value = id;
@@ -1421,7 +1587,7 @@ function selectPipeline(id: string) {
 /** 示例只追加一个独立任务；JSON 草稿先应用，异步切换期间不得写到另一个工作区。 */
 async function addExamplePipeline() {
   const workspace = activeWorkspace.value?.id;
-  if (editorMode.value === 'json') { await changeMode('steps'); if (editorMode.value === 'json' || activeWorkspace.value?.id !== workspace) return; }
+    if (editorMode.value === 'json') { await changeMode('steps'); if (editorMode.value === 'json' || !sameWorkspace(activeWorkspace.value?.id, workspace)) return; }
   const item = createFlexibleExamplePipeline(etlId('example'));
   item.name = translateUiText(item.name); item.nodes.forEach((step) => { step.name = translateUiText(step.name || step.id); });
   doc.value.pipelines.push(item); activePipelineId.value = item.id; selectedNodeId.value = item.nodes.at(-1)?.id || '';
@@ -1431,7 +1597,10 @@ async function removePipeline(id = activePipelineId.value) {
   const request = draftOperations.begin();
   try {
     await ElMessageBox.confirm('删除当前同步任务？', '删除任务');
-    if (!draftOperations.current(request)) return;
+    if (!draftOperations.current(request)) {
+      say('info', '配置已变化，请重新删除');
+      return;
+    }
     doc.value.pipelines = doc.value.pipelines.filter((item) => item.id !== id);
     if (id === activePipelineId.value)
       selectPipeline(doc.value.pipelines[0]?.id || '');
@@ -1492,12 +1661,15 @@ async function removeStep() {
       etlInputReferences(item.config).includes(id),
   );
   if (referenced) {
-    ElMessage.warning('后续步骤还在引用它，请先修改参数来源或写入输入');
+    say('warning', '后续步骤还在引用它，请先修改参数来源或写入输入');
     return;
   }
   try {
     await ElMessageBox.confirm('删除当前步骤？', '删除步骤');
-    if (!draftOperations.current(request) || !pipeline.value?.nodes.some((item) => item.id === id)) return;
+    if (!draftOperations.current(request) || !pipeline.value?.nodes.some((item) => item.id === id)) {
+      say('info', '配置已变化，请重新删除');
+      return;
+    }
     pipeline.value.nodes = pipeline.value.nodes.filter(
       (item) => item.id !== id,
     );
@@ -1547,7 +1719,13 @@ function addMapping() {
   node.value.config.mappings.push({ source: '', target: '' });
 }
 
-/** 查询预览会执行必要的只读上游，直接检验关联 SQL 与跨库参数能否工作。 */
+/** 预览前按参数和输入引用补齐依赖，避免只拿当前 SQL、漏掉前面的水位查询。 */
+function syncPipelineDependencies() {
+  if (!pipeline.value) return;
+  for (const step of pipeline.value.nodes) syncStepDependencies(pipeline.value, step);
+}
+
+/** 查询预览会先执行参数所依赖的上游查询，再把结果传入当前 SQL。 */
 async function preview() {
   if (node.value) await previewQuery(node.value.id);
 }
@@ -1555,7 +1733,7 @@ async function preview() {
 async function previewInput() {
   const id = node.value?.config.inputStepId;
   if (!id) {
-    ElMessage.warning('先选择输入查询步骤');
+    say('warning', '先选择输入查询步骤');
     return;
   }
   await previewQuery(id);
@@ -1566,27 +1744,42 @@ async function previewQuery(id: string) {
   const request = workspaceRequests.stamp();
   const previewRequest = previewRequests.begin();
   const pipelineId = pipeline.value.id;
+  abortPreviewRequest();
+  const controller = new AbortController();
+  previewAbort = controller;
   previewing.value = true;
+  syncPipelineDependencies();
   syncJson();
   const base = JSON.stringify(doc.value);
-  const current = () => previewRequests.current(previewRequest) && workspaceRequests.current(request) && pipeline.value?.id === pipelineId;
+  const current = () => previewRequests.current(previewRequest) && workspaceRequests.current(request) && pipeline.value?.id === pipelineId && !controller.signal.aborted;
   try {
-    const result = unbox<any>(await previewEtlStep(jsonText.value, pipelineId, id));
+    const result = unbox<any>(await previewEtlStep(jsonText.value, pipelineId, id, controller.signal));
     if (!current()) return;
-    if (base !== JSON.stringify(doc.value)) { ElMessage.info('配置已修改，请重新预览'); return; }
+    if (base !== JSON.stringify(doc.value)) { say('info', '配置已修改，请重新预览'); return; }
     previews.value[id] = result;
     queryColumns.value = { ...queryColumns.value, ...(result.upstreamColumns || {}), [id]: result.columns };
-    ElMessage.success('步骤预览成功');
+    say('success', '步骤预览成功');
   } catch (error) {
-    if (current()) ElMessage.error(errorMessage(error));
+    if (isAbortError(error) || controller.signal.aborted) return;
+    if (current()) say('error', errorMessage(error));
   } finally {
     // 旧请求结束不能解除新请求的 loading，也不能把另一任务的同名步骤结果写入当前任务。
     if (previewRequests.latest(previewRequest)) previewing.value = false;
   }
 }
 
+/** 换到另一个工作区后不再跟踪上一个工作区的实时日志。首次进入不清理。 */
+watch(
+  () => activeWorkspace.value?.id,
+  (id, previous) => {
+    if (previous == null || String(previous) === String(id ?? '')) return;
+    resetLiveConsole();
+  },
+);
+
 /** 任务内步骤 ID 可重复于另一任务，切换任务必须清理预览和字段目录并废弃在途请求。 */
 watch(activePipelineId, () => {
+  abortPreviewRequest();
   previewRequests.invalidate(); previewing.value = false;
   previews.value = {}; queryColumns.value = {};
 }, { flush: 'sync' });
@@ -1598,7 +1791,7 @@ function autoMapping() {
   if (!node.value) return;
   const columns = inputColumns();
   if (!columns.length) {
-    ElMessage.info('先预览输入查询，或保持映射为空使用结果同名字段');
+    say('info', '先预览输入查询，或保持映射为空使用结果同名字段');
     return;
   }
   node.value.config.mappings = columns.map((column) => ({
@@ -1631,9 +1824,116 @@ watch(
   },
 );
 
-/** 运行只提交保存后的工作区与任务 ID，完整预检在后端完成。 */
+/** 停用任务后端会直接拒绝，运行前提示，避免先保存再失败。 */
+function ensurePipelineRunnable() {
+  if (pipeline.value?.enabled === false) {
+    say('warning', '当前任务已停用，请先启用后再运行');
+    return false;
+  }
+  return true;
+}
+
+/** 右键菜单启用/停用任务，只改当前草稿。 */
+function setPipelineEnabled(id: string, enabled: boolean) {
+  const task = doc.value.pipelines.find((item) => item.id === id);
+  if (!task || (task.enabled !== false) === enabled) return;
+  task.enabled = enabled;
+}
+
+function formatLogTime(value?: number) {
+  if (!value) return '';
+  return new Date(value).toLocaleTimeString();
+}
+
+/** 实时日志里的步骤名来自本次运行快照，不用当前草稿名称顶替历史。 */
+function liveNodeName(nodeId?: string) {
+  if (!nodeId) return '';
+  try {
+    const steps = JSON.parse(liveRunSnapshot.value?.stepsJson || '[]');
+    return (
+      steps.find((step: { nodeId?: string; nodeName?: string }) => step.nodeId === nodeId)
+        ?.nodeName || nodeId
+    );
+  } catch {
+    return nodeId;
+  }
+}
+
+/**
+ * 按页把新日志并进已显示的记录。接口每页 50 条且新的在前。
+ * 若这一轮新增超过一页，继续往前翻，直到和已有记录接上，避免实时区只剩最新 50 条。
+ */
+async function loadNewLiveLogs(id: string, request: number) {
+  const known = new Set(liveLogs.value.map((item) => item.id));
+  const incoming: any[] = [];
+  let page = 1;
+  let total = Number.POSITIVE_INFINITY;
+  while (incoming.length < total && page <= 20) {
+    const response: any = unbox(await listEtlRunLogs(id, page));
+    if (request !== liveLogRequest || id !== liveRunId.value) return;
+    const records = response?.records || [];
+    total = Number(response?.total ?? records.length);
+    if (!records.length) break;
+    let overlapped = false;
+    for (const record of records) {
+      if (known.has(record.id)) {
+        overlapped = true;
+        continue;
+      }
+      if (!incoming.some((item) => item.id === record.id)) incoming.push(record);
+    }
+    if (overlapped && known.size) break;
+    if (records.length < 50) break;
+    page += 1;
+  }
+  if (!incoming.length) return false;
+  const incomingIds = new Set(incoming.map((item) => item.id));
+  liveLogs.value = [...incoming, ...liveLogs.value.filter((item) => !incomingIds.has(item.id))].slice(0, 1000);
+  return true;
+}
+
+/**
+ * 拉取当前运行状态，并把新日志接到已有记录后面。
+ * 用户停在底部时才自动滚到最新一行，往上翻阅时不打断。
+ */
+async function refreshLiveLogs() {
+  if (!liveRunId.value) return;
+  const id = liveRunId.value;
+  const request = ++liveLogRequest;
+  const body = liveLogBody.value;
+  const followTail =
+    !body || body.scrollHeight - body.scrollTop - body.clientHeight < 48;
+  try {
+    const run = unbox<EtlRun>(await getEtlRun(id, true));
+    if (request !== liveLogRequest || id !== liveRunId.value) return;
+    liveRunSnapshot.value = run;
+    if (selectedRun.value?.id === id) selectedRun.value = run;
+    const changed = await loadNewLiveLogs(id, request);
+    if (changed && followTail && liveConsoleOpen.value) {
+      await nextTick();
+      if (liveLogBody.value) liveLogBody.value.scrollTop = liveLogBody.value.scrollHeight;
+    }
+  } catch {
+    /* 某一轮日志拉取失败不打断编辑，下一轮再取。 */
+  }
+}
+
+function openLiveHistory() {
+  if (liveRunSnapshot.value) selectedRun.value = liveRunSnapshot.value;
+  runsVisible.value = true;
+  void refreshRuns();
+}
+
+async function cancelLiveRun() {
+  if (!liveRunSnapshot.value) return;
+  selectedRun.value = liveRunSnapshot.value;
+  await cancelRun();
+}
+
+/** 运行只提交保存后的工作区与任务 ID，完整预检在后端完成。只执行当前任务。 */
 async function runPipeline() {
   if (!pipeline.value || !activeWorkspace.value || running.value) return;
+  if (!ensurePipelineRunnable()) return;
   const request = workspaceRequests.stamp();
   const workspaceId = activeWorkspace.value.id;
   const pipelineId = pipeline.value.id;
@@ -1642,7 +1942,7 @@ async function runPipeline() {
     if (dirty.value && !(await saveDraft())) return;
     if (
       !workspaceRequests.current(request) ||
-      activeWorkspace.value.id !== workspaceId ||
+      !sameWorkspace(activeWorkspace.value.id, workspaceId) ||
       pipeline.value?.id !== pipelineId ||
       dirty.value
     )
@@ -1653,7 +1953,7 @@ async function runPipeline() {
     const stillCurrent = () =>
       workspaceRequests.current(request) &&
       snapshot() === base &&
-      activeWorkspace.value?.id === workspaceId &&
+      sameWorkspace(activeWorkspace.value?.id, workspaceId) &&
       pipeline.value?.id === pipelineId &&
       activeWorkspace.value?.revision === revision;
     // 空 SQL/目标表仅警告不阻断保存，运行前再拦一次并给出可读提示。
@@ -1661,19 +1961,19 @@ async function runPipeline() {
       await validateEtlWorkspace(JSON.stringify(doc.value)),
     );
     if (!stillCurrent()) {
-      ElMessage.info('配置或工作区已变化，请重新运行');
+      say('info', '配置或工作区已变化，请重新运行');
       return;
     }
     validationErrors.value = result.errors || [];
     validationWarnings.value = result.warnings || [];
     validatedSnapshot = snapshot();
     if (!result.valid) {
-      ElMessage.error(result.errors?.[0] || '配置无效');
+      say('error', result.errors?.[0] || '配置无效');
       return;
     }
     const incomplete = incompleteDraftWarnings();
     if (incomplete.length) {
-      ElMessage.warning(incomplete[0]);
+      say('warning', incomplete[0]);
       return;
     }
     await ElMessageBox.confirm(
@@ -1682,7 +1982,7 @@ async function runPipeline() {
       { type: 'warning', confirmButtonText: '运行' },
     );
     if (!stillCurrent()) {
-      ElMessage.info('配置或工作区已变化，请重新确认运行');
+      say('info', '配置或工作区已变化，请重新确认运行');
       return;
     }
     const started = unbox<EtlRun>(
@@ -1690,38 +1990,75 @@ async function runPipeline() {
     );
     if (!workspaceRequests.current(request)) return;
     selectedRun.value = started;
-    runsVisible.value = true;
+    liveRunSnapshot.value = started;
+    liveRunId.value = started.id;
+    liveLogs.value = [];
+    liveConsoleOpen.value = true;
     await refreshRuns();
   } catch (error: any) {
     if (error !== 'cancel' && error !== 'close')
-      ElMessage.error(errorMessage(error));
+      say('error', errorMessage(error));
   } finally {
     running.value = false;
   }
 }
+/** 进行中的实时日志要继续轮询；离开页面或已经换了工作区则停止。 */
+function scheduleLivePoll(workspaceId?: string | number) {
+  if (!pageAlive || pollTimer) return;
+  const sameWorkspace =
+    workspaceId == null ||
+    String(workspaceId) === String(activeWorkspace.value?.id ?? '');
+  const status = liveRunSnapshot.value?.status;
+  if (
+    sameWorkspace &&
+    liveRunId.value &&
+    (!status || status === 'PENDING' || status === 'RUNNING')
+  ) {
+    pollTimer = setTimeout(refreshRuns, 1500);
+  }
+}
 async function refreshRuns() {
   if (pollTimer) clearTimeout(pollTimer);
-  if (!activeWorkspace.value) return;
+  pollTimer = undefined;
+  if (!pageAlive || !activeWorkspace.value) return;
   const request = workspaceRequests.stamp();
   const workspaceId = activeWorkspace.value.id;
   try {
     const items = unbox<EtlRun[]>(await listEtlRuns(workspaceId)) || [];
     if (
       !workspaceRequests.current(request) ||
-      workspaceId !== activeWorkspace.value?.id
-    )
+      !sameWorkspace(workspaceId, activeWorkspace.value?.id)
+    ) {
+      // 打开工作区会推进请求代次。同一工作区的运行不能因此停掉日志轮询。
+      scheduleLivePoll(workspaceId);
       return;
+    }
     runs.value = items;
     if (selectedRun.value)
       selectedRun.value =
         items.find((item) => item.id === selectedRun.value?.id) ||
         selectedRun.value;
+    if (liveRunId.value) {
+      const matched = items.find((item) => item.id === liveRunId.value);
+      if (matched) liveRunSnapshot.value = matched;
+    }
     if (runsVisible.value && selectedRun.value) await refreshLogs();
-    if (!workspaceRequests.current(request)) return;
-    if (items.some((item) => ['PENDING', 'RUNNING'].includes(item.status)))
+    if (liveRunId.value) await refreshLiveLogs();
+    if (!pageAlive) return;
+    if (!workspaceRequests.current(request)) {
+      scheduleLivePoll(workspaceId);
+      return;
+    }
+    const liveActive =
+      !!liveRunId.value &&
+      ['PENDING', 'RUNNING'].includes(liveRunSnapshot.value?.status || '');
+    if (
+      items.some((item) => ['PENDING', 'RUNNING'].includes(item.status)) ||
+      liveActive
+    )
       pollTimer = setTimeout(refreshRuns, 1500);
   } catch {
-    /* 历史暂不可用不影响编辑；用户可手动重试。 */
+    scheduleLivePoll(workspaceId);
   }
 }
 async function cancelRun() {
@@ -1730,7 +2067,7 @@ async function cancelRun() {
     await cancelEtlRun(selectedRun.value.id);
     await refreshRuns();
   } catch (error) {
-    ElMessage.error(errorMessage(error));
+    say('error', errorMessage(error));
   }
 }
 function statusLabel(status: string) {
@@ -1766,7 +2103,7 @@ function applySources() {
     labels.some((label) => !label) ||
     new Set(labels).size !== labels.length
   ) {
-    ElMessage.warning('数据源别名必须非空且不重复');
+    say('warning', '数据源别名必须非空且不重复');
     return;
   }
   doc.value.resources = sourceDraft.value;
@@ -1801,7 +2138,7 @@ watch(
           ? tables.filter((item) => item.schemaName === source.schema)
           : tables;
     } catch (error) {
-      if (request === catalogRequest) ElMessage.error(errorMessage(error));
+      if (request === catalogRequest) say('error', errorMessage(error));
     } finally {
       if (request === catalogRequest) catalogLoading.value = false;
     }
@@ -1855,10 +2192,9 @@ async function insertTable(item: any) {
   if (!name) return;
   const sql = String(target.config.sql || '');
   if (sql.trim()) {
-    const input = sqlInput.value?.textarea;
-    const start = input?.selectionStart ?? sql.length;
-    const end = input?.selectionEnd ?? sql.length;
-    target.config.sql = sql.slice(0, start) + name + sql.slice(end);
+    // 编辑器已就绪时插在光标或选区；还在加载时退回追加到末尾。
+    if (sqlEditorRef.value?.insertText) sqlEditorRef.value.insertText(name);
+    else target.config.sql = `${sql}${name}`;
     return;
   }
   const request = tableInsertRequests.capture(target);
@@ -1892,12 +2228,12 @@ async function insertTable(item: any) {
       request.apply(`SELECT\n  ${selectList}\nFROM ${name}`);
     } else {
       request.apply(`SELECT * FROM ${name}`);
-      ElMessage.warning('未能读取字段列表，已插入 SELECT *，请手工补全列');
+      say('warning', '未能读取字段列表，已插入 SELECT *，请手工补全列');
     }
   } catch (error) {
     if (!current()) return;
     request.apply(`SELECT * FROM ${name}`);
-    ElMessage.warning(`读取字段失败，已插入 SELECT *：${errorMessage(error)}`);
+    say('warning', `读取字段失败，已插入 SELECT *：${errorMessage(error)}`);
   } finally {
     if (request.latest()) catalogInserting.value = '';
   }
@@ -1977,7 +2313,7 @@ async function importFile(event: Event, kettle = false) {
     applyDocument(parseEtlJson(text));
   } catch (error) {
     if (draftOperations.current(request) && error !== 'cancel' && error !== 'close')
-      ElMessage.error(errorMessage(error));
+      say('error', errorMessage(error));
   }
 }
 function applyDocument(document: EtlWorkspaceDocument) {
@@ -1994,13 +2330,13 @@ async function applyKettleDocument(
 ) {
   if (!(await prepare())) return;
   if (JSON.stringify(doc.value) !== baseJson) {
-    ElMessage.warning('工作区草稿已变化，请重新开始导入，避免覆盖修改');
+    say('warning', '工作区草稿已变化，请重新开始导入，避免覆盖修改');
     return;
   }
   applyDocument(document);
   selectPipeline(document.pipelines.at(-1)?.id || '');
   kettleWizard.value?.complete();
-  ElMessage.success('已追加到草稿，请预检后保存并运行');
+  say('success', '已追加到草稿，请预检后保存并运行');
   try {
     connections.value = unbox<EtlConnectionOption[]>(await listEtlSources());
   } catch {
@@ -2020,14 +2356,14 @@ async function prepareAi(): Promise<boolean> {
   if (!(await prepare())) return false;
   const aiJson = JSON.stringify(doc.value);
   if (aiJson.length > 64000) {
-    ElMessage.warning(
+    say('warning', 
       '工作区配置超过 AI 编辑上限，请拆分工作区；完整 JSON 仍可手工编辑',
     );
     return false;
   }
   const source = aiSource.value;
   if (!source?.dbConfigId || !source.instance) {
-    ElMessage.warning('请先配置工作区数据源');
+    say('warning', '请先配置工作区数据源');
     return false;
   }
   return true;
@@ -2065,16 +2401,21 @@ async function applyAi(candidate: {
     applyDocument(candidate.workspace);
   } catch (error) {
     if (draftOperations.current(request) && error !== 'cancel' && error !== 'close')
-      ElMessage.error(errorMessage(error));
+      say('error', errorMessage(error));
   }
 }
 
 function beforeUnload(event: BeforeUnloadEvent) {
+  // 打开详情前已经落盘。加载期间 dirty 仍为 true，再拦截会让刷新误报未保存。
+  if (cachePaused) return;
   // 只有成功落盘才允许无提示关闭；存储超限/禁用时仍保护尚未备份的编辑。
   if (!flushActiveDraft()) {
     event.preventDefault();
     event.returnValue = '';
   }
+}
+function onDocumentVisible() {
+  if (document.visibilityState === 'visible') void pullRemoteWorkspace(false);
 }
 onBeforeRouteLeave(() => flushActiveDraft());
 watch(
@@ -2092,6 +2433,7 @@ watch(
 onMounted(async () => {
   refreshEtlDirtyIds();
   window.addEventListener('beforeunload', beforeUnload);
+  document.addEventListener('visibilitychange', onDocumentVisible);
   document.addEventListener('click', dismissWorkspaceMenu);
   loading.value = true;
   try {
@@ -2102,12 +2444,14 @@ onMounted(async () => {
     connections.value = unbox<EtlConnectionOption[]>(sourceResponse) || [];
     if (workspaces.value[0]) await openWorkspace(workspaces.value[0]);
   } catch (error) {
-    ElMessage.error(errorMessage(error));
+    say('error', errorMessage(error));
   } finally {
     loading.value = false;
   }
 });
 onBeforeUnmount(() => {
+  pageAlive = false;
+  abortPreviewRequest();
   flushActiveDraft();
   workspaceRequests.invalidate();
   previewRequests.invalidate();
@@ -2116,6 +2460,7 @@ onBeforeUnmount(() => {
   collabAlive = false;
   if (collabTimer) clearTimeout(collabTimer);
   window.removeEventListener('beforeunload', beforeUnload);
+  document.removeEventListener('visibilitychange', onDocumentVisible);
   document.removeEventListener('click', dismissWorkspaceMenu);
   if (pollTimer) clearTimeout(pollTimer);
 });
@@ -2365,9 +2710,11 @@ onBeforeUnmount(() => {
             @add="addPipeline"
             @add-example="addExamplePipeline"
             @delete="removePipeline"
+            @enabled="setPipelineEnabled"
             @position="setTaskPosition"
           />
           <section class="task-content">
+            <div class="task-scroll">
             <div v-if="editorMode === 'json'" class="json-panel">
               <JsonEditorPanel
                 v-model="jsonText"
@@ -2388,6 +2735,14 @@ onBeforeUnmount(() => {
                   :inactive-text="$tr('停用')"
                 /><el-button link type="danger" @click="removePipeline()"
                   >{{ $tr('删除任务') }}</el-button
+                ><el-button
+                  link
+                  type="primary"
+                  :icon="VideoPlay"
+                  :loading="running"
+                  :disabled="editorMode === 'json'"
+                  @click="runPipeline"
+                  >{{ $tr('运行') }}</el-button
                 >
               </div>
               <div class="flow-strip" :aria-label="$tr('步骤流水线')">
@@ -2605,14 +2960,23 @@ onBeforeUnmount(() => {
                           >
                         </div>
                       </div>
-                      <el-input
-                        ref="sqlInput"
-                        v-model="node.config.sql"
-                        type="textarea"
-                        :rows="9"
-                        placeholder="SELECT o.id AS order_id, c.name AS customer_name FROM orders o JOIN customers c ON c.id = o.customer_id"
-                        class="sql-editor"
-                      />
+                      <!-- 高度为原 9 行文本框的两倍；只替换显示区，参数和预览仍在编辑器外面 -->
+                      <div class="etl-sql-editor">
+                        <SqlEditor
+                          ref="sqlEditorRef"
+                          embedded
+                          :model-value="String(node.config.sql || '')"
+                          :tab-id="sqlEditorTabId"
+                          :alive-tab-ids="[sqlEditorTabId]"
+                          :db-config-id="nodeResource?.dbConfigId"
+                          :db-type="nodeResource?.dbType || nodeResource?.databaseTypeHint"
+                          :instance-name="nodeResource?.instance"
+                          :schema-name="nodeResource?.schema"
+                          @update:model-value="onSqlEditorInput"
+                          @save="saveDraft"
+                          @execute="preview"
+                        />
+                      </div>
                       <div class="section-title">
                         <strong>{{ $tr('查询参数') }}</strong
                         ><el-button link :icon="Plus" @click="addParameter"
@@ -2907,6 +3271,11 @@ onBeforeUnmount(() => {
                     <p class="help">
                       {{ $tr('正式运行不截断总行数。这里只留样本，用来确认 SQL 和参数。') }}
                     </p>
+                    <p v-if="previewUpstreamLabels.length" class="help">
+                      {{ $tr('已先执行上游并传入参数') }}：{{
+                        previewUpstreamLabels.join('、')
+                      }}
+                    </p>
                     <el-table
                       v-if="previewResult"
                       :data="previewResult.rows"
@@ -3036,6 +3405,61 @@ onBeforeUnmount(() => {
                 :closable="false"
               />
             </div>
+            </div>
+            <section
+              v-if="liveRunSnapshot"
+              class="run-console"
+              aria-live="polite"
+              :aria-label="$tr('执行日志')"
+            >
+              <header class="run-console-head">
+                <strong
+                  >{{ $tr('执行日志') }} ·
+                  {{ liveRunSnapshot.pipelineName || pipeline?.name }}</strong
+                >
+                <el-tag size="small">{{
+                  statusLabel(liveRunSnapshot.status)
+                }}</el-tag>
+                <span class="run-console-message">{{
+                  liveRunSnapshot.message
+                }}</span>
+                <el-button
+                  v-if="['PENDING', 'RUNNING'].includes(liveRunSnapshot.status)"
+                  link
+                  type="danger"
+                  @click="cancelLiveRun"
+                  >{{ $tr('取消') }}</el-button
+                >
+                <el-button link @click="openLiveHistory">{{
+                  $tr('运行记录')
+                }}</el-button>
+                <el-button link @click="liveConsoleOpen = !liveConsoleOpen">{{
+                  liveConsoleOpen ? $tr('收起') : $tr('展开')
+                }}</el-button>
+              </header>
+              <div
+                v-show="liveConsoleOpen"
+                ref="liveLogBody"
+                class="run-console-body"
+              >
+                <p v-if="!liveLogLines.length" class="run-console-empty">
+                  {{ $tr('等待日志…') }}
+                </p>
+                <div
+                  v-for="item in liveLogLines"
+                  :key="item.id"
+                  class="run-console-line"
+                  :data-level="item.level"
+                >
+                  <time>{{ formatLogTime(item.createdAt) }}</time>
+                  <em>{{ item.level }}</em>
+                  <span v-if="item.nodeId" class="run-console-node">{{
+                    liveNodeName(item.nodeId)
+                  }}</span>
+                  <span class="run-console-text">{{ item.message }}</span>
+                </div>
+              </div>
+            </section>
           </section>
         </main>
         <main v-else class="empty-workspace">
@@ -3385,6 +3809,13 @@ onBeforeUnmount(() => {
   grid-area: editor;
   min-width: 0;
   min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.task-scroll {
+  flex: 1;
+  min-height: 0;
   overflow: auto;
 }
 .workspace-main.tasks-left {
@@ -3662,10 +4093,73 @@ button.step-item.flow-step {
   align-items: center;
   gap: 4px;
 }
-.sql-editor :deep(textarea) {
+/* 原 textarea 为 9 行、14px、行高 1.65，加上下内边距约 218px，这里固定为两倍。 */
+.etl-sql-editor {
+  height: 436px;
+  border: 1px solid var(--el-border-color);
+  border-radius: 4px;
+  overflow: hidden;
+}
+.run-console {
+  flex: 0 0 auto;
+  border-top: 1px solid var(--el-border-color);
+  background: var(--el-bg-color);
+}
+.run-console-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  min-width: 0;
+}
+.run-console-message {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--el-text-color-secondary);
+  font-size: 12px;
+}
+.run-console-body {
+  height: 180px;
+  overflow: auto;
+  padding: 0 12px 10px;
   font-family: Consolas, monospace;
-  font-size: 14px;
-  line-height: 1.65;
+  font-size: 12px;
+  line-height: 1.6;
+}
+.run-console-empty {
+  margin: 8px 0;
+  color: var(--el-text-color-secondary);
+}
+.run-console-line {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+}
+.run-console-line time,
+.run-console-line em,
+.run-console-node {
+  flex: 0 0 auto;
+  color: var(--el-text-color-secondary);
+}
+.run-console-line em {
+  font-style: normal;
+  min-width: 40px;
+}
+.run-console-text {
+  min-width: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.run-console-line[data-level='ERROR'] .run-console-text,
+.run-console-line[data-level='ERROR'] em {
+  color: var(--el-color-danger);
+}
+.run-console-line[data-level='WARN'] .run-console-text,
+.run-console-line[data-level='WARN'] em {
+  color: var(--el-color-warning);
 }
 .help {
   line-height: 1.65;

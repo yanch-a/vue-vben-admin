@@ -67,7 +67,8 @@ export interface EtlSchedulePeerWorkspace {
   id: string | number;
   workspaceName: string;
   publishedVersion: number;
-  latestPipelines: Array<{ id: string; name: string; enabled: boolean }>;
+  /** 打开定时页时不预加载，选中前置工作区后再取。 */
+  latestPipelines?: Array<{ id: string; name: string; enabled: boolean }>;
 }
 
 export interface EtlScheduleDetail {
@@ -90,11 +91,21 @@ export function getEtlSchedule(id: string | number) {
   });
 }
 
-/** 直接读取运行详情，历史计划即使超出最近一百条也能查看节点日志。 */
-export function getEtlRun(id: string) {
+/** 读取某个已发布版本的任务清单。打开定时页时不随全部工作区一起返回。 */
+export function listEtlSchedulePipelines(id: string | number, version: number) {
+  return request({
+    url: `${url}${encodeURIComponent(id)}/schedule/pipelines`,
+    method: 'get',
+    params: { version },
+  });
+}
+
+/** 直接读取运行详情，历史计划即使超出最近一百条也能查看节点日志。quiet 用于轮询，失败不弹全局错误。 */
+export function getEtlRun(id: string, quiet = false) {
   return request({
     url: `${url}runs/${encodeURIComponent(id)}`,
     method: 'get',
+    showErrorMessage: !quiet,
   });
 }
 
@@ -401,12 +412,14 @@ export function previewEtlStep(
   json: string,
   pipelineId: string,
   nodeId: string,
+  signal?: AbortSignal,
 ) {
   return request({
     url: `${url}preview`,
     method: 'post',
     data: { json, pipelineId, nodeId },
     timeout: 0,
+    signal,
   });
 }
 /** 执行已保存的 SQL 工作流。 */

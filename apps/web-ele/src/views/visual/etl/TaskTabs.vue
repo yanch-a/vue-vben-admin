@@ -83,6 +83,8 @@ const emit = defineEmits<{
   add: [boolean];
   addExample: [];
   delete: [string];
+  /** 右键启用或停用任务，只改草稿里的 enabled，不立刻请求后端。 */
+  enabled: [id: string, enabled: boolean];
   position: [string];
 }>();
 
@@ -95,6 +97,10 @@ const closed = ref<string[]>(
   ),
 );
 const menu = ref<{ id: string; x: number; y: number }>();
+/** 右键命中的任务，用来判断启用/停用哪一项可点。 */
+const menuTask = computed(() =>
+  props.tasks.find((task) => task.id === menu.value?.id),
+);
 /** 三点菜单展开状态，选完位置后自动收起。 */
 const dockMenuOpen = ref(false);
 const visible = computed(() =>
@@ -140,8 +146,14 @@ function context(event: MouseEvent, id: string) {
   menu.value = {
     id,
     x: Math.max(8, Math.min(event.clientX, window.innerWidth - 170)),
-    y: Math.max(8, Math.min(event.clientY, window.innerHeight - 200)),
+    y: Math.max(8, Math.min(event.clientY, window.innerHeight - 280)),
   };
+}
+/** 启用/停用当前右键任务。未显式停用（enabled 缺省）视为启用。 */
+function setEnabled(enabled: boolean) {
+  if (!menu.value) return;
+  emit('enabled', menu.value.id, enabled);
+  menu.value = undefined;
 }
 function closeOthers() {
   if (!menu.value) return;
@@ -334,6 +346,18 @@ defineExpose({ hide });
           {{ $tr('打开全部任务') }}
         </button>
         <button
+          :disabled="menuTask?.enabled !== false"
+          @click="setEnabled(true)"
+        >
+          {{ $tr('启用') }}
+        </button>
+        <button
+          :disabled="menuTask?.enabled === false"
+          @click="setEnabled(false)"
+        >
+          {{ $tr('停用') }}
+        </button>
+        <button
           class="danger"
           @click="
             emit('delete', menu.id);
@@ -495,6 +519,13 @@ defineExpose({ hide });
 }
 .task-context-menu button:hover {
   background: var(--el-fill-color-light);
+}
+.task-context-menu button:disabled {
+  color: var(--el-text-color-disabled);
+  cursor: default;
+}
+.task-context-menu button:disabled:hover {
+  background: transparent;
 }
 .danger {
   color: var(--el-color-danger);
