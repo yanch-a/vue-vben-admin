@@ -6,15 +6,16 @@ import { Page } from '@vben/common-ui';
 
 import {
   ArrowLeft, Close, DataAnalysis, Delete, Edit, Expand, Fold, Folder, Key, Monitor,
-  Plus, Promotion, Refresh, Search, SwitchButton,
+  Plus, Promotion, Refresh, Search, SwitchButton, User,
 } from '@element-plus/icons-vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 
 import {
   deleteRedisConnection, deleteRedisDirectory, deleteRedisKey, executeRedisCommand, getRedisDatabases,
-  getRedisInfo, getRedisKey, redisConnections, saveRedisConnection, saveRedisKey, scanRedisKeys,
-  testRedisConnection, updateRedisKeyMeta,
+  getRedisInfo, getRedisKey, listRedisGrants, redisConnections, replaceRedisGrants, saveRedisConnection,
+  saveRedisKey, scanRedisKeys, searchRedisGrantCandidates, testRedisConnection, updateRedisKeyMeta,
 } from '#/api/visual/redisConsole';
+import { listMemberUserGroups } from '#/api/visual/vq';
 
 defineOptions({ name: 'RedisConsole' });
 const router = useRouter();
@@ -149,8 +150,16 @@ function unbox(res: any) { return res?.data ?? res; }
 const dbOptions = computed(() => {
   if (databaseStats.value.length) return databaseStats.value;
   const count = active.value?.mode === 'CLUSTER' ? 1 : (active.value?.databaseCount || 16);
-  return Array.from({ length: count }, (_, index) => ({ database: index, keyCount: -1 }));
+  const all = Array.from({ length: count }, (_, index) => ({ database: index, keyCount: -1 }));
+  // 受限授权只列出可访问的 DB；统计接口本身也只返回这些 DB。
+  const allowed = active.value?.accessibleDatabases;
+  return Array.isArray(allowed) ? all.filter((item) => allowed.includes(item.database)) : all;
 });
+/** 打开连接时默认进入第一个可访问的 DB，避免受限用户落在无权的 DB 0。 */
+function firstAccessibleDatabase(item: any) {
+  const allowed = item?.accessibleDatabases;
+  return Array.isArray(allowed) && allowed.length ? Number(allowed[0]) : 0;
+}
 const writable = computed(() => Boolean(active.value?.writable));
 const cliPrompt = computed(() => `redis[${database.value}]>`);
 
@@ -322,7 +331,7 @@ function buildKeyPayload(overwrite: boolean) {
 }
 
 async function persistKey() {
-  if (!writable.value) return ElMessage.warning('公开连接为只读');
+  if (!writable.value) return ElMessage.warning('当前连接为只读');
   if (!keyForm.key.trim()) return ElMessage.warning('键名不能为空');
   if (keyTruncated.value) return ElMessage.warning('当前集合只加载了部分内容，请使用命令行编辑，避免覆盖未显示的数据');
   // 编辑已有键时必须持有原始 keyBase64；二进制/JDK 键不能用展示文本回算。
@@ -524,6 +533,159 @@ function openConnectionMenu(event: MouseEvent, item: any) {
 
 function closeContextMenu() { contextMenu.visible = false; keyContextMenu.visible = false; }
 
+// ---------- 连接授权（与数据库连接的“权限分配”一致：按会员授权，所有者/管理员天然拥有全部权限） ----------
+type RedisGrantRow = {
+  allowedDatabases: number[];
+  canUse: number;
+  canWrite: number;
+  memberUserId: number | string;
+  realName: string;
+  userName: string;
+};
+const grantVisible = ref(false);
+const grantLoading = ref(false);
+const grantSaving = ref(false);
+const grantConnection = ref<any>(null);
+const grantRows = ref<RedisGrantRow[]>([]);
+const grantBaselineIds = ref<string[]>([]);
+const grantKeyword = ref('');
+const grantGroupId = ref<any>(null);
+const grantGroups = ref<any[]>([]);
+const grantCandidates = ref<any[]>([]);
+const grantCandidateLoading = ref(false);
+const grantDatabaseOptions = computed(() => {
+  const item = grantConnection.value;
+  if (!item || item.mode === 'CLUSTER') return [0];
+  return Array.from({ length: Number(item.databaseCount) || 16 }, (_, index) => index);
+});
+
+async function openGrantDialog(item: any) {
+  if (!item?.manageable) return;
+  grantConnection.value = item;
+  grantRows.value = [];
+  grantBaselineIds.value = [];
+  grantKeyword.value = '';
+  grantGroupId.value = null;
+  grantCandidates.value = [];
+  grantVisible.value = true;
+  grantLoading.value = true;
+  try {
+    const [groups, grants] = await Promise.all([
+      listMemberUserGroups().then(unbox).catch(() => []),
+      listRedisGrants(item.id).then(unbox),
+    ]);
+    grantGroups.value = Array.isArray(groups) ? groups : [];
+    grantRows.value = (Array.isArray(grants) ? grants : []).map((grant: any) => ({
+      memberUserId: grant.memberUserId,
+      userName: grant.userName || String(grant.memberUserId),
+      realName: grant.realName || '',
+      canUse: grant.canUse === 0 ? 0 : 1,
+      canWrite: grant.canWrite === 1 ? 1 : 0,
+      allowedDatabases: parseAllowedDatabases(grant.allowedDatabases),
+    }));
+    grantBaselineIds.value = grantRows.value.map((row) => String(row.memberUserId));
+  } catch (error: any) {
+    ElMessage.error(cleanCommandError(error) || '加载授权信息失败');
+  } finally {
+    grantLoading.value = false;
+  }
+}
+
+/** 后端存 JSON 数组字符串，空 / * 表示全部 DB。 */
+function parseAllowedDatabases(raw: any): number[] {
+  if (Array.isArray(raw)) return raw.map(Number).filter((value) => Number.isInteger(value));
+  if (!raw || raw === '*') return [];
+  try {
+    const parsed = JSON.parse(String(raw));
+    return Array.isArray(parsed) ? parsed.map(Number).filter((value) => Number.isInteger(value)) : [];
+  } catch {
+    return [];
+  }
+}
+
+function isGrantedUser(user: any) {
+  const id = user?.id ?? user?.memberUserId;
+  return id != null && grantRows.value.some((row) => String(row.memberUserId) === String(id));
+}
+
+async function searchGrantCandidates() {
+  if (!grantConnection.value) return;
+  grantCandidateLoading.value = true;
+  try {
+    const keyword = grantKeyword.value.trim();
+    const list = unbox(await searchRedisGrantCandidates(grantConnection.value.id, {
+      keyword: keyword || undefined,
+      groupId: grantGroupId.value || undefined,
+    }));
+    grantCandidates.value = Array.isArray(list) ? list.filter((user: any) => user?.id != null) : [];
+    if (!grantCandidates.value.length) ElMessage.info('没有找到匹配的用户');
+  } catch (error: any) {
+    grantCandidates.value = [];
+    ElMessage.error(cleanCommandError(error) || '搜索用户失败');
+  } finally {
+    grantCandidateLoading.value = false;
+  }
+}
+
+function addGrantUser(user: any) {
+  if (isGrantedUser(user)) return ElMessage.info('该用户已在授权列表中');
+  if (String(user.id) === String(grantConnection.value?.ownerUserId)) {
+    return ElMessage.info('连接所有者默认拥有全部权限，无需授权');
+  }
+  grantRows.value.push({
+    memberUserId: user.id,
+    userName: user.userName || String(user.id),
+    realName: user.realName || '',
+    canUse: 1,
+    canWrite: 0,
+    allowedDatabases: [],
+  });
+}
+
+function removeGrantUser(memberUserId: number | string) {
+  grantRows.value = grantRows.value.filter((row) => String(row.memberUserId) !== String(memberUserId));
+}
+
+/** 打开可写时自动打开可用；关闭可用时同步关闭可写，避免矛盾授权。 */
+function onGrantWriteChange(row: RedisGrantRow, value: boolean | number | string) {
+  if (Number(value) === 1) row.canUse = 1;
+}
+function onGrantUseChange(row: RedisGrantRow, value: boolean | number | string) {
+  if (Number(value) === 0) row.canWrite = 0;
+}
+
+async function persistGrants() {
+  const connection = grantConnection.value;
+  if (!connection) return;
+  const rows = [...new Map(grantRows.value.map((row) => [String(row.memberUserId), row])).values()];
+  const nextIds = new Set(rows.map((row) => String(row.memberUserId)));
+  const removed = grantBaselineIds.value.filter((id) => !nextIds.has(id));
+  if (removed.length) {
+    try {
+      await ElMessageBox.confirm(
+        rows.length ? `将移除 ${removed.length} 个已授权用户，确定保存？` : '将清空该连接的全部用户授权，确定保存？',
+        '授权变更确认',
+        { type: 'warning', confirmButtonText: '确定保存', cancelButtonText: '取消' },
+      );
+    } catch {
+      return;
+    }
+  }
+  grantSaving.value = true;
+  try {
+    await replaceRedisGrants(connection.id, rows.map((row) => ({
+      memberUserId: row.memberUserId,
+      canUse: row.canUse ? 1 : 0,
+      canWrite: row.canWrite ? 1 : 0,
+      allowedDatabases: connection.mode === 'CLUSTER' ? [] : row.allowedDatabases,
+    })));
+    ElMessage.success('授权已保存');
+    grantVisible.value = false;
+  } finally {
+    grantSaving.value = false;
+  }
+}
+
 function startResize(kind: 'connections' | 'keys', event: PointerEvent) {
   if (event.button !== 0 || window.innerWidth < 720) return;
   resizeState.kind = kind;
@@ -633,8 +795,9 @@ watch(activeId, async () => {
   databaseStatsError.value = '';
   cliLines.value = [];
   historyIndex.value = -1;
-  const databaseChanged = database.value !== 0;
-  database.value = 0;
+  const initialDatabase = firstAccessibleDatabase(active.value);
+  const databaseChanged = database.value !== initialDatabase;
+  database.value = initialDatabase;
   newKey();
   if (!activeId.value) {
     keyLoadSeq += 1;
@@ -794,13 +957,14 @@ onBeforeUnmount(() => {
       </div>
 
       <div v-if="contextMenu.visible" class="connection-menu" :style="{ left: `${contextMenu.x}px`, top: `${contextMenu.y}px` }" @click.stop>
-        <button v-if="contextMenu.item?.writable" @click="editConnection(contextMenu.item); closeContextMenu()"><Edit />{{ $tr('编辑') }}</button>
+        <button v-if="contextMenu.item?.manageable" @click="editConnection(contextMenu.item); closeContextMenu()"><Edit />{{ $tr('编辑') }}</button>
+        <button v-if="contextMenu.item?.manageable" @click="openGrantDialog(contextMenu.item); closeContextMenu()"><User />{{ $tr('权限分配') }}</button>
         <button @click="testConnection(contextMenu.item); closeContextMenu()"><SwitchButton />PING</button>
         <button @click="refreshConnection(contextMenu.item)"><Refresh />{{ $tr('刷新') }}</button>
         <button @click="closeConnection(contextMenu.item)"><Close />{{ $tr('关闭连接') }}</button>
         <button @click="showRedisInfo(contextMenu.item)"><DataAnalysis />{{ $tr('查看 Redis 信息') }}</button>
         <button @click="openCli(contextMenu.item)"><Monitor />{{ $tr('命令行模式') }}</button>
-        <button v-if="contextMenu.item?.writable" class="danger" @click="removeConnection(contextMenu.item); closeContextMenu()"><Delete />{{ $tr('删除') }}</button>
+        <button v-if="contextMenu.item?.manageable" class="danger" @click="removeConnection(contextMenu.item); closeContextMenu()"><Delete />{{ $tr('删除') }}</button>
       </div>
       <div v-if="keyContextMenu.visible" class="connection-menu key-menu" :style="{ left: `${keyContextMenu.x}px`, top: `${keyContextMenu.y}px` }" @click.stop>
         <button v-if="writable" class="danger" @click="removeTreeNode(keyContextMenu.item)"><Delete />{{ $tr(keyContextMenu.item?.isFolder ? '删除整个目录' : '删除键') }}</button>
@@ -835,6 +999,72 @@ onBeforeUnmount(() => {
         <div class="switches"><ElCheckbox v-model="connectionForm.tlsEnabled" :true-value="1" :false-value="0">TLS</ElCheckbox><ElCheckbox v-model="connectionForm.isPublic" :true-value="1" :false-value="0">{{ $tr('公开为只读连接') }}</ElCheckbox></div>
       </ElForm>
       <template #footer><ElButton @click="connectionVisible = false">{{ $tr('取消') }}</ElButton><ElButton type="primary" :loading="connectionSaving" @click="persistConnection">{{ $tr('保存') }}</ElButton></template>
+    </ElDialog>
+
+    <ElDialog v-model="grantVisible" :title="`${$tr('权限分配')} — ${grantConnection?.connectionName || ''}`" width="min(1080px, 94vw)" destroy-on-close>
+      <div v-loading="grantLoading" class="grant-layout">
+        <section class="grant-left">
+          <div class="grant-title">{{ $tr('查找用户') }}</div>
+          <div class="grant-tools">
+            <ElInput v-model="grantKeyword" :placeholder="$tr('用户名 / 姓名 / 手机号')" clearable @clear="searchGrantCandidates" @keyup.enter="searchGrantCandidates" />
+            <ElSelect v-model="grantGroupId" :placeholder="$tr('全部部门')" filterable clearable @change="searchGrantCandidates">
+              <ElOption v-for="group in grantGroups" :key="group.id" :label="group.groupName" :value="group.id" />
+            </ElSelect>
+            <ElButton type="primary" :icon="Search" :loading="grantCandidateLoading" @click="searchGrantCandidates">{{ $tr('搜索') }}</ElButton>
+          </div>
+          <ElTable v-loading="grantCandidateLoading" :data="grantCandidates" border size="small" height="340" :empty-text="$tr('输入条件搜索用户')">
+            <ElTableColumn prop="userName" :label="$tr('用户名')" min-width="90" />
+            <ElTableColumn prop="realName" :label="$tr('姓名')" min-width="80" />
+            <ElTableColumn :label="$tr('操作')" width="70" align="center">
+              <template #default="{ row }">
+                <ElButton link type="primary" :disabled="isGrantedUser(row)" @click="addGrantUser(row)">{{ $tr(isGrantedUser(row) ? '已加入' : '加入') }}</ElButton>
+              </template>
+            </ElTableColumn>
+          </ElTable>
+        </section>
+        <section class="grant-right">
+          <div class="grant-title">{{ $tr('已授权用户') }}</div>
+          <p class="grant-help">{{ $tr('所有者和管理员默认拥有全部权限。可用=浏览键和执行只读命令；可写=新建、修改、删除键和执行写命令；FLUSHDB 等危险命令仍只允许所有者执行。可访问 DB 不选表示全部 DB。') }}</p>
+          <ElTable :data="grantRows" border size="small" max-height="380" :empty-text="$tr('暂无授权用户')">
+            <ElTableColumn prop="userName" :label="$tr('用户名')" min-width="90" />
+            <ElTableColumn prop="realName" :label="$tr('姓名')" min-width="80" />
+            <ElTableColumn :label="$tr('可访问 DB')" min-width="180">
+              <template #default="{ row }">
+                <ElSelect
+                  v-model="row.allowedDatabases"
+                  multiple
+                  clearable
+                  collapse-tags
+                  collapse-tags-tooltip
+                  :max-collapse-tags="2"
+                  size="small"
+                  :placeholder="$tr('全部 DB')"
+                  :disabled="grantConnection?.mode === 'CLUSTER'"
+                  style="width: 100%"
+                >
+                  <ElOption v-for="db in grantDatabaseOptions" :key="db" :label="`DB ${db}`" :value="db" />
+                </ElSelect>
+              </template>
+            </ElTableColumn>
+            <ElTableColumn :label="$tr('可用')" width="64" align="center">
+              <template #default="{ row }">
+                <ElSwitch v-model="row.canUse" :active-value="1" :inactive-value="0" @change="(value: boolean | number | string) => onGrantUseChange(row, value)" />
+              </template>
+            </ElTableColumn>
+            <ElTableColumn :label="$tr('可写')" width="64" align="center">
+              <template #default="{ row }">
+                <ElSwitch v-model="row.canWrite" :active-value="1" :inactive-value="0" @change="(value: boolean | number | string) => onGrantWriteChange(row, value)" />
+              </template>
+            </ElTableColumn>
+            <ElTableColumn :label="$tr('操作')" width="64" align="center">
+              <template #default="{ row }">
+                <ElButton link type="danger" @click="removeGrantUser(row.memberUserId)">{{ $tr('移除') }}</ElButton>
+              </template>
+            </ElTableColumn>
+          </ElTable>
+        </section>
+      </div>
+      <template #footer><ElButton @click="grantVisible = false">{{ $tr('取消') }}</ElButton><ElButton type="primary" :loading="grantSaving" @click="persistGrants">{{ $tr('保存授权') }}</ElButton></template>
     </ElDialog>
 
     <ElDialog v-model="infoVisible" :title="infoTitle" width="min(820px, 92vw)">
@@ -907,5 +1137,11 @@ onBeforeUnmount(() => {
 .redis-info { min-height: 240px; max-height: 60vh; margin: 0; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
 .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 .switches { display: flex; gap: 24px; }
-@media (max-width: 900px) { .topbar h2,.connection-state { display: none; }.topbar { gap: 6px; }.db-select { width: 150px; }.workspace { overflow-x: auto; }.key-meta,.form-grid { grid-template-columns: 1fr; } }
+.grant-layout { display: flex; gap: 16px; min-height: 380px; }
+.grant-left { width: 360px; flex-shrink: 0; }
+.grant-right { flex: 1; min-width: 0; }
+.grant-title { margin-bottom: 8px; font-weight: 600; }
+.grant-tools { display: grid; grid-template-columns: minmax(0, 1fr) 120px auto; gap: 8px; margin-bottom: 10px; }
+.grant-help { margin: 0 0 10px; color: var(--el-text-color-secondary); font-size: 12px; line-height: 1.5; }
+@media (max-width: 900px) { .grant-layout { flex-direction: column; }.grant-left { width: 100%; }.topbar h2,.connection-state { display: none; }.topbar { gap: 6px; }.db-select { width: 150px; }.workspace { overflow-x: auto; }.key-meta,.form-grid { grid-template-columns: 1fr; } }
 </style>
