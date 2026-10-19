@@ -50,10 +50,11 @@ export const overridesPreferences = defineOverridesPreferences({
   shortcutKeys: {
     globalLockScreen: false,
   },
-  // 关闭页面缓存与过渡，避免连点菜单时右侧内容挂载失败后空白
+  // 标签栏保持关闭。页面缓存单独打开：菜单勾选「页面缓存」后，
+  // 切到其他菜单再回来不会重建页面。过渡动画继续关闭，避免和缓存叠在一起时连点菜单右侧空白。
   tabbar: {
     enable: false,
-    keepAlive: false,
+    keepAlive: true,
   },
   transition: {
     enable: false,

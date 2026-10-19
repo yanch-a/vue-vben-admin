@@ -3,7 +3,8 @@
 import { computed, ref } from 'vue';
 import { ElMessage } from 'element-plus';
 import type { EtlConnectionOption, EtlResource } from '#/api/visual/etl';
-import { listEtlInstances, listEtlTables } from '#/api/visual/etl';
+import { listEtlInstances } from '#/api/visual/etl';
+import { getTables } from '#/api/visual/database';
 import { translateUiText } from '#/locales/ui-text';
 import { etlId } from './etlModel';
 
@@ -113,10 +114,7 @@ function hasSchema(resource: EtlResource) {
 async function loadSchemas(key: string, resource: EtlResource) {
   if (!resource.dbConfigId || !resource.instance || schemas.value[key]) return;
   try {
-    const response = await listEtlTables(
-      resource.dbConfigId,
-      resource.instance,
-    );
+    const response = await getTables(resource.dbConfigId, resource.instance);
     const rows: any[] = response.data ?? response;
     schemas.value[key] = [
       ...new Set(

@@ -45,7 +45,6 @@ import {
   listEtlRuns,
   listEtlRunLogs,
   listEtlSources,
-  listEtlTables,
   listEtlWorkspaces,
   previewEtlStep,
   publishEtlWorkspace,
@@ -53,7 +52,11 @@ import {
   syncEtlWorkspace,
   validateEtlWorkspace,
 } from '#/api/visual/etl';
-import { getTableColumns } from '#/api/visual/database';
+import {
+  clearDatabaseMetadataCache,
+  getTableColumns,
+  getTables,
+} from '#/api/visual/database';
 import AiChatWindow from '#/views/visual/client/components/ai/AiChatWindow.vue';
 import JsonEditorPanel from '#/views/visual/client/components/query/JsonEditorPanel.vue';
 import WorkspaceSources from './WorkspaceSources.vue';
@@ -216,6 +219,21 @@ const usedRefs = computed(() =>
 const dirty = computed(
   () => Boolean(activeWorkspace.value) && snapshot() !== saved.value,
 );
+/**
+ * 相对上次保存到数据库的草稿，内容有变化的任务 ID。
+ * 只比较任务自身；其它任务未改时不标黄。
+ */
+const dirtyPipelineIds = computed(() => {
+  const current = currentLocalDocument();
+  const savedDoc = savedWorkspaceDocument();
+  if (!current?.pipelines) return [] as string[];
+  const savedById = new Map(
+    (savedDoc?.pipelines || []).map((item) => [item.id, JSON.stringify(item)]),
+  );
+  return current.pipelines
+    .filter((item) => savedById.get(item.id) !== JSON.stringify(item))
+    .map((item) => item.id);
+});
 /** 上次与服务端对齐时的 revision，本地稿过期判定用 */
 const savedRevision = ref(0);
 /** 当前已知的服务端 revision。保存和协同拉取用它做乐观锁；有未解决冲突时可以比祖先版本更新。 */
@@ -313,6 +331,8 @@ function addVariable() {
 }
 const catalog = ref<any[]>([]),
   catalogLoading = ref(false);
+/** 已装入内存的表目录范围。同连接、实例、schema 切换步骤时不再读缓存或请求后台。 */
+const catalogScope = ref('');
 const catalogSearch = ref('');
 const catalogInserting = ref('');
 const filteredCatalog = computed(() => {
@@ -722,6 +742,24 @@ function snapshotOf(
     name,
     description: description || '',
   });
+}
+
+/** 从上次保存的快照里取出任务区文档，供单个任务判断是否已落库。 */
+function savedWorkspaceDocument(): EtlWorkspaceDocument | undefined {
+  if (!saved.value) return undefined;
+  try {
+    const wrapped = JSON.parse(saved.value) as {
+      document?: EtlWorkspaceDocument | string;
+    };
+    const document = wrapped?.document;
+    if (!document) return undefined;
+    if (typeof document === 'string') {
+      return normalizeSqlDocument(parseEtlJson(document));
+    }
+    return document;
+  } catch {
+    return undefined;
+  }
 }
 
 function currentLocalDocument(): EtlWorkspaceDocument | undefined {
@@ -1787,6 +1825,86 @@ watch(activePipelineId, () => {
 function inputColumns() {
   return queryColumns.value[node.value?.config.inputStepId || ''] || [];
 }
+/** 来源字段选项只建一份。每个映射行再挂一份 el-option 时，字段数会变成平方级节点。 */
+const sourceColumnOptions = computed(() =>
+  inputColumns().map((column) => ({ value: column, label: column })),
+);
+const mappingTargetOptions = computed(() => {
+  const mappings = node.value?.config?.mappings;
+  if (!Array.isArray(mappings)) return [];
+  const seen = new Set<string>();
+  const options: { value: string; label: string }[] = [];
+  for (const mapping of mappings) {
+    const target = String(mapping?.target || '').trim();
+    if (!target || seen.has(target)) continue;
+    seen.add(target);
+    options.push({ value: target, label: target });
+  }
+  return options;
+});
+const catalogTableOptions = computed(() =>
+  catalog.value
+    .map((table) => String(table.qualifiedName || table.tableName || ''))
+    .filter(Boolean)
+    .map((name) => ({ value: name, label: name })),
+);
+/**
+ * 字段映射行高。一次只挂载视口内的行，避免几百个下拉框同时创建。
+ */
+const MAPPING_ROW_HEIGHT = 42;
+const MAPPING_VIEWPORT_MAX = 420;
+const mappingScrollTop = ref(0);
+const mappingViewport = ref<HTMLElement>();
+const mappingCount = computed(() =>
+  Array.isArray(node.value?.config?.mappings)
+    ? node.value.config.mappings.length
+    : 0,
+);
+const mappingViewportHeight = computed(() =>
+  Math.min(mappingCount.value * MAPPING_ROW_HEIGHT, MAPPING_VIEWPORT_MAX),
+);
+const visibleMappingRows = computed(() => {
+  const mappings = node.value?.config?.mappings;
+  if (!Array.isArray(mappings) || !mappings.length) return [];
+  const start = Math.max(
+    0,
+    Math.floor(mappingScrollTop.value / MAPPING_ROW_HEIGHT) - 4,
+  );
+  const end = Math.min(
+    mappings.length,
+    start + Math.ceil(MAPPING_VIEWPORT_MAX / MAPPING_ROW_HEIGHT) + 8,
+  );
+  const rows: { index: number; offset: number; mapping: any }[] = [];
+  for (let index = start; index < end; index++) {
+    rows.push({
+      index,
+      offset: index * MAPPING_ROW_HEIGHT,
+      mapping: mappings[index],
+    });
+  }
+  return rows;
+});
+function onMappingScroll(event: Event) {
+  mappingScrollTop.value = (event.target as HTMLElement).scrollTop;
+}
+/** 输入样本列太多时先显示一部分，避免切步骤时把整张宽表画出来。 */
+const SAMPLE_COLUMN_LIMIT = 24;
+const showWideSample = ref(false);
+const sampleColumns = computed(() => {
+  const columns = inputPreview.value?.columns || [];
+  if (showWideSample.value || columns.length <= SAMPLE_COLUMN_LIMIT) {
+    return columns;
+  }
+  return columns.slice(0, SAMPLE_COLUMN_LIMIT);
+});
+watch(
+  () => node.value?.id,
+  () => {
+    mappingScrollTop.value = 0;
+    showWideSample.value = false;
+    if (mappingViewport.value) mappingViewport.value.scrollTop = 0;
+  },
+);
 function autoMapping() {
   if (!node.value) return;
   const columns = inputColumns();
@@ -1956,9 +2074,9 @@ async function runPipeline() {
       sameWorkspace(activeWorkspace.value?.id, workspaceId) &&
       pipeline.value?.id === pipelineId &&
       activeWorkspace.value?.revision === revision;
-    // 空 SQL/目标表仅警告不阻断保存，运行前再拦一次并给出可读提示。
+    // 空 SQL/目标表仅警告不阻断保存。运行前只拦当前任务，其它草稿不参与。
     const result = unbox<any>(
-      await validateEtlWorkspace(JSON.stringify(doc.value)),
+      await validateEtlWorkspace(JSON.stringify(doc.value), pipelineId),
     );
     if (!stillCurrent()) {
       say('info', '配置或工作区已变化，请重新运行');
@@ -2110,38 +2228,78 @@ function applySources() {
   sourcesVisible.value = false;
 }
 
-/** 异步对象目录绑定请求代次，避免快速切换步骤时旧请求覆盖新数据源的表。 */
+/** 表目录键：连接、实例、schema。与数据库客户端的 IndexedDB 缓存按同一地址共用。 */
+function catalogScopeKey(source?: {
+  dbConfigId?: number | string;
+  instance?: string;
+  schema?: string;
+}) {
+  if (!source?.dbConfigId || !source.instance) return '';
+  return JSON.stringify([
+    String(source.dbConfigId),
+    source.instance,
+    source.schema || '',
+  ]);
+}
+
+/**
+ * 加载当前步骤可用表。
+ * 默认走 getTables 的 IndexedDB 缓存；同范围切换步骤直接复用内存。
+ * refresh 先清掉该实例（或 schema）的共享缓存，再向数据库重新拉取。
+ */
+async function loadCatalog(refresh = false) {
+  const request = ++catalogRequest;
+  const source = nodeResource.value;
+  const key = catalogScopeKey(source);
+  if (!key || !source?.dbConfigId || !source.instance) {
+    catalog.value = [];
+    catalogScope.value = '';
+    catalogSearch.value = '';
+    catalogLoading.value = false;
+    return;
+  }
+  if (!refresh && catalogScope.value === key) return;
+  if (catalogScope.value !== key) {
+    catalog.value = [];
+    catalogSearch.value = '';
+    catalogScope.value = '';
+  }
+  catalogLoading.value = true;
+  try {
+    if (refresh) {
+      await clearDatabaseMetadataCache(
+        source.dbConfigId,
+        source.instance,
+        source.schema || undefined,
+      );
+    }
+    if (request !== catalogRequest) return;
+    const tables =
+      unbox<any[]>(await getTables(source.dbConfigId, source.instance)) || [];
+    if (request !== catalogRequest) return;
+    catalog.value = source.schema
+      ? tables.filter((item) => item.schemaName === source.schema)
+      : tables;
+    catalogScope.value = key;
+  } catch (error) {
+    if (request === catalogRequest) say('error', errorMessage(error));
+  } finally {
+    if (request === catalogRequest) catalogLoading.value = false;
+  }
+}
+
+/** 切换步骤只在数据源变化时重新取表，避免每次都打全库表目录。 */
 watch(
   () => [
-    activePipelineId.value,
-    workspaceRequests.stamp(),
     node.value?.id,
     nodeResource.value?.dbConfigId,
     nodeResource.value?.instance,
     nodeResource.value?.schema,
   ],
-  async () => {
-    const request = ++catalogRequest;
-    catalogLoading.value = false;
-    tableInsertRequests.invalidate(); catalogInserting.value = '';
-    catalog.value = [];
-    catalogSearch.value = '';
-    const source = nodeResource.value;
-    if (!source?.dbConfigId || !source.instance) return;
-    catalogLoading.value = true;
-    try {
-      const tables = unbox<any[]>(
-        await listEtlTables(source.dbConfigId, source.instance),
-      );
-      if (request === catalogRequest)
-        catalog.value = source.schema
-          ? tables.filter((item) => item.schemaName === source.schema)
-          : tables;
-    } catch (error) {
-      if (request === catalogRequest) say('error', errorMessage(error));
-    } finally {
-      if (request === catalogRequest) catalogLoading.value = false;
-    }
+  () => {
+    tableInsertRequests.invalidate();
+    catalogInserting.value = '';
+    void loadCatalog(false);
   },
 );
 /** 按数据库族给标识符加引号，避免保留字与大小写问题。 */
@@ -2467,7 +2625,11 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <Page auto-content-height class="etl-page">
+  <Page
+    auto-content-height
+    content-class="flex min-h-0 flex-col"
+    class="etl-page"
+  >
     <div v-loading="loading" class="etl-shell">
       <header class="toolbar">
         <div class="toolbar-nav">
@@ -2703,6 +2865,7 @@ onBeforeUnmount(() => {
             class="workspace-tabs"
             :workspace-id="activeWorkspace.id"
             :tasks="doc.pipelines"
+            :dirty-ids="dirtyPipelineIds"
             :auto-hide-ids="suppressedPipelineIds"
             :active="activePipelineId"
             :position="taskPosition"
@@ -2927,12 +3090,23 @@ onBeforeUnmount(() => {
                               ></template
                             >
                           <div class="table-catalog">
-                            <el-input
-                              v-model="catalogSearch"
-                              clearable
-                              size="small"
-                              :placeholder="$tr('筛选表名')"
-                            />
+                            <div class="catalog-search">
+                              <el-input
+                                v-model="catalogSearch"
+                                clearable
+                                size="small"
+                                :placeholder="$tr('筛选表名')"
+                              />
+                              <el-button
+                                :icon="Refresh"
+                                circle
+                                size="small"
+                                :loading="catalogLoading"
+                                :title="$tr('刷新表目录')"
+                                :aria-label="$tr('刷新表目录')"
+                                @click="loadCatalog(true)"
+                              />
+                            </div>
                             <p class="help catalog-hint">
                               {{ $tr('点击表名：空编辑器生成含全部字段的 SELECT；已有 SQL 则在光标处插入表名') }}
                             </p>
@@ -3125,21 +3299,24 @@ onBeforeUnmount(() => {
                         <el-form-item
                           :label="$tr('目标表（已有表）')"
                           class="form-row-inline"
-                          ><el-select
-                            v-model="node.config.table"
-                            filterable
-                            allow-create
-                            default-first-option
-                            :loading="catalogLoading"
-                            :placeholder="$tr('选择或输入目标表')"
-                            ><el-option
-                              v-for="table in catalog"
-                              :key="table.qualifiedName || table.tableName"
-                              :value="table.qualifiedName || table.tableName"
-                              :label="
-                                table.qualifiedName || table.tableName
-                              " /></el-select
-                        ></el-form-item>
+                          ><div class="inline-control">
+                            <el-select-v2
+                              v-model="node.config.table"
+                              filterable
+                              allow-create
+                              default-first-option
+                              :loading="catalogLoading"
+                              :options="catalogTableOptions"
+                              :placeholder="$tr('选择或输入目标表')"
+                            /><el-button
+                              :icon="Refresh"
+                              link
+                              :loading="catalogLoading"
+                              :title="$tr('刷新表目录')"
+                              :aria-label="$tr('刷新表目录')"
+                              @click="loadCatalog(true)"
+                            />
+                          </div></el-form-item>
                       </div>
                       <el-form-item :label="$tr('写入方式')" class="form-row-inline"
                         ><el-radio-group v-model="node.config.mode"
@@ -3157,19 +3334,17 @@ onBeforeUnmount(() => {
                         "
                         :label="$tr('目标键字段（应有唯一约束）')"
                         class="form-row-inline"
-                        ><el-select
+                        ><el-select-v2
                           v-model="node.config.keyColumns"
                           multiple
                           filterable
                           allow-create
+                          collapse-tags
+                          collapse-tags-tooltip
                           default-first-option
+                          :options="mappingTargetOptions"
                           :placeholder="$tr('例如：order_id')"
-                          ><el-option
-                            v-for="mapping in node.config.mappings || []"
-                            :key="mapping.target"
-                            :value="mapping.target"
-                            :label="mapping.target" /></el-select
-                      ></el-form-item>
+                        /></el-form-item>
                       <el-form-item
                         v-if="
                           node.config.mode === 'upsert' ||
@@ -3180,17 +3355,16 @@ onBeforeUnmount(() => {
                         :title="$tr('未设置时更新全部非键字段')"
                       >
                         <div class="inline-control">
-                          <el-select
+                          <el-select-v2
                             v-model="node.config.updateColumns"
                             multiple
                             filterable
+                            allow-create
+                            collapse-tags
+                            collapse-tags-tooltip
+                            :options="mappingTargetOptions"
                             :placeholder="$tr('未设置时更新全部非键字段')"
-                            ><el-option
-                              v-for="mapping in node.config.mappings || []"
-                              :key="mapping.target"
-                              :value="mapping.target"
-                              :label="mapping.target"
-                          /></el-select>
+                          />
                           <el-button
                             v-if="node.config.updateColumns !== undefined"
                             link
@@ -3318,31 +3492,43 @@ onBeforeUnmount(() => {
                       {{ $tr('留空时按查询结果同名写入。SQL 字段别名可以直接对应目标字段。') }}
                     </p>
                     <div
-                      v-for="(mapping, index) in node.config.mappings || []"
-                      :key="index"
-                      class="mapping-row"
+                      v-if="mappingCount"
+                      ref="mappingViewport"
+                      class="mapping-viewport"
+                      :style="{ height: `${mappingViewportHeight}px` }"
+                      @scroll="onMappingScroll"
                     >
-                      <el-select
-                        v-model="mapping.source"
-                        filterable
-                        allow-create
-                        default-first-option
-                        :placeholder="$tr('查询结果字段')"
-                        ><el-option
-                          v-for="column in inputColumns()"
-                          :key="column"
-                          :value="column"
-                          :label="column" /></el-select
-                      ><span>→</span
-                      ><el-input
-                        v-model="mapping.target"
-                        :placeholder="$tr('目标字段')"
-                      /><el-button
-                        link
-                        type="danger"
-                        @click="node.config.mappings.splice(index, 1)"
-                        >{{ $tr('删除') }}</el-button
+                      <div
+                        class="mapping-spacer"
+                        :style="{
+                          height: `${mappingCount * MAPPING_ROW_HEIGHT}px`,
+                        }"
                       >
+                        <div
+                          v-for="row in visibleMappingRows"
+                          :key="row.index"
+                          class="mapping-row"
+                          :style="{ transform: `translateY(${row.offset}px)` }"
+                        >
+                          <el-select-v2
+                            v-model="row.mapping.source"
+                            filterable
+                            allow-create
+                            default-first-option
+                            :options="sourceColumnOptions"
+                            :placeholder="$tr('查询结果字段')"
+                          /><span>→</span
+                          ><el-input
+                            v-model="row.mapping.target"
+                            :placeholder="$tr('目标字段')"
+                          /><el-button
+                            link
+                            type="danger"
+                            @click="node.config.mappings.splice(row.index, 1)"
+                            >{{ $tr('删除') }}</el-button
+                          >
+                        </div>
+                      </div>
                     </div>
                     <p
                       v-if="!(node.config.mappings || []).length"
@@ -3359,12 +3545,24 @@ onBeforeUnmount(() => {
                             : $tr('最多 100 行样本')
                         }}</small>
                       </div>
+                      <p
+                        v-if="
+                          inputPreview.columns.length > SAMPLE_COLUMN_LIMIT &&
+                          !showWideSample
+                        "
+                        class="help"
+                      >
+                        {{ $tr('字段较多，样本先显示前 24 列') }}
+                        <el-button link @click="showWideSample = true">{{
+                          $tr('显示全部列')
+                        }}</el-button>
+                      </p>
                       <el-table
                         :data="inputPreview.rows"
                         max-height="240"
                         border
                         ><el-table-column
-                          v-for="column in inputPreview.columns"
+                          v-for="column in sampleColumns"
                           :key="column"
                           :prop="column"
                           :label="column"
@@ -3649,7 +3847,12 @@ onBeforeUnmount(() => {
   border-radius: 10px;
   overflow: hidden;
   background: var(--el-bg-color);
-  min-height: calc(100vh - 130px);
+  /* 铺满 Page 内容区。原先用 100vh - 130px，比实际可用高度矮一截，底部会留空。 */
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
 }
 .toolbar,
 .toolbar-nav,
@@ -3701,7 +3904,9 @@ onBeforeUnmount(() => {
 }
 .etl-body {
   display: flex;
-  min-height: calc(100vh - 190px);
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
 }
 .workspace-sidebar {
   flex: 0 0 210px;
@@ -3816,7 +4021,9 @@ onBeforeUnmount(() => {
 .task-scroll {
   flex: 1;
   min-height: 0;
-  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
 .workspace-main.tasks-left {
   grid-template-areas: 'tabs editor';
@@ -3838,6 +4045,11 @@ onBeforeUnmount(() => {
 .pipeline-header {
   padding: 12px 16px;
   border-bottom: 1px solid var(--el-border-color-light);
+}
+.pipeline-header,
+.flow-strip,
+.validation-panel {
+  flex-shrink: 0;
 }
 .workspace-name {
   width: 220px;
@@ -3886,23 +4098,31 @@ onBeforeUnmount(() => {
 }
 .step-split {
   display: grid;
-  /* 编辑区与结果区等高，分隔线才能铺满 */
+  /* 占满流水线下方剩余高度，左右两侧才能各自滚动 */
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
   align-items: stretch;
+}
+.step-split.result-right,
+.step-split.result-hidden {
+  grid-template-rows: minmax(0, 1fr);
 }
 .step-split.result-right {
   grid-template-columns: minmax(320px, 1.15fr) minmax(280px, 0.9fr);
 }
 .step-split.result-bottom {
   grid-template-columns: minmax(0, 1fr);
-  grid-template-rows: auto auto;
+  grid-template-rows: minmax(0, 1.15fr) minmax(0, 0.85fr);
 }
 .step-split.result-hidden {
   grid-template-columns: minmax(0, 1fr);
 }
 .step-result {
   min-width: 0;
-  min-height: 100%;
+  min-height: 0;
   height: 100%;
+  overflow: auto;
   box-sizing: border-box;
   padding: 8px 16px 24px;
   background: var(--el-fill-color-lighter);
@@ -3914,7 +4134,8 @@ onBeforeUnmount(() => {
   border-left: 0;
   border-top: 1px solid var(--el-border-color-light);
   min-height: 0;
-  height: auto;
+  height: 100%;
+  overflow: auto;
 }
 .step-split.result-hidden .step-result {
   display: none;
@@ -4004,8 +4225,9 @@ button.step-item.flow-step {
 .step-editor {
   flex: 1;
   min-width: 0;
-  min-height: 100%;
+  min-height: 0;
   height: 100%;
+  overflow: auto;
   box-sizing: border-box;
   padding: 20px;
 }
@@ -4026,7 +4248,8 @@ button.step-item.flow-step {
   width: 100%;
   min-width: 0;
 }
-.inline-control > .el-select {
+.inline-control > .el-select,
+.inline-control > .el-select-v2 {
   flex: 1;
   min-width: 0;
   width: auto !important;
@@ -4193,8 +4416,16 @@ button.step-item.flow-step {
   grid-template-columns: 1fr 1fr;
   gap: 18px;
 }
-.write-grid .el-select {
+.write-grid .el-select,
+.write-grid .el-select-v2 {
   width: 100% !important;
+}
+.mapping-viewport {
+  overflow: auto;
+  position: relative;
+}
+.mapping-spacer {
+  position: relative;
 }
 .mapping-row {
   display: flex;
@@ -4202,9 +4433,19 @@ button.step-item.flow-step {
   align-items: center;
   margin-bottom: 10px;
 }
+.mapping-viewport .mapping-row {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 32px;
+  margin-bottom: 0;
+}
 .mapping-row > .el-select,
+.mapping-row > .el-select-v2,
 .mapping-row > .el-input {
   flex: 1;
+  min-width: 0;
 }
 .field-processing-row { flex-wrap: wrap; }
 .field-processing-row > .el-input { min-width: 110px; }
@@ -4223,6 +4464,9 @@ button.step-item.flow-step {
   font-size: 12px;
 }
 .json-panel {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
   padding: 16px;
 }
 .empty-workspace {
@@ -4232,6 +4476,15 @@ button.step-item.flow-step {
 }
 .full-width {
   width: 100%;
+}
+.catalog-search {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.catalog-search > .el-input {
+  flex: 1;
+  min-width: 0;
 }
 .table-catalog {
   display: grid;
@@ -4263,6 +4516,7 @@ button.step-item.flow-step {
 @media (max-width: 1100px) {
   .step-split.result-right {
     grid-template-columns: 1fr;
+    grid-template-rows: minmax(0, 1fr) minmax(0, 0.8fr);
   }
   .step-split.result-right .step-result {
     border-left: 0;

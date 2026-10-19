@@ -77,6 +77,8 @@ const props = defineProps<{
   position: string;
   /** 同步进来的任务 ID，渲染前收起，不占标签栏。 */
   autoHideIds?: string[];
+  /** 相对数据库已保存草稿有改动的任务 ID。 */
+  dirtyIds?: string[];
 }>();
 const emit = defineEmits<{
   select: [string];
@@ -107,6 +109,11 @@ const visible = computed(() =>
   props.tasks.filter((task) => !closed.value.includes(task.id)),
 );
 const vertical = computed(() => props.position !== 'top');
+
+/** 该任务相对上次保存到数据库的草稿有改动。 */
+function isDirty(id: string) {
+  return (props.dirtyIds || []).includes(id);
+}
 
 /** 切换停靠位置并关闭三点菜单。 */
 function setPosition(next: TabPosition) {
@@ -247,7 +254,7 @@ defineExpose({ hide });
         v-for="task in visible"
         :key="task.id"
         class="tab-item"
-        :class="{ active: active === task.id }"
+        :class="{ active: active === task.id, dirty: isDirty(task.id) }"
         role="tab"
         :aria-selected="active === task.id"
         tabindex="0"
@@ -255,7 +262,10 @@ defineExpose({ hide });
         @keydown.enter="select(task.id)"
         @contextmenu.prevent="context($event, task.id)"
       >
-        <span :title="$tr(task.name)">{{ $tr(task.name) }}</span
+        <span
+          :title="`${$tr(task.name || task.id)}${isDirty(task.id) ? ' *' : ''}`"
+          >{{ $tr(task.name || task.id)
+          }}<em v-if="isDirty(task.id)" class="dirty-mark">*</em></span
         ><small v-if="task.enabled === false">{{ $tr('停用') }}</small>
         <el-button
           :icon="Close"
@@ -273,8 +283,10 @@ defineExpose({ hide });
     <div class="tab-tools-end">
       <el-select
         class="task-picker"
+        :class="{ 'picker-dirty': isDirty(active) }"
         :model-value="active || undefined"
         filterable
+        popper-class="etl-task-picker-popper"
         :placeholder="$tr('选择任务')"
         :title="$tr('选择任务（包含已关闭任务）')"
         :aria-label="$tr('选择任务')"
@@ -284,9 +296,16 @@ defineExpose({ hide });
         <el-option
           v-for="task in tasks"
           :key="task.id"
-          :label="$tr(task.name || task.id)"
+          :label="`${$tr(task.name || task.id)}${isDirty(task.id) ? ' *' : ''}`"
           :value="task.id"
-        />
+        >
+          <span
+            class="etl-task-option"
+            :class="{ dirty: isDirty(task.id) }"
+            >{{ $tr(task.name || task.id)
+            }}<em v-if="isDirty(task.id)" class="dirty-mark">*</em></span
+          >
+        </el-option>
       </el-select>
       <el-popover
         v-model:visible="dockMenuOpen"
@@ -428,6 +447,28 @@ defineExpose({ hide });
   color: var(--el-color-primary);
   border-color: var(--el-color-primary);
   background: var(--el-color-primary-light-9);
+}
+/* 相对数据库未保存：黄底，并在名字后保留 *。 */
+.tab-item.dirty {
+  color: var(--el-text-color-primary);
+  border-color: var(--el-color-warning-light-5);
+  background: var(--el-color-warning-light-8);
+}
+.tab-item.dirty.active {
+  color: var(--el-color-warning-dark-2);
+  border-color: var(--el-color-warning);
+  background: var(--el-color-warning-light-7);
+}
+.dirty-mark {
+  margin-left: 2px;
+  color: var(--el-color-warning);
+  font-style: normal;
+  font-weight: 700;
+}
+.picker-dirty :deep(.el-select__wrapper),
+.picker-dirty :deep(.el-input__wrapper) {
+  background-color: var(--el-color-warning-light-9);
+  box-shadow: 0 0 0 1px var(--el-color-warning-light-5) inset;
 }
 /* 左右侧：工具区置顶，标签列表纵向占满剩余高度 */
 .vertical {
@@ -612,5 +653,20 @@ defineExpose({ hide });
 }
 .etl-dock-popper .dock-icon.active .dock-preview {
   border-color: var(--el-color-primary);
+}
+.etl-task-picker-popper .el-select-dropdown__item:has(.etl-task-option.dirty) {
+  background-color: var(--el-color-warning-light-8);
+}
+.etl-task-picker-popper
+  .el-select-dropdown__item.is-selected:has(.etl-task-option.dirty) {
+  color: var(--el-color-warning-dark-2);
+  background-color: var(--el-color-warning-light-7);
+  font-weight: 600;
+}
+.etl-task-picker-popper .dirty-mark {
+  margin-left: 2px;
+  color: var(--el-color-warning);
+  font-style: normal;
+  font-weight: 700;
 }
 </style>

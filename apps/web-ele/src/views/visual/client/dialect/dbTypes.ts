@@ -329,6 +329,114 @@ export function buildJdbcUrl(
     .replace('{database}', database);
 }
 
+const JDBC_PARAM_KEY = /^[A-Za-z][A-Za-z0-9_.]*$/;
+const JDBC_PARAM_VALUE = /^[A-Za-z0-9._~%:/+\-@,]*$/;
+
+export interface JdbcParamPair {
+  key: string;
+  value: string;
+}
+
+/**
+ * 解析连接参数。空白返回空列表；格式不对时返回 error，供表单即时提示。
+ * 规则与后端 JdbcUrlParameterMerger 保持一致。
+ */
+export function parseJdbcParams(extra?: null | string): {
+  error: string;
+  pairs: JdbcParamPair[];
+} {
+  const pairs: JdbcParamPair[] = [];
+  const raw = String(extra ?? '').trim();
+  if (!raw) return { error: '', pairs };
+  if (raw.length > 1024) {
+    return { error: '连接参数不能超过 1024 个字符', pairs };
+  }
+  let text = raw;
+  while (text.startsWith('?') || text.startsWith('&') || text.startsWith(';')) {
+    text = text.slice(1).trim();
+  }
+  if (!text) return { error: '', pairs };
+  for (const token of text.split(/[&;\r\n]+/)) {
+    const item = token.trim();
+    if (!item) continue;
+    const eq = item.indexOf('=');
+    if (eq <= 0) {
+      return { error: '连接参数格式应为 key=value，多项用 & 或 ; 分隔', pairs: [] };
+    }
+    const key = item.slice(0, eq).trim();
+    const value = item.slice(eq + 1).trim();
+    if (!JDBC_PARAM_KEY.test(key)) {
+      return { error: `连接参数名无效：${key}`, pairs: [] };
+    }
+    if (!JDBC_PARAM_VALUE.test(value)) {
+      return {
+        error: `连接参数值含有不支持的字符：${key}。空格、引号和 & ; ? # 请先百分号编码`,
+        pairs: [],
+      };
+    }
+    const index = pairs.findIndex(
+      (pair) => pair.key.toLowerCase() === key.toLowerCase(),
+    );
+    if (index >= 0) pairs[index] = { key, value };
+    else pairs.push({ key, value });
+    if (pairs.length > 32) {
+      return { error: '连接参数最多 32 项', pairs: [] };
+    }
+  }
+  return { error: '', pairs };
+}
+
+/** 表单校验用：合法或空白时返回空串。 */
+export function jdbcParamsError(extra?: null | string): string {
+  return parseJdbcParams(extra).error;
+}
+
+/**
+ * 把额外参数合并进连接串。SQL Server / H2 用分号，其余用查询串。
+ * 同名参数覆盖已有值，供「实际使用」预览和后端拼 URL 的结果一致。
+ */
+export function applyJdbcParams(
+  jdbcUrl: string,
+  extra?: null | string,
+  dbType?: null | string,
+): string {
+  const { error, pairs } = parseJdbcParams(extra);
+  if (error || pairs.length === 0 || !jdbcUrl) return jdbcUrl;
+  const family = resolveDbType(dbType).family;
+  const semicolon =
+    !jdbcUrl.includes('?') &&
+    (family === 'SQLSERVER_LIKE' ||
+      family === 'H2_LIKE' ||
+      jdbcUrl.toLowerCase().startsWith('jdbc:sqlserver:') ||
+      jdbcUrl.toLowerCase().startsWith('jdbc:h2:'));
+  return mergeJdbcParamSegments(jdbcUrl, pairs, semicolon);
+}
+
+function mergeJdbcParamSegments(
+  jdbcUrl: string,
+  pairs: JdbcParamPair[],
+  semicolon: boolean,
+): string {
+  const mark = semicolon ? jdbcUrl.indexOf(';') : jdbcUrl.indexOf('?');
+  const head = mark < 0 ? jdbcUrl : jdbcUrl.slice(0, mark);
+  const tail = mark < 0 ? '' : jdbcUrl.slice(mark + 1);
+  const delimiter = semicolon ? ';' : '&';
+  const segments = tail ? tail.split(delimiter).filter(Boolean) : [];
+  for (const pair of pairs) {
+    const rendered = `${pair.key}=${pair.value}`;
+    const index = segments.findIndex((segment) => {
+      const eq = segment.indexOf('=');
+      return (
+        eq > 0 && segment.slice(0, eq).toLowerCase() === pair.key.toLowerCase()
+      );
+    });
+    if (index >= 0) segments[index] = rendered;
+    else segments.push(rendered);
+  }
+  if (segments.length === 0) return head;
+  return `${head}${semicolon ? ';' : '?'}${segments.join(delimiter)}`;
+}
+
 /** 服务端档案的原始结构（/dataBaseOperate/dbTypeProfiles） */
 export interface ServerDbTypeProfile {
   code: string;

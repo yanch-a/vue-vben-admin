@@ -1,6 +1,6 @@
 <script setup lang="ts">
 /**
- * 工作区协同成员。所有者按登录账号邀请，成员与所有者编辑同一份草稿。
+ * 工作区协同成员。所有者按会员登录账号或手机号邀请，成员与所有者编辑同一份草稿。
  * @author yanch
  */
 import { ref } from 'vue';
@@ -48,7 +48,7 @@ async function load() {
 async function invite() {
   const name = userName.value.trim();
   if (!name) {
-    ElMessage.warning(translateUiText('请输入对方的登录账号'));
+    ElMessage.warning(translateUiText('请输入会员登录账号或手机号'));
     return;
   }
   saving.value = true;
@@ -98,7 +98,7 @@ defineExpose({ open });
     <div v-if="owner" class="share-invite">
       <el-input
         v-model="userName"
-        :placeholder="$tr('登录账号')"
+        :placeholder="$tr('会员登录账号或手机号')"
         maxlength="30"
         @keyup.enter="invite"
       />

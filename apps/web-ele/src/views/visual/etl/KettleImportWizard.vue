@@ -13,9 +13,9 @@ import {
   importKettleFile,
   listEtlInstances,
   listEtlSources,
-  listEtlTables,
   validateEtlWorkspace,
 } from '#/api/visual/etl';
+import { getTables } from '#/api/visual/database';
 import AiChatWindow from '#/views/visual/client/components/ai/AiChatWindow.vue';
 import ConnectionDialog from '#/views/visual/client/components/ConnectionDialog.vue';
 import { translateUiText } from '#/locales/ui-text';
@@ -295,7 +295,7 @@ async function loadSchemas(row: SourceRow) {
   const version = row.version,
     instance = row.instance;
   try {
-    const response: any = await listEtlTables(row.connectionId, instance);
+    const response: any = await getTables(row.connectionId, instance);
     if (version !== row.version || row.instance !== instance) return;
     row.schemas = [
       ...new Set<string>(

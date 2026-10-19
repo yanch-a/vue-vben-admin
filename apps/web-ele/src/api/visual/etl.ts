@@ -495,8 +495,13 @@ export function saveEtlWorkspace(data: {
 }
 
 /** 对页面、JSON 或 AI 产生的候选配置执行相同的服务端校验。 */
-export function validateEtlWorkspace(json: string) {
-  return request({ url: `${url}validate`, method: 'post', data: { json } });
+/** pipelineId 有值时只校验该任务，保存和发布不传，仍检查整个工作区。 */
+export function validateEtlWorkspace(json: string, pipelineId?: string) {
+  return request({
+    url: `${url}validate`,
+    method: 'post',
+    data: pipelineId ? { json, pipelineId } : { json },
+  });
 }
 
 /** 发布不可变版本。 */

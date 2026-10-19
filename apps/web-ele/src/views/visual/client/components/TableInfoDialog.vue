@@ -77,7 +77,8 @@ const propertyRows = computed(() => {
   <ElDialog
     v-model="visible"
     :title="title"
-    width="780px"
+    width="80%"
+    top="6vh"
     destroy-on-close
     class="table-info-dialog"
   >
@@ -114,7 +115,7 @@ const propertyRows = computed(() => {
           <ElTable
             :data="info.columns || []"
             size="small"
-            max-height="360"
+            max-height="60vh"
             border
             stripe
           >
@@ -144,7 +145,7 @@ const propertyRows = computed(() => {
             v-else
             :data="info.indexes"
             size="small"
-            max-height="360"
+            max-height="60vh"
             border
             stripe
           >
@@ -173,7 +174,7 @@ const propertyRows = computed(() => {
 
 <style scoped>
 .ddl-block {
-  max-height: 420px;
+  max-height: 60vh;
   overflow: auto;
   margin: 0;
   padding: 10px 12px;

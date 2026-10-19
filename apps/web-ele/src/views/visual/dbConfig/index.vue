@@ -56,6 +56,7 @@
         dbHost: '',
         dbPort: 3306,
         jdbcUrl: '',
+        jdbcParams: '',
         username: '',
         password: '',
         description: '',
@@ -210,6 +211,7 @@
           dbHost: '',
           dbPort: 3306,
           jdbcUrl: '',
+          jdbcParams: '',
           username: '',
           password: '',
           description: '',
@@ -302,6 +304,7 @@
           dbPort: form.dbPort,
           schemaName: form.schemaName,
           jdbcUrl: form.jdbcUrl,
+          jdbcParams: form.jdbcParams,
           username: form.username,
           password: form.password,
           sshEnabled: form.sshEnabled,
@@ -1099,6 +1102,12 @@
         </el-form-item>
         <el-form-item :label="$tr('连接URL')" prop="jdbcUrl">
           <el-input v-model="form.jdbcUrl" :placeholder="$tr('请输入JDBC连接URL')" />
+        </el-form-item>
+        <el-form-item :label="$tr('连接参数')" prop="jdbcParams">
+          <el-input
+            v-model="form.jdbcParams"
+            :placeholder="$tr('例如 useSSL=true&characterEncoding=utf8mb4，同名项覆盖默认值')"
+          />
         </el-form-item>
         <el-form-item :label="$tr('用户名')" prop="username">
           <el-input v-model="form.username" :placeholder="$tr('请输入用户名')" />

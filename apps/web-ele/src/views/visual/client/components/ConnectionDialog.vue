@@ -26,10 +26,12 @@ import {
 } from '#/api/visual/vq';
 
 import {
+  applyJdbcParams,
   applyServerProfiles,
   buildJdbcUrl,
   DB_TYPE_REGISTRY,
   type DbTypeDescriptor,
+  jdbcParamsError,
   resolveDbType,
 } from '../dialect/dbTypes';
 import {
@@ -93,6 +95,7 @@ const form = reactive({
   dbHost: '',
   dbPort: 3306,
   jdbcUrl: '',
+  jdbcParams: '',
   username: '',
   password: '',
   description: '',
@@ -163,15 +166,42 @@ const driverWarning = computed(() => {
   return d.driverHint || `服务端未部署 ${d.label} 驱动（${d.driverClassName}）`;
 });
 
-/** 未手填 jdbcUrl 时，展示按模板拼出的 URL */
+/** 未手填 jdbcUrl 时，展示按模板拼出的 URL，再叠上额外连接参数 */
 const urlPreview = computed(() => {
-  if (form.jdbcUrl?.trim()) return form.jdbcUrl.trim();
-  return buildJdbcUrl(form.dbType, {
-    host: form.dbHost,
-    port: form.dbPort,
-    database: form.schemaName,
-  });
+  const base = form.jdbcUrl?.trim()
+    ? form.jdbcUrl.trim()
+    : buildJdbcUrl(form.dbType, {
+        host: form.dbHost,
+        port: form.dbPort,
+        database: form.schemaName,
+      });
+  return applyJdbcParams(base, form.jdbcParams, form.dbType);
 });
+
+/** 参数示例随数据库变化：MySQL 用 &，SQL Server / H2 用分号 */
+const paramsPlaceholder = computed(() => {
+  const family = descriptor.value.family;
+  if (family === 'SQLSERVER_LIKE') {
+    return 'encrypt=true;trustServerCertificate=true';
+  }
+  if (family === 'H2_LIKE') return 'MODE=MySQL';
+  if (family === 'MONGODB_LIKE') return 'authSource=admin&retryWrites=true';
+  if (family === 'POSTGRES_LIKE') return 'sslmode=require';
+  return 'useSSL=true&characterEncoding=utf8mb4';
+});
+
+const paramsTip = computed(() => {
+  const family = descriptor.value.family;
+  if (family === 'MYSQL_LIKE') {
+    return '同名参数会覆盖默认值。MySQL 默认已带 useSSL=false、characterEncoding=utf8、serverTimezone=Asia/Shanghai';
+  }
+  if (family === 'SQLSERVER_LIKE') {
+    return '用分号分隔。同名参数会覆盖默认值，例如默认 encrypt=false';
+  }
+  return '写成 key=value，多项用 & 或 ; 分隔。同名参数覆盖 URL 里的已有值';
+});
+
+const paramsError = computed(() => jdbcParamsError(form.jdbcParams));
 
 /** 按方言族分组的下拉项，便于在十几种产品里快速定位 */
 const FAMILY_GROUP_LABEL: Record<string, string> = {
@@ -213,6 +243,16 @@ const rules = computed(() => ({
   ],
   dbPort: [
     { required: needsHost.value, message: '请输入端口', trigger: 'blur' },
+  ],
+  jdbcParams: [
+    {
+      validator: (_r: unknown, v: string, cb: (e?: Error) => void) => {
+        const error = jdbcParamsError(v);
+        if (error) cb(new Error(error));
+        else cb();
+      },
+      trigger: 'blur',
+    },
   ],
   username: [
     {
@@ -265,6 +305,7 @@ function resetForm() {
     dbHost: '',
     dbPort: DB_TYPE_REGISTRY.MY_SQL?.defaultPort ?? 3306,
     jdbcUrl: '',
+    jdbcParams: '',
     username: '',
     password: '',
     description: '',
@@ -297,6 +338,7 @@ function fillForm(row: any) {
         ? resolveDbType(row.dbType).defaultPort
         : Number(row.dbPort),
     jdbcUrl: row.jdbcUrl || '',
+    jdbcParams: row.jdbcParams || '',
     username: row.username || '',
     password: row.password || '',
     description: row.description || '',
@@ -493,6 +535,7 @@ async function handleTest() {
       dbPort: form.dbPort,
       schemaName: form.schemaName,
       jdbcUrl: form.jdbcUrl,
+      jdbcParams: form.jdbcParams,
       username: form.username,
       password: form.password,
       sshEnabled: form.sshEnabled,
@@ -727,6 +770,14 @@ watch(
           }}</ElButton>
         </div>
         <div class="tip preview">{{ $tr('实际使用：') }}{{ urlPreview }}</div>
+      </ElFormItem>
+      <ElFormItem :label="$tr('连接参数')" prop="jdbcParams">
+        <ElInput
+          v-model="form.jdbcParams"
+          :placeholder="paramsPlaceholder"
+        />
+        <div v-if="paramsError" class="warn">{{ $tr(paramsError) }}</div>
+        <div v-else class="tip preview">{{ $tr(paramsTip) }}</div>
       </ElFormItem>
       <ElFormItem :label="$tr('用户名')" prop="username">
         <ElInput

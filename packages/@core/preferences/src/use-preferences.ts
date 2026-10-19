@@ -132,12 +132,11 @@ function usePreferences() {
   });
 
   /**
-   * @zh_CN 是否开启keep-alive
-   * 在tabs可见以及开启keep-alive的情况下才开启
+   * 是否开启页面 keep-alive。
+   * 只看缓存开关，不要求标签栏可见。标签栏只是切换入口；
+   * 某个页面切走后是否保留，仍由该菜单的 meta.keepAlive 决定。
    */
-  const keepAlive = computed(
-    () => preferences.tabbar.enable && preferences.tabbar.keepAlive,
-  );
+  const keepAlive = computed(() => preferences.tabbar.keepAlive);
 
   /**
    * @zh_CN 登录注册页面布局是否为左侧

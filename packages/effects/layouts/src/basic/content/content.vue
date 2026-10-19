@@ -1,10 +1,10 @@
 <script lang="ts" setup>
 import type { RouteLocationNormalizedLoadedGeneric } from 'vue-router';
 
-import { unref } from 'vue';
-import { RouterView } from 'vue-router';
+import { unref, watch } from 'vue';
+import { RouterView, useRoute } from 'vue-router';
 
-import { usePreferences } from '@vben/preferences';
+import { preferences, usePreferences } from '@vben/preferences';
 import { getTabKey, storeToRefs, useTabbarStore } from '@vben/stores';
 
 import { transformComponent, useLayoutHook } from '../../hooks';
@@ -14,7 +14,28 @@ import { RouteCachedPage, RouteCachedView } from '../../route-cached';
 defineOptions({ name: 'LayoutContent' });
 
 const tabbarStore = useTabbarStore();
+const route = useRoute();
 const { keepAlive } = usePreferences();
+
+/**
+ * 标签栏可以隐藏，但菜单「页面缓存」仍要登记当前路由。
+ * KeepAlive 的 include 只收录已打开且 meta.keepAlive 为真的路由名；
+ * 标签栏未挂载时由这里写入，切走再回来才会复用原来的页面实例。
+ */
+watch(
+  () => route.fullPath,
+  () => {
+    if (preferences.tabbar.enable) {
+      return;
+    }
+    const meta = route.matched?.[route.matched.length - 1]?.meta;
+    tabbarStore.addTab({
+      ...route,
+      meta: meta || route.meta,
+    });
+  },
+  { immediate: true },
+);
 
 const { getCachedTabs, getExcludeCachedTabs, renderRouteView } =
   storeToRefs(tabbarStore);

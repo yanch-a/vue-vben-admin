@@ -31,10 +31,11 @@ async function initApplication() {
     overrides: overridesPreferences,
   });
 
-  // 本地缓存的偏好会覆盖 overrides，这里强制关掉页面缓存/过渡，避免连点菜单右侧空白
+  // 本地缓存的偏好会覆盖 overrides。这里强制打开页面缓存，否则菜单「页面缓存」不生效，
+  // 切走再回来页面会被重建。过渡动画保持关闭，避免和缓存叠在一起时连点菜单右侧空白。
   // 同时强制关掉版本检测：否则会每分钟 HEAD BASE_URL（生产是 /lmdb/view/）
   updatePreferences({
-    tabbar: { keepAlive: false },
+    tabbar: { keepAlive: true },
     transition: { enable: false },
     app: { enableCheckUpdates: false },
   });

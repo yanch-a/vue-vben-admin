@@ -30,6 +30,7 @@ export function testConnectionDraft(data: {
   dbPort?: number | string
   schemaName?: string
   jdbcUrl?: string
+  jdbcParams?: string
   username?: string
   password?: string
   sshEnabled?: number
