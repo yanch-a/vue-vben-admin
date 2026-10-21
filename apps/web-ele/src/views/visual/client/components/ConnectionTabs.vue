@@ -607,7 +607,7 @@ defineExpose({
   overflow: hidden;
   border-radius: 3px 0 3px 0;
   font-size: 8px;
-  font-weight: 700;
+  font-weight: 400;
   line-height: 10px;
   letter-spacing: 0;
   text-overflow: ellipsis;
