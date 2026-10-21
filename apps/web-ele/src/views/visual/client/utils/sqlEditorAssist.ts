@@ -22,7 +22,16 @@ export interface SqlCompletionContext {
   schema?: string;
   /** 写字段时归属的表名 */
   table?: string;
-  /** 在全文中的替换区间 [from, to) */
+  /**
+   * 写字段且没有「别名.」前缀时，当前语句 FROM / JOIN 里的全部表。
+   * 多表联查时字段要从每张表里找，不能只看第一张。
+   */
+  tables?: SqlTableRef[];
+  /** 正在输入的词带了 xx. 前缀（别名.字段 / 库.表），此时不提示函数 */
+  qualified?: boolean;
+  /** 当前词以引号开头且未闭合时，插入时要补上的闭合引号（` " ]） */
+  closeQuote?: string;
+  /** 在全文中的替换区间 [from, to)；不含用户已输入的开引号 */
   replaceFrom: number;
   replaceTo: number;
 }
@@ -1195,9 +1204,57 @@ export function expandSessionChain(fullText: string, currentSql: string, cursorO
 // ─────────────────────────── 补全上下文检测 ───────────────────────────
 
 const TABLE_HINT_RE =
-  /\b(FROM|JOIN|UPDATE|INTO|TABLE|TRUNCATE|DESCRIBE|DESC|EXPLAIN)\s*$/i;
+  /\b(FROM|JOIN|UPDATE|INTO|TABLE|TABLES|TRUNCATE|DESCRIBE|DESC|EXPLAIN)\s*$/i;
+/**
+ * 光标左侧是这些关键字或运算符时，接下来写的是字段/表达式。
+ * 运算符后（a.id = b.|、amount > ）以前识别不到，导致比较右侧完全没有提示。
+ */
 const COLUMN_HINT_RE =
-  /\b(SELECT|WHERE|AND|OR|SET|ON|HAVING|BY|WHEN|LIKE|BETWEEN|IN|VALUES|,|\()\s*$/i;
+  /(?:\b(?:SELECT|DISTINCT|WHERE|AND|OR|NOT|SET|ON|HAVING|BY|WHEN|THEN|ELSE|CASE|LIKE|BETWEEN|IN|IS|VALUES|RETURNING|USING)|[,(=<>!+\-*/%|])\s*$/i;
+
+/** 决定逗号归属的子句关键字：最后出现的是 FROM 时，逗号后写的是表名 */
+const CLAUSE_KEYWORD_RE =
+  /\b(SELECT|FROM|WHERE|SET|ON|GROUP|ORDER|HAVING|VALUES|LIMIT|UNION|JOIN|USING|INTO)\b/gi;
+
+/**
+ * FROM a, b 这种逗号联表：光标前最后一个子句关键字是 FROM 且以逗号结尾，按表名补全。
+ * 子查询 FROM (SELECT a, | 里最后的关键字是 SELECT，仍按字段处理。
+ */
+function isFromListComma(lookback: string): boolean {
+  if (!/,\s*$/.test(lookback)) return false;
+  let last = '';
+  // 只看与光标同一括号层的文本，避免被子查询里的 SELECT / FROM 干扰
+  const scope = currentParenScope(lookback);
+  CLAUSE_KEYWORD_RE.lastIndex = 0;
+  let m: RegExpExecArray | null;
+  while ((m = CLAUSE_KEYWORD_RE.exec(scope)) !== null) {
+    last = m[1]!.toUpperCase();
+  }
+  return last === 'FROM';
+}
+
+/** 去掉已闭合的括号片段，只保留与光标同一括号层的文本 */
+function currentParenScope(text: string): string {
+  const out: string[] = [];
+  let depth = 0;
+  for (let i = text.length - 1; i >= 0; i--) {
+    const c = text[i]!;
+    if (c === ')') {
+      depth++;
+      // 用空格占位，避免括号两侧的单词粘在一起
+      out.push(' ');
+      continue;
+    }
+    if (c === '(') {
+      if (depth === 0) break;
+      depth--;
+      out.push(' ');
+      continue;
+    }
+    if (depth === 0) out.push(c);
+  }
+  return out.reverse().join('');
+}
 
 /**
  * 从当前语句中解析第一张主表（FROM / UPDATE / INTO）
@@ -1409,7 +1466,40 @@ export function resolveTableTargetFromEditor(
 }
 
 /**
+ * 光标所在语句的区间。
+ * 光标在语句尾部空白（刚敲完空格）时 pos 会超出语句区间，这时取光标前最近的那条，
+ * 不能退回到全文第一条，否则多语句脚本里会拿错表去补字段。
+ */
+export function locateStatementAt(fullSql: string, offset: number): SqlRange | null {
+  const pos = Math.max(0, Math.min(offset, (fullSql || '').length));
+  const ranges = splitSqlStatements(fullSql || '');
+  const hit = ranges.find((r) => pos >= r.start && pos <= r.end);
+  if (hit) return hit;
+  let nearest: SqlRange | null = null;
+  for (const r of ranges) {
+    if (r.start <= pos) nearest = r;
+  }
+  return nearest;
+}
+
+/** 多表联查时最多从几张表里取字段，避免一条大 SQL 触发过多元数据请求 */
+const MAX_COLUMN_SOURCE_TABLES = 8;
+
+/** 当前语句里可供字段补全的表：FROM/JOIN 全部表；都没有时退回 UPDATE/INTO 主表 */
+function collectStatementTables(
+  stmt: string,
+  primary: { schema?: string; table?: string },
+): SqlTableRef[] {
+  const refs = parseTableRefsFromStatement(stmt);
+  if (!refs.length && primary.table) {
+    refs.push({ schema: primary.schema, table: primary.table, alias: primary.table });
+  }
+  return refs.slice(0, MAX_COLUMN_SOURCE_TABLES);
+}
+
+/**
  * 判断光标处是在补全表名还是字段名。
+ * kind 为 none 时调用方仍可按 prefix 提示函数和关键字。
  */
 export function detectCompletionContext(
   fullSql: string,
@@ -1419,15 +1509,11 @@ export function detectCompletionContext(
   const before = fullSql.slice(0, pos);
 
   // 限制在当前语句内
-  const ranges = splitSqlStatements(fullSql);
-  const cur =
-    ranges.find((r) => pos >= r.start && pos <= r.end) ||
-    ranges.find((r) => pos >= r.start) ||
-    null;
+  const cur = locateStatementAt(fullSql, pos);
   const stmtStart = cur?.start ?? 0;
   const stmtBefore = before.slice(stmtStart);
   const stmtAll = cur
-    ? fullSql.slice(cur.start, cur.end)
+    ? fullSql.slice(cur.start, Math.max(cur.end, pos))
     : fullSql;
 
   // 当前正在输入的标识（可含库.表 或 表.字段 的前缀）
@@ -1435,11 +1521,21 @@ export function detectCompletionContext(
     stmtBefore,
   );
   const rawWord = wordMatch?.[1] || '';
-  const replaceFrom = pos - rawWord.length;
   const replaceTo = pos;
 
-  const dotted = rawWord.split('.').map((p) => stripIdentQuotes(p));
+  const rawSegments = rawWord.split('.');
+  const lastRaw = rawSegments[rawSegments.length - 1] || '';
+  // 用户先敲了开引号（`us / "or / [na）但还没闭合：插入时补上闭合引号
+  const openQuote =
+    /^[`"[]/.test(lastRaw) && !/[`"\]]$/.test(lastRaw.slice(1)) ? lastRaw[0]! : '';
+  const closeQuote = openQuote ? (openQuote === '[' ? ']' : openQuote) : undefined;
+  // 替换区间只覆盖最后一段标识符本身：别名/库前缀与开引号都保留，
+  // 这样 Monaco 拿区间内文字过滤时与 filterText 对得上（带着引号会全部被过滤掉）
+  const replaceFrom = pos - lastRaw.length + (openQuote ? 1 : 0);
+
+  const dotted = rawSegments.map((p) => stripIdentQuotes(p));
   const prefix = dotted[dotted.length - 1] || '';
+  const base = { prefix, replaceFrom, replaceTo, closeQuote };
 
   const maskedBefore = maskSqlNoise(stmtBefore);
   // 去掉正在输入的词，看左侧关键字
@@ -1448,115 +1544,69 @@ export function detectCompletionContext(
     .replace(/\s+$/u, '');
 
   const primary = parsePrimaryTableFromStatement(stmtAll);
+  const expectTable = TABLE_HINT_RE.test(lookback) || isFromListComma(lookback);
 
-  // 别名.字段 / 表.字段 / schema.表名（第二段）
+  // 别名.字段 / 表.字段 / schema.表名 / 库.表.字段
   if (dotted.length >= 2) {
-    const left = dotted[0] || '';
-    const afterDotTable = TABLE_HINT_RE.test(lookback.replace(/\.\s*$/, ' '));
-    // 字段补全只替换点号后的字段名，避免选中后冲掉别名/表前缀（a.id → id）
-    const fieldReplaceFrom = pos - prefix.length;
+    const left = dotted[dotted.length - 2] || '';
+    const leftSchema = dotted.length >= 3 ? dotted[dotted.length - 3] : undefined;
+    const qualified = { ...base, qualified: true };
 
     // FROM/JOIN/UPDATE 后的 schema.table：优先当「表补全」，不要把 schema 误当成别名去补字段
     // 例：JOIN other_db.lm_  → 表补全；WHERE a.  → 字段补全
-    if (TABLE_HINT_RE.test(lookback) || afterDotTable) {
-      return {
-        kind: 'table',
-        prefix,
-        schema: left,
-        replaceFrom: fieldReplaceFrom,
-        replaceTo,
-      };
+    if (expectTable) {
+      return { kind: 'table', ...qualified, schema: left };
     }
-
+    // 库.表.字段：前两段直接就是表的限定名
+    if (leftSchema) {
+      return { kind: 'column', ...qualified, schema: leftSchema, table: left };
+    }
+    // 别名或表名（resolveTableRefByAlias 同时比对别名和真实表名）
     const byAlias = resolveTableRefByAlias(stmtAll, left);
     if (byAlias.table) {
       return {
         kind: 'column',
-        prefix,
+        ...qualified,
         schema: byAlias.schema || primary.schema,
         table: byAlias.table,
-        replaceFrom: fieldReplaceFrom,
-        replaceTo,
-      };
-    }
-    // left 就是已知表名（无别名）
-    if (
-      primary.table &&
-      left.toLowerCase() === primary.table.toLowerCase()
-    ) {
-      return {
-        kind: 'column',
-        prefix,
-        schema: primary.schema,
-        table: primary.table,
-        replaceFrom: fieldReplaceFrom,
-        replaceTo,
       };
     }
     // 无法解析时：若像 schema.table（无表上下文）仍走表补全
     if (!primary.table) {
-      return {
-        kind: 'table',
-        prefix,
-        schema: left,
-        replaceFrom: fieldReplaceFrom,
-        replaceTo,
-      };
+      return { kind: 'table', ...qualified, schema: left };
     }
     // 兜底：把 left 当表名做字段补全（可能跨库未解析到）
-    return {
-      kind: 'column',
-      prefix,
-      schema: primary.schema,
-      table: left,
-      replaceFrom: fieldReplaceFrom,
-      replaceTo,
-    };
+    return { kind: 'column', ...qualified, schema: primary.schema, table: left };
   }
 
-  if (TABLE_HINT_RE.test(lookback)) {
-    return {
-      kind: 'table',
-      prefix,
-      replaceFrom,
-      replaceTo,
-    };
+  if (expectTable) {
+    return { kind: 'table', ...base };
   }
+
+  const columnCtx: SqlCompletionContext = {
+    kind: 'column',
+    ...base,
+    schema: primary.schema,
+    table: primary.table,
+    tables: collectStatementTables(stmtAll, primary),
+  };
 
   if (COLUMN_HINT_RE.test(lookback)) {
-    return {
-      kind: 'column',
-      prefix,
-      schema: primary.schema,
-      table: primary.table,
-      replaceFrom,
-      replaceTo,
-    };
+    return columnCtx;
   }
 
   // SELECT 列表中且尚未出现 FROM：字段场景但可能还没有表 → none/column
-  const upperStmt = maskSqlNoise(stmtBefore).toUpperCase();
+  const upperStmt = maskedBefore.toUpperCase();
   if (
     /\bSELECT\b/.test(upperStmt) &&
     !/\bFROM\b/.test(upperStmt) &&
-    prefix
+    prefix &&
+    primary.table
   ) {
-    return {
-      kind: primary.table ? 'column' : 'none',
-      prefix,
-      schema: primary.schema,
-      table: primary.table,
-      replaceFrom,
-      replaceTo,
-    };
+    return columnCtx;
   }
 
-  return {
-    kind: 'none',
-    prefix,
-    replaceFrom,
-    replaceTo,
-  };
+  return { kind: 'none', ...base };
 }
 
 /**
@@ -1588,8 +1638,9 @@ export function scoreIdentMatch(name: string, prefix: string): number | null {
     if (ok) return 2;
   }
 
-  // 仅当输入已较长时，才允许「某一段以整段输入开头」（避免 pro 扫出上百张表）
-  if (p.length >= 4 && nParts.some((part) => part.startsWith(p))) return 2;
+  // 某一段以整段输入开头：us → t_user、na → user_name。
+  // 输入 2 个字符就允许，排序上仍在整段前缀之后，且由调用方分桶限额，不会挤掉前缀命中。
+  if (p.length >= 2 && nParts.some((part) => part.startsWith(p))) return 2;
 
   // 包含：至少 3 字符，且更偏向名字较短的表（在 match 里二次排序）
   if (p.length >= 3 && n.includes(p)) return 3;
@@ -1601,6 +1652,19 @@ export function scoreIdentMatch(name: string, prefix: string): number | null {
  * 表名补全：整段输入前缀绝对优先；同档按「剩余未匹配长度」短的在前。
  * 前缀命中与模糊命中分桶截断，避免短前缀被不相干表占满前 100。
  */
+/**
+ * 拆开对象树缓存里的 schema.table（PG / SQL Server / Oracle 的表名带 schema 前缀）。
+ * 没有点号时 qualifier 为空。
+ */
+export function splitQualifiedTableName(name: string): { qualifier: string; bare: string } {
+  const raw = String(name || '');
+  const dot = raw.lastIndexOf('.');
+  if (dot > 0 && dot < raw.length - 1) {
+    return { qualifier: raw.slice(0, dot), bare: raw.slice(dot + 1) };
+  }
+  return { qualifier: '', bare: raw };
+}
+
 export function matchTableSuggestions(
   tables: TableNameItem[],
   ctx: SqlCompletionContext,
@@ -1613,11 +1677,25 @@ export function matchTableSuggestions(
   const scored: { item: TableNameItem; score: number; name: string; rest: number }[] =
     [];
   for (const t of tables) {
-    const name = (t.tableName || '').toLowerCase();
-    const sch = (t.schema || currentInstance || '').toLowerCase();
-    if (schemaFilter && sch && sch !== schemaFilter) continue;
-    const score = scoreIdentMatch(t.tableName, prefix);
+    const { qualifier, bare } = splitQualifiedTableName(t.tableName || '');
+    // schema 前缀既可能写在表名里（public.orders），也可能是所属实例（MySQL 跨库 db.table）
+    if (schemaFilter) {
+      const owners = [qualifier, t.schema || currentInstance || '']
+        .map((s) => s.toLowerCase())
+        .filter(Boolean);
+      if (owners.length && !owners.includes(schemaFilter)) continue;
+    }
+    // 表名带 schema 前缀时按裸表名匹配：输入 or 要能命中 public.orders
+    const bareScore = scoreIdentMatch(bare, prefix);
+    const fullScore = qualifier ? scoreIdentMatch(t.tableName, prefix) : null;
+    const score =
+      bareScore == null
+        ? fullScore
+        : fullScore == null
+          ? bareScore
+          : Math.min(bareScore, fullScore);
     if (score == null) continue;
+    const name = bare.toLowerCase();
     const rest =
       score <= 1 && prefixLen > 0
         ? Math.max(0, name.length - prefixLen)

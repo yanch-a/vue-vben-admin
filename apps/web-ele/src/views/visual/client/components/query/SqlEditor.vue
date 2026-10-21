@@ -6,7 +6,8 @@
  * - Ctrl+S 保存
  * - Ctrl+Q 直接关闭当前查询页签（不提示未保存）
  * - F12 格式化当前选区或光标所在语句
- * - 智能补全：写表名用本地表清单；写字段名按需拉列并缓存；Tab 接受建议
+ * - 智能补全：写表名用本地表清单；写字段名按需拉列并缓存（多表联查合并各表字段）；Tab 接受建议
+ * - 函数补全：按当前数据库方言列出内置函数，选中自动补括号；括号内显示参数提示，悬停显示说明
  * - 拖入 .sql / .txt：解析文本写入编辑器，并通知父级保存到当前库
  * - 按 tabId 复用 ITextModel + 恢复 viewState，切换页签不丢滚动位置与撤销栈
  * @author yanch
@@ -25,14 +26,29 @@ import {
   extractExecutableSqlRange,
   getAllRememberedTables,
   getRememberedTables,
+  locateStatementAt,
   matchColumnSuggestions,
   matchTableSuggestions,
   resolveTableTargetFromEditor,
+  scoreIdentMatch,
+  splitQualifiedTableName,
+  type SqlCompletionContext,
 } from '../../utils/sqlEditorAssist';
 import { translateUiText } from '#/locales/ui-text';
 
 import { formatSqlByDialect } from '../../utils/formatSql';
 import { resolveSqlDialect } from '../../dialect/sqlDialect';
+import {
+  applyTypedCase,
+  findSqlFunction,
+  findSqlFunctionCallAt,
+  formatSqlFunctionDoc,
+  formatSqlFunctionSignature,
+  listSqlFunctions,
+  listSqlKeywords,
+  resolveActiveParam,
+  type SqlFunctionDef,
+} from '../../dialect/sqlFunctions';
 import { useClientPreferences } from '../../composables/useClientPreferences';
 
 // monaco-editor 0.56+：exports 映射为 "./*" -> "./esm/vs/*.js"
@@ -111,8 +127,24 @@ const wrapEl = ref<HTMLDivElement>();
 const dragOver = ref(false);
 let editor: monaco.editor.IStandaloneCodeEditor | null = null;
 let completionDisposable: monaco.IDisposable | null = null;
+/** 函数参数提示（光标在函数括号内时高亮当前参数） */
+let signatureDisposable: monaco.IDisposable | null = null;
+/** 鼠标悬停函数名时显示签名与说明 */
+let hoverDisposable: monaco.IDisposable | null = null;
 /** 跨实例拉表进行中的 Promise，避免连敲触发重复 getTables */
 const tablesLoadInflight = new Map<string, Promise<string[]>>();
+/**
+ * 字段列表短期内存缓存。
+ * 补全每敲一个字符都会重新计算，这里挡住连敲时对 IndexedDB / 接口的重复读取；
+ * 过期后重新走 API 缓存，对象树刷新元数据后最多 30 秒就能看到新字段。
+ */
+const COLUMN_CACHE_TTL_MS = 30_000;
+const columnCache = new Map<string, { at: number; promise: Promise<string[]> }>();
+/** 单个分类最多返回的建议条数 */
+const MAX_TABLE_SUGGESTIONS = 20;
+const MAX_COLUMN_SUGGESTIONS = 60;
+const MAX_FUNCTION_SUGGESTIONS = 30;
+const MAX_KEYWORD_SUGGESTIONS = 8;
 
 /** 每个页签独立 Model + 滚动/光标视图状态 */
 type TabEditorState = {
@@ -320,6 +352,8 @@ async function resolveTableNames(schemaHint?: string): Promise<
           // loadEditorTables 内部也会 remember；这里再兜底一次
           return arr;
         })
+        // 拉表失败（实例名不存在、无权限）时按空清单处理，不能让补全整体报错
+        .catch(() => [] as string[])
         .finally(() => {
           tablesLoadInflight.delete(key);
         });
@@ -334,8 +368,16 @@ async function resolveTableNames(schemaHint?: string): Promise<
     }));
   }
 
-  // 显式写了 schema/实例名：只补全该实例下的表（可与当前 Tab 选中库不同）
+  // 显式写了 schema/实例名前缀
   if (schemaHint) {
+    // PG / SQL Server / Oracle：当前库的表名本身就是 schema.table，前缀是 schema 而不是另一个库
+    const hint = schemaHint.toLowerCase();
+    const current = inst ? await ensureTables(inst) : [];
+    const inSchema = current.filter(
+      (t) => splitQualifiedTableName(t.tableName).qualifier.toLowerCase() === hint,
+    );
+    if (inSchema.length) return inSchema;
+    // MySQL 等：前缀是库名，补全该库下的表（可与当前 Tab 选中库不同）
     return ensureTables(schemaHint);
   }
 
@@ -351,25 +393,286 @@ async function resolveTableNames(schemaHint?: string): Promise<
   return [...map.values()];
 }
 
-async function resolveColumns(
+/**
+ * SQL 里写的表 → 取字段接口要的「实例 + 表名」。
+ * - PG / SQL Server / Oracle：对象树缓存的表名是 schema.table，取字段也要传限定名，
+ *   所以 SQL 里写 orders 或 public.orders 都要先映射回缓存里的 public.orders
+ * - MySQL 等：schema 前缀就是库名，直接当实例名
+ */
+function resolveColumnTarget(
   schema: string | undefined,
   table: string,
-): Promise<string[]> {
+): { instanceName: string; tableName: string } | null {
   const dbId = props.dbConfigId;
-  const inst = schema || props.instanceName || '';
-  if (dbId == null || !inst || !table) return [];
+  const inst = props.instanceName || '';
+  if (dbId == null || !table) return null;
+  const known = inst ? getRememberedTables(dbId, inst) : [];
+  const lower = table.toLowerCase();
 
-  if (!props.loadColumns) return [];
-  try {
-    const res = await props.loadColumns(inst, table);
-    return res.columns || [];
-  } catch {
-    return [];
+  if (schema) {
+    const qualified = `${schema}.${table}`.toLowerCase();
+    const hit = known.find((t) => t.tableName.toLowerCase() === qualified);
+    if (hit) return { instanceName: inst, tableName: hit.tableName };
+    // 当前页签有 schema（PG / Oracle 等）时，前缀是 schema，表仍在当前库下
+    if (props.schemaName && inst) {
+      return { instanceName: inst, tableName: `${schema}.${table}` };
+    }
+    return { instanceName: schema, tableName: table };
   }
+
+  if (!inst) return null;
+  const exact = known.find((t) => t.tableName.toLowerCase() === lower);
+  if (exact) return { instanceName: inst, tableName: exact.tableName };
+  // 没写 schema 但缓存里是 schema.table：优先当前页签 schema 下的同名表
+  const sameBare = known.filter(
+    (t) => splitQualifiedTableName(t.tableName).bare.toLowerCase() === lower,
+  );
+  if (sameBare.length) {
+    const preferred = (props.schemaName || '').toLowerCase();
+    const hit =
+      sameBare.find(
+        (t) => splitQualifiedTableName(t.tableName).qualifier.toLowerCase() === preferred,
+      ) || sameBare[0]!;
+    return { instanceName: inst, tableName: hit.tableName };
+  }
+  return { instanceName: inst, tableName: table };
+}
+
+/** 读取一张表的字段名，带短期内存缓存；失败按空列表处理且不缓存失败结果 */
+function loadColumnsCached(target: {
+  instanceName: string;
+  tableName: string;
+}): Promise<string[]> {
+  if (!props.loadColumns) return Promise.resolve([]);
+  const key = JSON.stringify([
+    String(props.dbConfigId),
+    target.instanceName,
+    target.tableName.toLowerCase(),
+  ]);
+  const now = Date.now();
+  const cached = columnCache.get(key);
+  if (cached && now - cached.at < COLUMN_CACHE_TTL_MS) return cached.promise;
+  const promise = props
+    .loadColumns(target.instanceName, target.tableName)
+    .then((res) => res?.columns || [])
+    .catch(() => {
+      columnCache.delete(key);
+      return [] as string[];
+    });
+  columnCache.set(key, { at: now, promise });
+  return promise;
+}
+
+/**
+ * 按补全上下文收集候选字段。
+ * 写了「别名.」时只取那张表；否则取当前语句 FROM / JOIN 的全部表，同名字段只保留一个。
+ */
+async function resolveContextColumns(
+  ctx: SqlCompletionContext,
+): Promise<{ name: string; source: string }[]> {
+  const sources =
+    !ctx.qualified && ctx.tables?.length
+      ? ctx.tables.map((t) => ({ schema: t.schema, table: t.table, label: t.alias }))
+      : ctx.table
+        ? [{ schema: ctx.schema, table: ctx.table, label: ctx.table }]
+        : [];
+  const lists = await Promise.all(
+    sources.map(async (s) => {
+      const target = resolveColumnTarget(s.schema, s.table);
+      const columns = target ? await loadColumnsCached(target) : [];
+      return columns.map((name) => ({ name, source: s.label }));
+    }),
+  );
+  const seen = new Set<string>();
+  const out: { name: string; source: string }[] = [];
+  for (const col of lists.flat()) {
+    const key = col.name.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(col);
+  }
+  return out;
+}
+
+type SuggestRange = monaco.IRange;
+
+async function buildTableSuggestions(
+  ctx: SqlCompletionContext,
+  range: SuggestRange,
+): Promise<monaco.languages.CompletionItem[]> {
+  const tables = await resolveTableNames(ctx.schema);
+  const matched = matchTableSuggestions(
+    tables,
+    ctx,
+    // 有显式 schema 时以该实例为准，避免用当前 Tab 库名误过滤
+    ctx.schema || props.instanceName,
+  );
+  const close = ctx.closeQuote || '';
+  return matched.slice(0, MAX_TABLE_SUGGESTIONS).map((t, i) => {
+    const { qualifier, bare } = splitQualifiedTableName(t.tableName);
+    let label: string;
+    let insert: string;
+    if (ctx.schema) {
+      // 已写了 schema. 前缀：表名自带同名 schema 时只插裸表名，避免变成 public.public.orders
+      insert =
+        qualifier && qualifier.toLowerCase() === ctx.schema.toLowerCase()
+          ? bare
+          : t.tableName;
+      label = qualifier ? t.tableName : `${t.schema ? t.schema + '.' : ''}${t.tableName}`;
+    } else {
+      label =
+        t.schema && t.schema !== props.instanceName
+          ? `${t.schema}.${t.tableName}`
+          : t.tableName;
+      insert = label;
+    }
+    return {
+      label,
+      kind: monaco.languages.CompletionItemKind.Class,
+      insertText: insert + close,
+      range,
+      // 已按全词相关度排好序；感叹号 + pad 保证排在其它建议之前且顺序稳定
+      sortText: '!' + String(i).padStart(4, '0'),
+      // 过滤文本同时放裸表名和完整名：输入 or 或 pub 都能命中 public.orders
+      filterText: qualifier && !ctx.schema ? `${bare} ${t.tableName}` : bare,
+      preselect: i === 0,
+      detail: translateUiText('表'),
+    } as monaco.languages.CompletionItem;
+  });
+}
+
+async function buildColumnSuggestions(
+  ctx: SqlCompletionContext,
+  range: SuggestRange,
+): Promise<monaco.languages.CompletionItem[]> {
+  const cols = await resolveContextColumns(ctx);
+  if (!cols.length) return [];
+  const sourceOf = new Map(cols.map((c) => [c.name, c.source]));
+  const multiSource = new Set(cols.map((c) => c.source)).size > 1;
+  const close = ctx.closeQuote || '';
+  return matchColumnSuggestions(
+    cols.map((c) => c.name),
+    ctx.prefix,
+  )
+    .slice(0, MAX_COLUMN_SUGGESTIONS)
+    .map((c, i) => ({
+      label: c,
+      kind: monaco.languages.CompletionItemKind.Field,
+      insertText: c + close,
+      range,
+      sortText: '1' + String(i).padStart(4, '0'),
+      filterText: c,
+      // 多表联查时标出字段来自哪张表 / 别名
+      detail: multiSource
+        ? `${translateUiText('列')} · ${sourceOf.get(c)}`
+        : translateUiText('列'),
+    }));
+}
+
+/** 关键字只做前缀匹配；与输入完全相同的关键字排第一，回车不会被同前缀的函数抢走 */
+function buildKeywordSuggestions(
+  ctx: SqlCompletionContext,
+  range: SuggestRange,
+): monaco.languages.CompletionItem[] {
+  const prefix = ctx.prefix.toLowerCase();
+  return listSqlKeywords(props.dbType)
+    .filter((kw) => kw.toLowerCase().startsWith(prefix))
+    .sort((a, b) => a.length - b.length || a.localeCompare(b))
+    .slice(0, MAX_KEYWORD_SUGGESTIONS)
+    .map((kw, i) => {
+      const exact = kw.toLowerCase() === prefix;
+      return {
+        label: kw,
+        kind: monaco.languages.CompletionItemKind.Keyword,
+        insertText: applyTypedCase(kw, ctx.prefix),
+        range,
+        sortText: (exact ? '!!' : '2') + String(i).padStart(4, '0'),
+        filterText: kw,
+        preselect: exact,
+        detail: translateUiText('关键字'),
+      };
+    });
+}
+
+/**
+ * 函数建议：按当前数据库方言给出。
+ * 选中后自动补括号并把光标放进括号里，同时弹出参数提示；
+ * 光标后面已经有左括号时只替换函数名，不重复加括号。
+ */
+function buildFunctionSuggestions(
+  ctx: SqlCompletionContext,
+  range: SuggestRange,
+  nextChar: string,
+): monaco.languages.CompletionItem[] {
+  const scored: { def: SqlFunctionDef; score: number }[] = [];
+  for (const def of listSqlFunctions(props.dbType)) {
+    const score = scoreIdentMatch(def.name, ctx.prefix);
+    if (score == null) continue;
+    scored.push({ def, score });
+  }
+  scored.sort(
+    (a, b) =>
+      a.score - b.score ||
+      a.def.name.length - b.def.name.length ||
+      a.def.name.localeCompare(b.def.name),
+  );
+  const hasParen = nextChar === '(';
+  const triggerHints = {
+    id: 'editor.action.triggerParameterHints',
+    title: '',
+  };
+  return scored.slice(0, MAX_FUNCTION_SUGGESTIONS).map(({ def }, i) => {
+    const name = applyTypedCase(def.name, ctx.prefix);
+    const item: monaco.languages.CompletionItem = {
+      label: {
+        label: def.name,
+        detail: def.noParens ? '' : `(${def.params.join(', ')})`,
+        description: def.category,
+      },
+      kind: monaco.languages.CompletionItemKind.Function,
+      insertText: name,
+      range,
+      sortText: '3' + String(i).padStart(4, '0'),
+      filterText: def.name,
+      detail: formatSqlFunctionSignature(def),
+      documentation: { value: formatSqlFunctionDoc(def) },
+    };
+    if (def.noParens) return item;
+    if (hasParen) {
+      if (def.params.length) item.command = triggerHints;
+      return item;
+    }
+    if (!def.params.length) {
+      item.insertText = `${name}()`;
+      return item;
+    }
+    item.insertText = `${name}($0)`;
+    item.insertTextRules =
+      monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet;
+    item.command = triggerHints;
+    return item;
+  });
+}
+
+/** 签名文本 + 各参数在文本中的 [start, end) 偏移；用偏移而不是子串，避免参数名撞上函数名里的字母 */
+function buildSignatureInfo(def: SqlFunctionDef): monaco.languages.SignatureInformation {
+  let label = `${def.name}(`;
+  const parameters: monaco.languages.ParameterInformation[] = [];
+  def.params.forEach((param, i) => {
+    if (i > 0) label += ', ';
+    const start = label.length;
+    label += param;
+    parameters.push({ label: [start, label.length] });
+  });
+  label += ')';
+  const doc = def.example ? `${def.desc}\n\n示例：${def.example}` : def.desc;
+  return { label, documentation: doc, parameters };
 }
 
 function registerCompletion() {
   completionDisposable?.dispose();
+  signatureDisposable?.dispose();
+  hoverDisposable?.dispose();
   completionDisposable = monaco.languages.registerCompletionItemProvider('sql', {
     triggerCharacters: [
       ...resolveSqlDialect(props.dbType).completionTriggers,
@@ -383,64 +686,79 @@ function registerCompletion() {
       const text = model.getValue();
       const offset = model.getOffsetAt(position);
       const ctx = detectCompletionContext(text, offset);
-      if (ctx.kind === 'none') {
-        return { suggestions: [] };
-      }
-
-      const range = {
-        startLineNumber: model.getPositionAt(ctx.replaceFrom).lineNumber,
-        startColumn: model.getPositionAt(ctx.replaceFrom).column,
+      const start = model.getPositionAt(ctx.replaceFrom);
+      const range: SuggestRange = {
+        startLineNumber: start.lineNumber,
+        startColumn: start.column,
         endLineNumber: position.lineNumber,
         endColumn: position.column,
       };
 
+      const suggestions: monaco.languages.CompletionItem[] = [];
       if (ctx.kind === 'table') {
-        const tables = await resolveTableNames(ctx.schema);
-        const matched = matchTableSuggestions(
-          tables,
-          ctx,
-          // 有显式 schema 时以该实例为准，避免用当前 Tab 库名误过滤
-          ctx.schema || props.instanceName,
-        );
-        return {
-          suggestions: matched.slice(0, 20).map((t, i) => {
-            const label =
-              ctx.schema || t.schema !== props.instanceName
-                ? `${t.schema ? t.schema + '.' : ''}${t.tableName}`
-                : t.tableName;
-            const insert = ctx.schema ? t.tableName : label;
-            return {
-              label,
-              kind: monaco.languages.CompletionItemKind.Class,
-              insertText: insert,
-              range,
-              // 已按全词相关度排好序；pad 保证 Monaco 稳定采用该顺序
-              sortText: '!' + String(i).padStart(4, '0'),
-              // 用表名做过滤文本，避免 Monaco 默认分词把 gp_t_xxx 截断后误过滤
-              filterText: t.tableName,
-              // 感叹号确保排在默认文本建议之前，顺序仍由前面的 pad 决定
-              preselect: i === 0,
-              detail: '表',
-            } as monaco.languages.CompletionItem;
-          }),
-        };
+        suggestions.push(...(await buildTableSuggestions(ctx, range)));
+      } else {
+        if (ctx.kind === 'column') {
+          suggestions.push(...(await buildColumnSuggestions(ctx, range)));
+        }
+        // 「别名.」后只能是字段；在引号里写的是标识符；没输入任何字符时不铺满函数列表
+        if (!ctx.qualified && !ctx.closeQuote && ctx.prefix) {
+          suggestions.push(
+            ...buildKeywordSuggestions(ctx, range),
+            ...buildFunctionSuggestions(ctx, range, text[offset] || ''),
+          );
+        }
       }
+      // incomplete：每多输入一个字符都重新计算。
+      // 不加时 Monaco 只在第一次返回的列表里本地过滤，而第一次只截取了前 N 条，
+      // 目标表/字段不在其中就再也出不来 —— 这正是「输入两个字符就提示不出来」的根因。
+      return { suggestions, incomplete: true };
+    },
+  });
 
-      if (!ctx.table) {
-        return { suggestions: [] };
-      }
-      const cols = await resolveColumns(ctx.schema, ctx.table);
-      const matchedCols = matchColumnSuggestions(cols, ctx.prefix);
+  // 光标在函数括号内：显示签名并高亮当前是第几个参数
+  signatureDisposable = monaco.languages.registerSignatureHelpProvider('sql', {
+    signatureHelpTriggerCharacters: ['(', ','],
+    signatureHelpRetriggerCharacters: [')'],
+    provideSignatureHelp: (model, position) => {
+      if (!editor || model !== editor.getModel()) return null;
+      const text = model.getValue();
+      const offset = model.getOffsetAt(position);
+      const stmt = locateStatementAt(text, offset);
+      const call = findSqlFunctionCallAt(text.slice(stmt?.start ?? 0, offset));
+      if (!call) return null;
+      const def = findSqlFunction(props.dbType, call.name);
+      if (!def || def.noParens) return null;
       return {
-        suggestions: matchedCols.slice(0, 20).map((c, i) => ({
-          label: c,
-          kind: monaco.languages.CompletionItemKind.Field,
-          insertText: c,
-          range,
-          sortText: String(i).padStart(4, '0'),
-          filterText: c,
-          detail: '列',
-        })),
+        value: {
+          signatures: [buildSignatureInfo(def)],
+          activeSignature: 0,
+          activeParameter: resolveActiveParam(def, call.argIndex),
+        },
+        dispose() {},
+      };
+    },
+  });
+
+  // 悬停函数名：只在后面紧跟左括号（或无括号伪函数）时提示，避免同名字段（如 date 列）误弹
+  hoverDisposable = monaco.languages.registerHoverProvider('sql', {
+    provideHover: (model, position) => {
+      if (!editor || model !== editor.getModel()) return null;
+      const word = model.getWordAtPosition(position);
+      if (!word) return null;
+      const def = findSqlFunction(props.dbType, word.word);
+      if (!def) return null;
+      const line = model.getLineContent(position.lineNumber);
+      const after = line.slice(word.endColumn - 1).trimStart();
+      if (!def.noParens && !after.startsWith('(')) return null;
+      return {
+        range: new monaco.Range(
+          position.lineNumber,
+          word.startColumn,
+          position.lineNumber,
+          word.endColumn,
+        ),
+        contents: [{ value: formatSqlFunctionDoc(def) }],
       };
     },
   });
@@ -603,6 +921,11 @@ watch(isDark, () => {
 onBeforeUnmount(() => {
   completionDisposable?.dispose();
   completionDisposable = null;
+  signatureDisposable?.dispose();
+  signatureDisposable = null;
+  hoverDisposable?.dispose();
+  hoverDisposable = null;
+  columnCache.clear();
   // 先卸下 Model，再 dispose 编辑器与各页签 Model，避免重复 dispose
   if (editor) {
     if (currentTabId) {
