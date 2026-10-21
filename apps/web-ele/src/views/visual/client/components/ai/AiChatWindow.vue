@@ -331,11 +331,19 @@ function exposeOpen(payload?: {
   }
 }
 
+/** 清空当前浮窗里的对话。ETL 换任务时调用，窗口本身保持打开。 */
+function resetConversation() {
+  stop();
+  newConversation();
+  pendingContext.value = {};
+}
+
 defineExpose({
   open: exposeOpen,
   minimize,
   restore,
   close,
+  resetConversation,
 });
 onBeforeUnmount(() => {
   if (props.etlMode) stop();

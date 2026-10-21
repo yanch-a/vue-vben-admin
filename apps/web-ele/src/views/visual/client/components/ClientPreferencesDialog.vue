@@ -23,6 +23,7 @@ const {
   uiFontSize,
   aiChatFontSize,
   hideTableComments,
+  compactConnectionTitle,
   SQL_FONT_MIN,
   SQL_FONT_MAX,
   UI_FONT_MIN,
@@ -120,6 +121,12 @@ const {
           <span class="font-size-unit">px</span>
         </div>
         <div class="font-size-hint">{{ $tr('AI 助手浮窗消息、输入区、SQL 卡片与任务栏') }}</div>
+      </ElFormItem>
+      <ElFormItem :label="$tr('连接页签')">
+        <ElCheckbox v-model="compactConnectionTitle">{{ $tr('精简链接标题') }}</ElCheckbox>
+        <div class="font-size-hint">
+          {{ $tr('勾选后连接栏只显示连接名称。环境用页签左上角的小标记表示，不占用标题位置，悬停仍可看到环境、类型和主机') }}
+        </div>
       </ElFormItem>
       <ElFormItem :label="$tr('对象树')">
         <ElCheckbox v-model="hideTableComments">{{ $tr('隐藏表备注') }}</ElCheckbox>

@@ -49,6 +49,31 @@ function joinRoutePath(parent: string, child: unknown): string {
   return joined.startsWith('/') ? joined : `/${joined}`;
 }
 
+/**
+ * 数据同步页必须缓存。菜单当初建成时没勾「页面缓存」，
+ * 切到 SQL 编辑器再回来会整页重建，任务落到下拉第一项，运行日志也没了。
+ */
+function enableStatefulPageCache(
+  menus: RouteRecordStringComponent[],
+): RouteRecordStringComponent[] {
+  return menus.map((menu) => {
+    const pageKey = toPageKey(menu.component);
+    const cached =
+      pageKey === '/visual/etl/index.vue' || menu.name === 'EtlWorkspace';
+    const children = Array.isArray(menu.children)
+      ? enableStatefulPageCache(menu.children as RouteRecordStringComponent[])
+      : menu.children;
+    if (!cached) {
+      return children === menu.children ? menu : { ...menu, children };
+    }
+    return {
+      ...menu,
+      children,
+      meta: { ...menu.meta, keepAlive: true },
+    };
+  });
+}
+
 function isPageComponent(component?: unknown): boolean {
   return (
     typeof component === 'string' &&
@@ -431,7 +456,7 @@ async function generateAccess(options: GenerateMenuAndRoutesOptions) {
         message: `${$t('common.loadingMenu')}...`,
       });
       const menus = await getAllMenusApi();
-      const cleaned = sanitizeMenuTree(menus || []);
+      const cleaned = enableStatefulPageCache(sanitizeMenuTree(menus || []));
       const flattened = flattenPageDetailChildren(cleaned);
       const withHidden = mergeHiddenPageRoutes(flattened);
       const localized = localizeMenuTitles(withHidden);

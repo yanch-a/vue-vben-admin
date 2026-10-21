@@ -281,6 +281,8 @@ export interface EtlWorkspaceRow {
   createTime?: string;
   updateTime?: string;
   updateBy?: string;
+  /** 本次「保存为新版本」留下的历史版本号。普通保存没有。 */
+  historyVersion?: number;
 }
 
 /** 轮询结果。changed 为 false 时没有 draftJson。 */
@@ -335,6 +337,11 @@ export interface KettleImportResult {
 /** 查询当前用户的任务区，列表不携带大 JSON。 */
 export function listEtlWorkspaces() {
   return request({ url: `${url}list`, method: 'get' });
+}
+
+/** 保存当前用户拖动后的工作区顺序（从上到下的 ID），返回排好序的列表。只影响自己看到的顺序。 */
+export function saveEtlWorkspaceOrder(ids: Array<number | string>) {
+  return request({ url: `${url}order`, method: 'post', data: { ids } });
 }
 
 /** 获取任务区完整草稿。 */
@@ -407,7 +414,7 @@ export function listEtlTables(id: number | string, instance: string) {
     timeout: 0,
   });
 }
-/** 查询步骤预览，只读执行必要上游，不运行写入节点。 */
+/** 查询步骤预览，只读执行必要上游，不运行写入节点。timeout 为 0 表示不按浏览器请求时长掐断慢查询。 */
 export function previewEtlStep(
   json: string,
   pipelineId: string,
@@ -483,15 +490,64 @@ export interface EtlRun {
   cancelRequested: boolean;
 }
 
-/** 使用 revision 乐观锁保存草稿。 */
+/** 保存时可选留下的历史快照。列表不含配置正文。 */
+export interface EtlHistoryVersion {
+  id: string | number;
+  workspaceId?: string | number;
+  userId?: string | number;
+  versionNo: number;
+  remark?: string;
+  createBy?: string;
+  createTime?: string;
+}
+
+/** 使用 revision 乐观锁保存草稿。saveAsVersion 为 true 时额外留下可切换的历史快照。 */
 export function saveEtlWorkspace(data: {
   id: number | string;
   workspaceName: string;
   description?: string;
   draftJson: string;
   revision: number;
+  saveAsVersion?: boolean;
+  versionRemark?: string;
 }) {
   return request({ url: `${url}save`, method: 'post', data });
+}
+
+/** 当前工作区的历史快照，新的在前。 */
+export function listEtlHistory(id: number | string) {
+  return request({
+    url: `${url}${encodeURIComponent(id)}/history`,
+    method: 'get',
+  });
+}
+
+/** 用历史快照替换当前草稿。revision 对不上时服务端直接失败。 */
+export function restoreEtlHistory(
+  id: number | string,
+  historyId: string | number,
+  revision: number,
+) {
+  return request({
+    url: `${url}${encodeURIComponent(id)}/history/${encodeURIComponent(historyId)}/restore`,
+    method: 'post',
+    data: { revision },
+  });
+}
+
+/**
+ * 复制成自己的新工作区。
+ * draftJson 有值时用这份未保存内容，否则复制服务端已保存的草稿。
+ */
+export function copyEtlWorkspace(
+  id: number | string,
+  data: { workspaceName?: string; draftJson?: string },
+) {
+  return request({
+    url: `${url}${encodeURIComponent(id)}/copy`,
+    method: 'post',
+    data,
+  });
 }
 
 /** 对页面、JSON 或 AI 产生的候选配置执行相同的服务端校验。 */
@@ -504,11 +560,15 @@ export function validateEtlWorkspace(json: string, pipelineId?: string) {
   });
 }
 
-/** 发布不可变版本。 */
+/**
+ * 发布不可变版本。
+ * 发布前会连真实库做结构预检，慢查询不能按默认 10 秒掐断。
+ */
 export function publishEtlWorkspace(id: number | string) {
   return request({
     url: `${url}${encodeURIComponent(id)}/publish`,
     method: 'post',
+    timeout: 0,
   });
 }
 

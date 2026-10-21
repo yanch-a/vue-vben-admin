@@ -183,6 +183,9 @@ function onSqlAction(
             {{ item.msg.etlConfig.workspace?.pipelines?.length || 0 }}
             {{ $tr('个任务') }}</strong
           >
+          <p v-if="item.msg.etlConfig.editScope?.mode === 'pipeline'">
+            {{ $tr('只合并当前任务，其他任务保持不变') }}
+          </p>
           <p>{{ item.msg.etlConfig.explanation }}</p>
           <p
             v-for="warning in item.msg.etlConfig.warnings || []"

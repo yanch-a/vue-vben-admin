@@ -18,6 +18,7 @@ import { onBeforeRouteLeave } from 'vue-router';
 import { Page } from '@vben/common-ui';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import {
+  ArrowDown,
   Fold,
   Expand,
   Plus,
@@ -25,9 +26,11 @@ import {
   Refresh,
   MoreFilled,
   MagicStick,
+  Sort,
 } from '@element-plus/icons-vue';
 import type {
   EtlConnectionOption,
+  EtlHistoryVersion,
   EtlNode,
   EtlResource,
   EtlRun,
@@ -37,6 +40,7 @@ import type {
 } from '#/api/visual/etl';
 import {
   cancelEtlRun,
+  copyEtlWorkspace,
   createEtlWorkspace,
   deleteEtlWorkspace,
   executeEtlWorkflow,
@@ -48,7 +52,9 @@ import {
   listEtlWorkspaces,
   previewEtlStep,
   publishEtlWorkspace,
+  restoreEtlHistory,
   saveEtlWorkspace,
+  saveEtlWorkspaceOrder,
   syncEtlWorkspace,
   validateEtlWorkspace,
 } from '#/api/visual/etl';
@@ -66,10 +72,21 @@ import WorkspaceSchedule from './WorkspaceSchedule.vue';
 import WorkspaceNotify from './WorkspaceNotify.vue';
 import EtlShareDialog from './EtlShareDialog.vue';
 import EtlMergeDialog from './EtlMergeDialog.vue';
+import EtlHistoryDialog from './EtlHistoryDialog.vue';
 import { translateUiText } from '#/locales/ui-text';
 import { createEtlRequestGate } from './etlRequestGate';
 import { createEtlPreviewSession } from './etlPreviewSession';
 import EtlFieldRules from './EtlFieldRules.vue';
+import EtlCanvas from './EtlCanvas.vue';
+import { createEtlHistory } from './etlHistory';
+import {
+  ETL_WORKSPACE_SORT_KEY,
+  ETL_WORKSPACE_SORT_OPTIONS,
+  moveEtlWorkspace,
+  parseEtlWorkspaceSort,
+  sortEtlWorkspaces,
+} from './workspaceSort';
+import type { EtlWorkspaceSortMode } from './workspaceSort';
 import EtlOperatorEditor from './EtlOperatorEditor.vue';
 import { createFlexibleExamplePipeline, createOperatorConfig, ETL_OPERATORS, etlInputReferences, isEtlRowSource } from './etlOperators';
 import { createEtlSqlDraftGuard } from './etlSqlDraftGuard';
@@ -81,11 +98,23 @@ import {
   saveEtlLocalDraft,
 } from './etlDraftCache';
 import {
+  preferredOpenPipelineId,
+  readLastEtlWorkspace,
+  rememberEtlWorkspace,
+} from './etlTabState';
+import {
+  buildAiWorkspace,
+  type EtlAiEditPreference,
   cloneDocument,
   createSqlPipeline,
   createWorkspaceDocument,
+  duplicatePipeline,
   etlId,
+  mergeAiPipelineEdit,
   normalizeSqlDocument,
+  pipelineEditJson,
+  restoreSavedPipeline,
+  sameEtlValue,
   syncStepDependencies,
 } from './etlModel';
 import {
@@ -106,6 +135,7 @@ const SqlEditor = defineAsyncComponent(
 );
 const loading = ref(false),
   saving = ref(false),
+  publishing = ref(false),
   running = ref(false),
   previewing = ref(false);
 const sidebarOpen = ref(localStorage.getItem('lemon-etl-sidebar') !== 'closed');
@@ -160,6 +190,10 @@ const doc = ref<EtlWorkspaceDocument>(createWorkspaceDocument('new', ''));
 const connections = ref<EtlConnectionOption[]>([]);
 const activePipelineId = ref(''),
   selectedNodeId = ref('');
+/** 步骤视图：表单或画布，两者编辑同一份任务 JSON。 */
+const STEPS_VIEW_KEY = 'lemon-etl-steps-view';
+const canvasEditorOpen = ref(false);
+const stepsView = ref<'canvas' | 'form'>(localStorage.getItem(STEPS_VIEW_KEY) === 'canvas' ? 'canvas' : 'form');
 const editorMode = ref<'steps' | 'json'>('steps'),
   jsonText = ref(''),
   jsonValid = ref(true),
@@ -544,6 +578,176 @@ function stepTitle(step: EtlNode) {
         ? '字段选择 / 重命名'
         : ETL_OPERATORS.find((operator) => operator.type === step.type)?.label || step.type;
 }
+function canvasNodeTitle(step: EtlNode) {
+  return step.name || translateUiText(stepTitle(step));
+}
+function canvasNodeSubtitle(step: EtlNode) {
+  const kind = translateUiText(stepTitle(step));
+  return step.resourceRef ? `${kind} · ${translateUiText(sourceLabel(step.resourceRef))}` : kind;
+}
+/** 切换表单 / 画布 / JSON；离开 JSON 前先校验并应用 JSON。 */
+async function changeEditorView(view: 'canvas' | 'form' | 'json') {
+  if (view === 'json') {
+    canvasEditorOpen.value = false;
+    if (editorMode.value !== 'json') await changeMode('json');
+    return;
+  }
+  if (editorMode.value === 'json') {
+    await changeMode('steps');
+    if (editorMode.value === 'json') return;
+  }
+  stepsView.value = view;
+  canvasEditorOpen.value = false;
+  localStorage.setItem(STEPS_VIEW_KEY, view);
+}
+/** 编辑视图对整个 ETL 页面生效，切换任务不改变；表单 / 画布记在本机，JSON 随文档重新加载回到步骤视图。 */
+const EDITOR_VIEW_OPTIONS = [
+  { label: '表单', value: 'form' },
+  { label: '画布', value: 'canvas' },
+  { label: 'JSON', value: 'json' },
+] as const;
+const currentEditorView = computed(() => (editorMode.value === 'json' ? 'json' : stepsView.value));
+const NODE_DRAWER_WIDTH_KEY = 'lemon-etl-node-drawer-width';
+const NODE_DRAWER_MIN_WIDTH = 360;
+const NODE_DRAWER_DEFAULT_WIDTH = 1000;
+function clampNodeDrawerWidth(width: number) {
+  const max = Math.max(NODE_DRAWER_MIN_WIDTH, Math.floor(window.innerWidth * 0.9));
+  return Math.min(max, Math.max(NODE_DRAWER_MIN_WIDTH, Math.round(width) || NODE_DRAWER_DEFAULT_WIDTH));
+}
+const nodeDrawerWidth = ref(clampNodeDrawerWidth(Number(localStorage.getItem(NODE_DRAWER_WIDTH_KEY)) || NODE_DRAWER_DEFAULT_WIDTH));
+const nodeDrawerStyle = computed(() => ({ '--etl-node-drawer-width': `${nodeDrawerWidth.value}px` }));
+/** 拖动抽屉左边缘调整宽度，松开后记住。 */
+function startNodeDrawerResize(event: PointerEvent) {
+  event.preventDefault();
+  const move = (next: PointerEvent) => {
+    nodeDrawerWidth.value = clampNodeDrawerWidth(window.innerWidth - next.clientX);
+  };
+  const stop = () => {
+    window.removeEventListener('pointermove', move);
+    window.removeEventListener('pointerup', stop);
+    window.removeEventListener('pointercancel', stop);
+    document.body.style.userSelect = '';
+    document.body.style.cursor = '';
+    localStorage.setItem(NODE_DRAWER_WIDTH_KEY, String(nodeDrawerWidth.value));
+  };
+  document.body.style.userSelect = 'none';
+  document.body.style.cursor = 'col-resize';
+  window.addEventListener('pointermove', move);
+  window.addEventListener('pointerup', stop);
+  window.addEventListener('pointercancel', stop);
+}
+function resetNodeDrawerWidth() {
+  nodeDrawerWidth.value = clampNodeDrawerWidth(NODE_DRAWER_DEFAULT_WIDTH);
+  localStorage.setItem(NODE_DRAWER_WIDTH_KEY, String(nodeDrawerWidth.value));
+}
+/** 画布显示全部任务：点到哪个任务的节点，就把它设为当前任务，表单 / JSON / 运行都作用在它上面。 */
+function selectCanvasCell(pipelineId: string, nodeId?: string) {
+  const changed = activePipelineId.value !== pipelineId;
+  activePipelineId.value = pipelineId;
+  if (nodeId) selectedNodeId.value = nodeId;
+  else if (changed) selectedNodeId.value = pipeline.value?.nodes[0]?.id || '';
+}
+/**
+ * 撤销 / 重做：记在整份工作区文档上，表单、画布、JSON 改动都能撤销，三个视图保持一致。
+ * 文档变化后停顿 400ms 记一步（拖动结束、一次连线、一次改名各一步）；节点抽屉打开期间的修改合并成一步。
+ * 打开 / 重新加载工作区时清空；保存不清空，撤销后草稿会重新变成未保存。运行任务不改文档，不进历史。
+ */
+const docHistory = createEtlHistory();
+const historyState = ref({ canRedo: false, canUndo: false });
+let historyTimer: ReturnType<typeof setTimeout> | undefined;
+let drawerSession = 0;
+/** 当前合并会话；节点抽屉打开期间为 drawer-N。 */
+let historyKey = '';
+function refreshHistoryState() {
+  historyState.value = { canRedo: docHistory.canRedo(), canUndo: docHistory.canUndo() };
+}
+function commitDocHistory() {
+  if (historyTimer) clearTimeout(historyTimer);
+  historyTimer = undefined;
+  if (!activeWorkspace.value) return;
+  docHistory.commit(doc.value, historyKey);
+  refreshHistoryState();
+}
+function resetDocHistory() {
+  const reset = () => {
+    if (historyTimer) clearTimeout(historyTimer);
+    historyTimer = undefined;
+    docHistory.reset(doc.value);
+    refreshHistoryState();
+  };
+  reset();
+  // 加载时随后的规整会再触发一次文档监听，等它排队后再以最终内容为起点。
+  void nextTick(reset);
+}
+watch(
+  doc,
+  () => {
+    if (historyTimer) clearTimeout(historyTimer);
+    historyTimer = setTimeout(commitDocHistory, 400);
+  },
+  { deep: true },
+);
+watch(canvasEditorOpen, (open) => {
+  // 打开抽屉前的修改先单独记一步；关闭时把剩下的修改并进这次编辑，再结束会话。
+  commitDocHistory();
+  historyKey = open ? `drawer-${++drawerSession}` : '';
+});
+function applyDocHistory(next: EtlWorkspaceDocument | null) {
+  if (!next) return;
+  canvasEditorOpen.value = false;
+  doc.value = next;
+  if (!doc.value.pipelines.some((item) => item.id === activePipelineId.value))
+    activePipelineId.value = doc.value.pipelines[0]?.id || '';
+  if (!pipeline.value?.nodes.some((item) => item.id === selectedNodeId.value))
+    selectedNodeId.value = pipeline.value?.nodes[0]?.id || '';
+  refreshHistoryState();
+}
+function undoDoc() {
+  if (editorMode.value === 'json') return;
+  commitDocHistory();
+  applyDocHistory(docHistory.undo());
+}
+function redoDoc() {
+  if (editorMode.value === 'json') return;
+  commitDocHistory();
+  applyDocHistory(docHistory.redo());
+}
+/** 画布任务菜单 / 工具栏运行：先切到该任务，再走原有的运行流程（含保存和校验）。 */
+async function runCanvasTask(pipelineId: string) {
+  selectCanvasCell(pipelineId);
+  await nextTick();
+  await runPipeline();
+}
+async function renameCanvasTask(pipelineId: string) {
+  const task = doc.value.pipelines.find((item) => item.id === pipelineId);
+  if (!task) return;
+  try {
+    const { value } = await ElMessageBox.prompt(translateUiText('任务名称'), translateUiText('改名'), {
+      inputValue: task.name,
+      inputPattern: /\S+/,
+      inputErrorMessage: translateUiText('名称不能为空'),
+      confirmButtonText: translateUiText('确定'),
+      cancelButtonText: translateUiText('取消'),
+    });
+    // 等待期间任务可能已被删除或文档被替换。
+    const current = doc.value.pipelines.find((item) => item.id === pipelineId);
+    if (current) current.name = value.trim().slice(0, 100);
+  } catch {
+    /* 取消保留原名。 */
+  }
+}
+function editCanvasNode(pipelineId: string, nodeId: string) {
+  selectCanvasCell(pipelineId, nodeId);
+  canvasEditorOpen.value = true;
+}
+async function removeCanvasNode(pipelineId: string, nodeId: string) {
+  selectCanvasCell(pipelineId, nodeId);
+  await nextTick();
+  await removeStep();
+}
+function onCanvasDrawerKey(event: KeyboardEvent) {
+  if (event.key === 'Escape' && canvasEditorOpen.value) canvasEditorOpen.value = false;
+}
 function sourceLabel(ref?: string) {
   return doc.value.resources[ref || '']?.displayName || '请选择数据源';
 }
@@ -639,6 +843,61 @@ async function createWorkspace() {
 async function refreshWorkspaces() {
   workspaces.value = unbox<EtlWorkspaceRow[]>(await listEtlWorkspaces()) || [];
 }
+/** 左侧工作区排序方式记在本机；自定义顺序存在后端，换设备也一样。 */
+const workspaceSort = ref(parseEtlWorkspaceSort(localStorage.getItem(ETL_WORKSPACE_SORT_KEY)));
+const sortedWorkspaces = computed(() => sortEtlWorkspaces(workspaces.value, workspaceSort.value, workspaceDisplayName));
+const workspaceDrag = ref<{ after: boolean; overId: string; sourceId: string }>();
+let workspaceOrderRequest = 0;
+function setWorkspaceSort(command: string) {
+  const next = { ...workspaceSort.value };
+  if (command === 'asc' || command === 'desc') next.desc = command === 'desc';
+  else {
+    next.mode = command as EtlWorkspaceSortMode;
+    // 时间默认最新在前，其余默认正序。
+    next.desc = command === 'updated' || command === 'created';
+  }
+  workspaceSort.value = next;
+  localStorage.setItem(ETL_WORKSPACE_SORT_KEY, JSON.stringify(next));
+}
+function onWorkspaceDragStart(event: DragEvent, workspace: EtlWorkspaceRow) {
+  workspaceDrag.value = { sourceId: String(workspace.id), overId: '', after: false };
+  if (event.dataTransfer) {
+    event.dataTransfer.effectAllowed = 'move';
+    event.dataTransfer.setData('text/plain', String(workspace.id));
+  }
+}
+function onWorkspaceDragOver(event: DragEvent, workspace: EtlWorkspaceRow) {
+  if (!workspaceDrag.value) return;
+  event.preventDefault();
+  if (event.dataTransfer) event.dataTransfer.dropEffect = 'move';
+  const box = (event.currentTarget as HTMLElement).getBoundingClientRect();
+  workspaceDrag.value = { ...workspaceDrag.value, overId: String(workspace.id), after: event.clientY > box.top + box.height / 2 };
+}
+/** 松开后立即按新顺序显示，再整体保存；失败时恢复为后端的顺序。 */
+async function onWorkspaceDrop(event: DragEvent) {
+  const drag = workspaceDrag.value;
+  workspaceDrag.value = undefined;
+  if (!drag?.overId) return;
+  event.preventDefault();
+  const shown = sortedWorkspaces.value.map((item) => String(item.id));
+  let next = moveEtlWorkspace(shown, drag.sourceId, drag.overId, drag.after);
+  if (!next) return;
+  // 倒序显示时，保存的仍是正序。
+  if (workspaceSort.value.desc) next = [...next].reverse();
+  const byId = new Map(workspaces.value.map((item) => [String(item.id), item]));
+  workspaces.value = next.map((id) => byId.get(id)!).filter(Boolean);
+  const request = ++workspaceOrderRequest;
+  try {
+    const saved = unbox<EtlWorkspaceRow[]>(await saveEtlWorkspaceOrder(next));
+    if (request === workspaceOrderRequest && Array.isArray(saved)) workspaces.value = saved;
+  } catch (error) {
+    say('error', errorMessage(error));
+    if (request === workspaceOrderRequest) await refreshWorkspaces();
+  }
+}
+function onWorkspaceDragEnd() {
+  workspaceDrag.value = undefined;
+}
 /** 每次打开意图都有独立代次，陈旧响应及其 finally 不允许覆盖新的工作区。 */
 async function openWorkspace(
   row: EtlWorkspaceRow,
@@ -646,14 +905,12 @@ async function openWorkspace(
   force = false,
 ) {
   const request = workspaceRequests.begin();
-  if (
-    !force &&
-    String(activeWorkspace.value?.id) === String(row.id) &&
-    dirty.value
-  ) {
+  // 已经停在这个工作区时不要整页重开。否则会落到下拉第一项，并清掉正在看的运行日志。
+  if (!force && String(activeWorkspace.value?.id) === String(row.id)) {
     cachePaused = false;
     loading.value = false;
-    flushActiveDraft();
+    if (dirty.value) flushActiveDraft();
+    rememberEtlWorkspace(row.id);
     return true;
   }
   // 在暂停缓存前同步落盘，不能依赖尚未触发的 400ms debounce。
@@ -680,6 +937,7 @@ async function openWorkspace(
     suppressedPipelineIds.value = [];
     activeWorkspace.value = detail;
     doc.value = document;
+    resetDocHistory();
     draftConflict.value = undefined;
     editorMode.value = 'steps';
     activePipelineId.value = doc.value.pipelines[0]?.id || '';
@@ -702,6 +960,16 @@ async function openWorkspace(
     // 本地稿永不因 revision 前进自动删除；能对齐祖先时先合并，对不齐才整份保留。
     if (force) clearEtlLocalDraft(detail.id);
     else restoreLocalDraft(detail, serverDoc);
+    // 本地稿可能记下了上次任务；若该标签已关闭，则改用仍开着的第一个，而不是下拉第一项。
+    activePipelineId.value = preferredOpenPipelineId(
+      doc.value.pipelines,
+      detail.id,
+      activePipelineId.value,
+    );
+    if (!pipeline.value?.nodes.some((item) => item.id === selectedNodeId.value)) {
+      selectedNodeId.value = pipeline.value?.nodes[0]?.id || '';
+    }
+    rememberEtlWorkspace(detail.id);
     scheduleCollabPull();
     await refreshRuns();
     if (!workspaceRequests.current(request)) return false;
@@ -822,7 +1090,10 @@ function restoreLocalDraft(detail: EtlWorkspaceRow, serverDoc: EtlWorkspaceDocum
       );
       return;
     }
-    if (localDoc) doc.value = localDoc;
+    if (localDoc) {
+      doc.value = localDoc;
+      resetDocHistory();
+    }
     activeWorkspace.value = {
       ...detail,
       workspaceName: local.workspaceName || detail.workspaceName,
@@ -891,7 +1162,7 @@ function applyCollaborationMerge(
   editorMode.value = mode;
   activePipelineId.value = doc.value.pipelines.some((item) => item.id === pipelineId)
     ? pipelineId
-    : doc.value.pipelines[0]?.id || '';
+    : preferredOpenPipelineId(doc.value.pipelines, detail.id);
   selectedNodeId.value = pipeline.value?.nodes.some((item) => item.id === nodeId)
     ? nodeId
     : pipeline.value?.nodes[0]?.id || '';
@@ -1260,7 +1531,7 @@ async function prepare(): Promise<boolean> {
 function incompleteDraftWarnings() {
   return validationWarnings.value.filter((item) => DRAFT_INCOMPLETE.test(item));
 }
-async function saveDraft(): Promise<boolean> {
+async function saveDraft(asVersion = false, versionRemark = ''): Promise<boolean> {
   if (!activeWorkspace.value || saving.value) return false;
   if (mergeConflicts.value.length) {
     say('warning', '请先处理协同冲突后再保存');
@@ -1277,14 +1548,25 @@ async function saveDraft(): Promise<boolean> {
   saving.value = true;
   const request = workspaceRequests.stamp();
   try {
-    return await commitDraft(request, false);
+    return await commitDraft(request, false, asVersion, versionRemark);
   } finally {
     saving.value = false;
   }
 }
 
+/** 保存成功后的提示。留下历史快照时带上版本号。 */
+function savedMessage(retried: boolean, versionNo?: number) {
+  if (versionNo) return '已保存为版本' + ' ' + versionNo;
+  return retried ? '已按最新版本合并并保存' : '已保存';
+}
+
 /** 按当前已知的服务端版本保存。版本被别人推进时先合并，合并不了就停，不覆盖。 */
-async function commitDraft(request: number, retried: boolean): Promise<boolean> {
+async function commitDraft(
+  request: number,
+  retried: boolean,
+  asVersion = false,
+  versionRemark = '',
+): Promise<boolean> {
   if (!(await prepare())) return false;
   const row = activeWorkspace.value;
   if (!row) return false;
@@ -1299,6 +1581,8 @@ async function commitDraft(request: number, retried: boolean): Promise<boolean> 
         workspaceName: row.workspaceName,
         description: row.description,
         draftJson: payload,
+        saveAsVersion: asVersion || undefined,
+        versionRemark: asVersion ? versionRemark : undefined,
       }),
     );
     const current = activeWorkspace.value;
@@ -1317,7 +1601,7 @@ async function commitDraft(request: number, retried: boolean): Promise<boolean> 
       }
       const listed = workspaces.value.find((item) => sameWorkspace(item.id, row.id));
       if (listed) listed.revision = committed.revision;
-      say('success', retried ? '已按最新版本合并并保存' : '已保存');
+      say('success', savedMessage(retried, committed.historyVersion));
       return true;
     }
     activeWorkspace.value = {
@@ -1343,7 +1627,7 @@ async function commitDraft(request: number, retried: boolean): Promise<boolean> 
     if (!dirty.value) clearEtlLocalDraft(row.id);
     else flushActiveDraft();
     await refreshWorkspaces();
-    say('success', retried ? '已按最新版本合并并保存' : '已保存');
+    say('success', savedMessage(retried, committed.historyVersion));
     return true;
   } catch (error) {
     if (
@@ -1353,7 +1637,7 @@ async function commitDraft(request: number, retried: boolean): Promise<boolean> 
       activeWorkspace.value
     ) {
       const incorporated = await incorporateLatest(activeWorkspace.value.id, request);
-      if (incorporated === 'clean') return commitDraft(request, true);
+      if (incorporated === 'clean') return commitDraft(request, true, asVersion, versionRemark);
       if (incorporated === 'conflict') {
         say('warning', '保存时遇到新版本，无冲突的修改已并入');
         return false;
@@ -1424,21 +1708,26 @@ async function changeMode(mode: 'steps' | 'json') {
   editorMode.value = mode;
   if (!wasDirty) markSaved();
   if (!pipeline.value)
-    activePipelineId.value = doc.value.pipelines[0]?.id || '';
+    activePipelineId.value = preferredOpenPipelineId(
+      doc.value.pipelines,
+      activeWorkspace.value?.id || '',
+    );
   if (!node.value) selectedNodeId.value = pipeline.value?.nodes[0]?.id || '';
 }
 async function publish() {
+  if (publishing.value) return;
   const request = workspaceRequests.stamp();
   const id = activeWorkspace.value?.id;
-  if (dirty.value && !(await saveDraft())) return;
-  if (
-    !activeWorkspace.value ||
-    !workspaceRequests.current(request) ||
-    !sameWorkspace(activeWorkspace.value.id, id) ||
-    dirty.value
-  )
-    return;
+  publishing.value = true;
   try {
+    if (dirty.value && !(await saveDraft())) return;
+    if (
+      !activeWorkspace.value ||
+      !workspaceRequests.current(request) ||
+      !sameWorkspace(activeWorkspace.value.id, id) ||
+      dirty.value
+    )
+      return;
     await publishEtlWorkspace(id!);
     if (!workspaceRequests.current(request) || !sameWorkspace(activeWorkspace.value?.id, id)) return;
     say('success', '发布成功');
@@ -1454,6 +1743,8 @@ async function publish() {
     }
   } catch (error) {
     say('error', errorMessage(error));
+  } finally {
+    publishing.value = false;
   }
 }
 async function deleteWorkspace() {
@@ -1480,7 +1771,7 @@ function openWorkspaceMenu(event: MouseEvent, workspace: EtlWorkspaceRow) {
   workspaceMenu.value = {
     id: workspace.id,
     x: Math.max(8, Math.min(event.clientX, window.innerWidth - 160)),
-    y: Math.max(8, Math.min(event.clientY, window.innerHeight - 220)),
+    y: Math.max(8, Math.min(event.clientY, window.innerHeight - 280)),
   };
 }
 function dismissWorkspaceMenu() {
@@ -1581,6 +1872,153 @@ async function deleteWorkspaceFromMenu() {
   await deleteWorkspace();
 }
 
+/** 复制后的默认名称。后缀写进工作区名字，不随界面语言改变。 */
+function suggestedCopyName(name?: string) {
+  const base = (name || '').trim() || '工作区';
+  const combined = `${base} 副本`;
+  return combined.length <= 100 ? combined : combined.slice(0, 100);
+}
+
+/**
+ * 右键或「更多」复制工作区。
+ * 当前工作区有未保存修改时，可以选择把这些修改一起复制走。
+ */
+async function copyWorkspaceFromMenu() {
+  const target = menuWorkspace() || activeWorkspace.value;
+  dismissWorkspaceMenu();
+  if (!target) return;
+  let draftJson: string | undefined;
+  const copyingActive = sameWorkspace(target.id, activeWorkspace.value?.id);
+  if (copyingActive && dirty.value) {
+    try {
+      await ElMessageBox.confirm(
+        translateUiText('当前有未保存修改。复制时要包含这些修改吗？'),
+        translateUiText('复制工作区'),
+        {
+          type: 'warning',
+          confirmButtonText: translateUiText('包含未保存修改'),
+          cancelButtonText: translateUiText('只复制已保存内容'),
+          distinguishCancelAndClose: true,
+        },
+      );
+      if (editorMode.value === 'json' && !jsonValid.value) {
+        say('error', 'JSON 格式错误');
+        return;
+      }
+      draftJson = currentDraftJson();
+    } catch (error: any) {
+      if (error === 'cancel') draftJson = undefined;
+      else return;
+    }
+  }
+  try {
+    const { value } = await ElMessageBox.prompt(
+      translateUiText('新工作区名称'),
+      translateUiText('复制工作区'),
+      {
+        inputValue: suggestedCopyName(target.workspaceName),
+        inputPattern: /\S+/,
+        inputErrorMessage: translateUiText('名称不能为空'),
+        confirmButtonText: translateUiText('确定'),
+        cancelButtonText: translateUiText('取消'),
+      },
+    );
+    const row = unbox<EtlWorkspaceRow>(
+      await copyEtlWorkspace(target.id, {
+        workspaceName: value.trim().slice(0, 100),
+        draftJson,
+      }),
+    );
+    await refreshWorkspaces();
+    await openWorkspace(row);
+    say('success', '已复制工作区');
+  } catch (error: any) {
+    if (error !== 'cancel' && error !== 'close') say('error', errorMessage(error));
+  }
+}
+
+const historyDialog = ref<InstanceType<typeof EtlHistoryDialog>>();
+const historyBusy = ref(false);
+
+/** 「更多」里的历史版本。有未解决的协同冲突时先处理，避免切走后对不上。 */
+function openHistory() {
+  dismissWorkspaceMenu();
+  if (!activeWorkspace.value) return;
+  if (mergeConflicts.value.length || draftConflict.value) {
+    say('warning', '请先处理协同冲突后再保存');
+    return;
+  }
+  void historyDialog.value?.open(activeWorkspace.value.id);
+}
+
+/** 保存旁的下拉：先问一句说明，再按新版本保存。取消则什么都不写。 */
+async function onSaveCommand(command: string) {
+  if (command !== 'version' || !activeWorkspace.value || saving.value) return;
+  if (mergeConflicts.value.length) {
+    say('warning', '请先处理协同冲突后再保存');
+    return;
+  }
+  if (draftConflict.value) {
+    say('warning', '请先选择保留本地或使用服务端版本，也可导出本地备份');
+    return;
+  }
+  if (syncBlocked.value) {
+    say('warning', 'JSON 还没写完，暂时不能自动并入对方的更新。请先修好 JSON 或导出备份。');
+    return;
+  }
+  try {
+    const { value } = await ElMessageBox.prompt(
+      translateUiText('可为这个版本写一句说明，也可以留空。'),
+      translateUiText('保存为新版本'),
+      {
+        inputValue: '',
+        confirmButtonText: translateUiText('保存'),
+        cancelButtonText: translateUiText('取消'),
+        inputPlaceholder: translateUiText('版本说明（可选）'),
+        inputValidator: (input: string) =>
+          (input || '').trim().length <= 200 ||
+          translateUiText('版本说明不能超过 200 个字'),
+      },
+    );
+    await saveDraft(true, (value || '').trim().slice(0, 200));
+  } catch (error: any) {
+    if (error !== 'cancel' && error !== 'close') say('error', errorMessage(error));
+  }
+}
+
+/** 用选中的历史快照替换当前草稿。本地未保存内容需要先确认丢掉。 */
+async function restoreHistory(item: EtlHistoryVersion) {
+  if (historyBusy.value || !activeWorkspace.value) return;
+  try {
+    await ElMessageBox.confirm(
+      translateUiText('切换后当前草稿会变成这个版本。未保存的修改会丢掉，已发布的定时版本不会变。继续？'),
+      translateUiText('历史版本'),
+      {
+        type: 'warning',
+        confirmButtonText: translateUiText('切换'),
+        cancelButtonText: translateUiText('取消'),
+      },
+    );
+  } catch {
+    return;
+  }
+  const id = activeWorkspace.value.id;
+  const revision = knownRemoteRevision.value || activeWorkspace.value.revision;
+  historyBusy.value = true;
+  try {
+    const row = unbox<EtlWorkspaceRow>(await restoreEtlHistory(id, item.id, revision));
+    if (!sameWorkspace(activeWorkspace.value?.id, id)) return;
+    const opened = await openWorkspace(row, false, true);
+    if (!opened) return;
+    historyDialog.value?.close();
+    say('success', '已切换到版本' + ' ' + item.versionNo);
+  } catch (error) {
+    say('error', errorMessage(error));
+  } finally {
+    historyBusy.value = false;
+  }
+}
+
 /** 「更多」作用在当前工作区，先记下目标再走和右键相同的入口。 */
 function onMore(command: string) {
   if (activeWorkspace.value)
@@ -1599,6 +2037,8 @@ function onMore(command: string) {
   else if (command === 'share') openShare();
   else if (command === 'merge') openMergeWorkspaces();
   else if (command === 'rename') void renameWorkspace();
+  else if (command === 'copy') void copyWorkspaceFromMenu();
+  else if (command === 'history') openHistory();
   else if (command === 'abandon') void abandonLocalDraft();
   else if (command === 'delete') void deleteWorkspaceFromMenu();
 }
@@ -1621,6 +2061,32 @@ async function addPipeline(conditional = false) {
 function selectPipeline(id: string) {
   activePipelineId.value = id;
   selectedNodeId.value = pipeline.value?.nodes[0]?.id || '';
+}
+/**
+ * 在原任务后面插入一份副本并打开它。
+ * JSON 模式先回到步骤视图，避免编辑器里的文本和步骤草稿各改各的。
+ */
+async function copyPipeline(id: string) {
+  const workspace = activeWorkspace.value?.id;
+  if (editorMode.value === 'json') {
+    await changeMode('steps');
+    if (
+      editorMode.value === 'json' ||
+      !sameWorkspace(activeWorkspace.value?.id, workspace)
+    )
+      return;
+  }
+  const index = doc.value.pipelines.findIndex((item) => item.id === id);
+  const source = doc.value.pipelines[index];
+  if (!source) return;
+  const item = duplicatePipeline(
+    source,
+    doc.value.pipelines.map((task) => task.name),
+  );
+  doc.value.pipelines.splice(index + 1, 0, item);
+  activePipelineId.value = item.id;
+  selectedNodeId.value = item.nodes[0]?.id || '';
+  say('success', '已复制任务');
 }
 /** 示例只追加一个独立任务；JSON 草稿先应用，异步切换期间不得写到另一个工作区。 */
 async function addExamplePipeline() {
@@ -1949,6 +2415,48 @@ function ensurePipelineRunnable() {
     return false;
   }
   return true;
+}
+
+/**
+ * 右键把一个任务退回上次保存的内容。
+ * 只替换该任务，其它任务和未保存的 JSON 草稿保持不变。
+ */
+async function restorePipeline(id: string) {
+  const workspace = activeWorkspace.value?.id;
+  const source = editorMode.value === 'json' ? readEditorDocument() : doc.value;
+  if (!source || !savedWorkspaceDocument()?.pipelines.some((item) => item.id === id)) {
+    if (source) say('warning', '这个任务还没有保存过的版本，请用删除任务放弃它');
+    return;
+  }
+  const name = source.pipelines.find((item) => item.id === id)?.name || id;
+  const request = draftOperations.begin();
+  try {
+    await ElMessageBox.confirm(
+      `还原将放弃任务「${name}」上未保存的修改，其他任务保持不变。`,
+      '还原任务',
+      { type: 'warning', confirmButtonText: '还原', cancelButtonText: '取消' },
+    );
+    if (
+      !draftOperations.current(request) ||
+      !sameWorkspace(activeWorkspace.value?.id, workspace)
+    ) {
+      say('info', '配置已变化，请重新还原');
+      return;
+    }
+    const latest = editorMode.value === 'json' ? readEditorDocument() : doc.value;
+    if (!latest) return;
+    doc.value = restoreSavedPipeline(latest, savedWorkspaceDocument(), id);
+    if (activePipelineId.value === id) {
+      selectedNodeId.value =
+        doc.value.pipelines.find((item) => item.id === id)?.nodes[0]?.id || '';
+      previews.value = {};
+      queryColumns.value = {};
+    }
+    syncJson();
+    say('success', '已还原当前任务');
+  } catch (error) {
+    if (error !== 'cancel' && error !== 'close') say('error', errorMessage(error));
+  }
 }
 
 /** 右键菜单启用/停用任务，只改当前草稿。 */
@@ -2502,23 +3010,134 @@ async function applyKettleDocument(
   }
 }
 
-async function openAi() {
+/** 已经提示过的单任务编辑范围，避免同一次配置里每个问题都弹一次。 */
+let announcedAiScope = '';
+/** 上一轮真正发给 AI 的范围。换任务或改成整份工作区时清空对话，避免串任务。 */
+let aiSessionKey = '';
+/** 工具栏选择的范围。主按钮默认只改当前任务，下拉可以改整份工作区。 */
+const aiEditPreference = ref<EtlAiEditPreference>('pipeline');
+async function openAi(preference: EtlAiEditPreference = aiEditPreference.value) {
+  if (preference === 'workspace' || preference === 'pipeline' || preference === 'auto') {
+    aiEditPreference.value = preference;
+  }
   if (!aiResourceRef.value)
     aiResourceRef.value =
       node.value?.resourceRef || resources.value[0]?.[0] || '';
   if (!(await prepareAi())) return;
   aiWindow.value?.open({ scene: 'etl' });
 }
-/** 每次提问都读取最新完整草稿，并保护无效 JSON 与未授权的数据源。 */
-async function prepareAi(): Promise<boolean> {
-  if (!(await prepare())) return false;
-  const aiJson = JSON.stringify(doc.value);
-  if (aiJson.length > 64000) {
-    say('warning', 
-      '工作区配置超过 AI 编辑上限，请拆分工作区；完整 JSON 仍可手工编辑',
-    );
+/** 读取 JSON 编辑器中的草稿，不写回文档。校验失败时保留原来的步骤草稿。 */
+function readEditorDocument(): EtlWorkspaceDocument | null {
+  if (editorMode.value !== 'json') return doc.value;
+  if (!jsonValid.value) {
+    say('error', 'JSON 格式错误');
+    return null;
+  }
+  try {
+    return parseEtlJson(jsonText.value);
+  } catch {
+    say('error', 'JSON 格式错误');
+    return null;
+  }
+}
+/** 把 JSON 编辑器里尚未写回的草稿读出来。步骤模式直接使用当前文档。 */
+function adoptEditorDocument(): boolean {
+  if (editorMode.value !== 'json') return true;
+  if (!jsonValid.value) {
+    say('error', 'JSON 格式错误');
     return false;
   }
+  try {
+    doc.value = parseEtlJson(jsonText.value);
+  } catch {
+    say('error', 'JSON 格式错误');
+    return false;
+  }
+  syncJson();
+  return true;
+}
+/** 其他任务只提供名称和步骤名，方便参照，但不把它们的配置塞进提示词。 */
+function otherTaskCatalog(currentId?: string) {
+  return doc.value.pipelines
+    .filter((item) => item.id !== currentId)
+    .slice(0, 40)
+    .map((item) => ({
+      id: item.id,
+      name: item.name || item.id,
+      steps: item.nodes
+        .map((node) => node.name || node.type)
+        .filter(Boolean)
+        .slice(0, 8),
+    }));
+}
+/**
+ * 每次提问都读取最新草稿。只改当前任务时不因其他任务的结构错误而拦住；
+ * 整份工作区仍校验全部任务。换任务后清空上一轮对话。
+ */
+async function prepareAi(): Promise<boolean> {
+  const preview = readEditorDocument();
+  if (!preview) return false;
+  const edit = buildAiWorkspace(
+    preview,
+    activePipelineId.value,
+    aiEditPreference.value,
+  );
+  if ('error' in edit) {
+    say('warning', edit.error);
+    return false;
+  }
+  // 只改当前任务时，其他任务的结构错误不能挡住这次配置。整份编辑仍校验全部任务。
+  if (edit.scope.mode === 'pipeline') {
+    if (!adoptEditorDocument()) return false;
+    const request = workspaceRequests.stamp();
+    const base = snapshot();
+    const result = unbox<any>(
+      await validateEtlWorkspace(JSON.stringify(doc.value), edit.scope.pipelineId),
+    );
+    if (!workspaceRequests.current(request) || snapshot() !== base) {
+      say('info', '配置或工作区已变化，请重新操作');
+      return false;
+    }
+    if (!result.valid) {
+      say('error', result.errors?.[0] || '当前任务配置无效');
+      return false;
+    }
+  } else if (!(await prepare())) {
+    return false;
+  }
+  const workspaceId = String(activeWorkspace.value?.id ?? '');
+  const nextSession = `${workspaceId}:${
+    edit.scope.mode === 'pipeline'
+      ? `pipeline:${edit.scope.pipelineId}`
+      : 'workspace'
+  }`;
+  // 换工作区会换一个新的 AI 窗口，不能把上一个工作区的会话切换当成当前任务切换。
+  const switched = Boolean(
+    aiSessionKey.startsWith(`${workspaceId}:`) && aiSessionKey !== nextSession,
+  );
+  if (switched) {
+    aiWindow.value?.resetConversation();
+    say(
+      'info',
+      edit.scope.mode === 'pipeline'
+        ? `已换成任务「${edit.scope.pipelineName}」，开始新的对话。其他任务保持不变。`
+        : '已改为配置整个工作区，开始新的对话。',
+    );
+  }
+  aiSessionKey = nextSession;
+  const scopeKey =
+    edit.scope.mode === 'pipeline'
+      ? `${activeWorkspace.value?.id}:${edit.scope.pipelineId}:${edit.reason}`
+      : '';
+  if (scopeKey && scopeKey !== announcedAiScope && !switched) {
+    say(
+      'info',
+      edit.reason === 'chosen'
+        ? `本次只配置当前任务「${edit.scope.pipelineName}」，其他任务保持不变。`
+        : `工作区超过 AI 一次编辑上限，本次只配置当前任务「${edit.scope.pipelineName}」。完成后可切换任务继续。`,
+    );
+  }
+  announcedAiScope = scopeKey;
   const source = aiSource.value;
   if (!source?.dbConfigId || !source.instance) {
     say('warning', '请先配置工作区数据源');
@@ -2527,36 +3146,78 @@ async function prepareAi(): Promise<boolean> {
   return true;
 }
 function aiContext() {
-  return { etlWorkspace: JSON.stringify(doc.value), workMode: 'etl' };
+  const edit = buildAiWorkspace(
+    doc.value,
+    activePipelineId.value,
+    aiEditPreference.value,
+  );
+  if ('error' in edit) return { workMode: 'etl' };
+  return {
+    etlWorkspace: edit.json,
+    etlEditScope: edit.scope,
+    etlTaskCatalog:
+      edit.scope.mode === 'pipeline'
+        ? otherTaskCatalog(edit.scope.pipelineId)
+        : undefined,
+    workMode: 'etl',
+  };
 }
 /** 候选只应用到草稿，需明确确认；历史候选或已变化的草稿不会被静默覆盖。 */
 async function applyAi(candidate: {
   workspace: EtlWorkspaceDocument;
   baseJson?: string;
+  editScope?: { mode?: string; pipelineId?: string; pipelineName?: string };
 }) {
   if (!candidate?.workspace) return;
-  if (!(await prepare())) return;
+  const pipelineId =
+    candidate.editScope?.mode === 'pipeline'
+      ? candidate.editScope.pipelineId
+      : '';
+  // 单任务候选只要求这个任务有效，其他未完成任务不阻止合并。
+  if (pipelineId) {
+    if (!adoptEditorDocument()) return;
+  } else if (!(await prepare())) {
+    return;
+  }
   const request = draftOperations.begin();
   try {
+    const merged = pipelineId
+      ? mergeAiPipelineEdit(doc.value, candidate.workspace, pipelineId)
+      : candidate.workspace;
     const result: any = unbox(
-      await validateEtlWorkspace(JSON.stringify(candidate.workspace)),
+      await validateEtlWorkspace(
+        JSON.stringify(merged),
+        pipelineId || undefined,
+      ),
     );
     if (!draftOperations.current(request)) return;
     if (!result.valid) throw new Error((result.errors || []).join('；'));
-    if (
-      JSON.stringify(candidate.workspace.resources) !==
-      JSON.stringify(doc.value.resources)
-    )
+    if (!sameEtlValue(candidate.workspace.resources, doc.value.resources))
       throw new Error('数据源绑定已经变化，请重新生成候选');
+    const sameBase = pipelineId
+      ? candidate.baseJson === pipelineEditJson(doc.value, pipelineId)
+      : candidate.baseJson === JSON.stringify(doc.value);
     await ElMessageBox.confirm(
-      candidate.baseJson === JSON.stringify(doc.value)
-        ? '应用 AI 候选到当前草稿？不会自动保存或执行。'
-        : '草稿已变化或此候选来自历史会话。应用将替换当前任务配置，请先查看候选 JSON。确认替换？',
+      pipelineId
+        ? sameBase
+          ? '只把 AI 对当前任务的修改写入草稿，其他任务保持不变。不会自动保存或执行。'
+          : '当前任务在生成候选后已变化。应用将只替换该任务，其他任务保持不变。确认替换？'
+        : sameBase
+          ? '应用 AI 候选到当前草稿？不会自动保存或执行。'
+          : '草稿已变化或此候选来自历史会话。应用将替换当前任务配置，请先查看候选 JSON。确认替换？',
       '应用候选配置',
       { type: 'warning', modalClass: 'ai-mask-confirm-overlay' },
     );
     if (!draftOperations.current(request)) return;
-    applyDocument(candidate.workspace);
+    if (pipelineId) {
+      doc.value = merged;
+      selectPipeline(pipelineId);
+      editorMode.value = 'steps';
+      previews.value = {};
+      syncJson();
+    } else {
+      applyDocument(candidate.workspace);
+    }
   } catch (error) {
     if (draftOperations.current(request) && error !== 'cancel' && error !== 'close')
       say('error', errorMessage(error));
@@ -2600,7 +3261,11 @@ onMounted(async () => {
       refreshWorkspaces(),
     ]);
     connections.value = unbox<EtlConnectionOption[]>(sourceResponse) || [];
-    if (workspaces.value[0]) await openWorkspace(workspaces.value[0]);
+    const lastId = readLastEtlWorkspace();
+    const target =
+      workspaces.value.find((item) => String(item.id) === lastId) ||
+      workspaces.value[0];
+    if (target) await openWorkspace(target);
   } catch (error) {
     say('error', errorMessage(error));
   } finally {
@@ -2657,12 +3322,45 @@ onBeforeUnmount(() => {
         </div>
         <div class="toolbar-actions">
           <el-tag v-if="dirty" type="warning">{{ $tr('未保存') }}</el-tag>
-          <el-button
+          <!-- 编辑视图对整个工作区生效：表单、画布（全部任务）、JSON。 -->
+          <el-radio-group
+            class="editor-view-switch"
+            size="small"
+            :model-value="currentEditorView"
             :disabled="!activeWorkspace"
-            :loading="saving"
-            @click="saveDraft"
-            >{{ $tr('保存') }}</el-button
+            :aria-label="$tr('编辑视图')"
+            @change="(value: boolean | number | string | undefined) => changeEditorView(value as 'canvas' | 'form' | 'json')"
           >
+            <el-radio-button v-for="option in EDITOR_VIEW_OPTIONS" :key="option.value" :value="option.value">
+              {{ $tr(option.label) }}
+            </el-radio-button>
+          </el-radio-group>
+          <el-button-group class="save-split">
+            <el-button
+              :disabled="!activeWorkspace"
+              :loading="saving"
+              @click="saveDraft()"
+              >{{ $tr('保存') }}</el-button
+            >
+            <el-dropdown
+              trigger="click"
+              :disabled="!activeWorkspace || saving"
+              @command="onSaveCommand"
+            >
+              <el-button
+                :disabled="!activeWorkspace || saving"
+                :icon="ArrowDown"
+                :title="$tr('保存为新版本')"
+              />
+              <template #dropdown>
+                <el-dropdown-menu>
+                  <el-dropdown-item command="version">{{
+                    $tr('保存为新版本')
+                  }}</el-dropdown-item>
+                </el-dropdown-menu>
+              </template>
+            </el-dropdown>
+          </el-button-group>
           <el-button
             :disabled="!activeWorkspace"
             :loading="syncing"
@@ -2670,7 +3368,10 @@ onBeforeUnmount(() => {
             @click="syncNow"
             >{{ $tr('同步') }}</el-button
           >
-          <el-button :disabled="!activeWorkspace || !isWorkspaceOwner" @click="publish"
+          <el-button
+            :disabled="!activeWorkspace || !isWorkspaceOwner"
+            :loading="publishing"
+            @click="publish"
             >{{ $tr('发布') }}</el-button
           >
           <el-button
@@ -2680,12 +3381,35 @@ onBeforeUnmount(() => {
             @click="runPipeline"
             >{{ $tr('运行') }}</el-button
           >
-          <el-button
-            :icon="MagicStick"
-            :disabled="!activeWorkspace"
-            @click="openAi"
-            >{{ $tr('AI 配置') }}</el-button
-          >
+          <el-button-group class="save-split">
+            <el-button
+              :icon="MagicStick"
+              :disabled="!activeWorkspace"
+              @click="openAi('pipeline')"
+              >{{ $tr('只改当前任务') }}</el-button
+            >
+            <el-dropdown
+              trigger="click"
+              :disabled="!activeWorkspace"
+              @command="openAi"
+            >
+              <el-button
+                :icon="ArrowDown"
+                :disabled="!activeWorkspace"
+                :title="$tr('选择 AI 编辑范围')"
+              />
+              <template #dropdown>
+                <el-dropdown-menu>
+                  <el-dropdown-item command="pipeline" :disabled="!pipeline">{{
+                    $tr('只改当前任务')
+                  }}</el-dropdown-item>
+                  <el-dropdown-item command="workspace">{{
+                    $tr('配置整个工作区')
+                  }}</el-dropdown-item>
+                </el-dropdown-menu>
+              </template>
+            </el-dropdown>
+          </el-button-group>
           <el-dropdown
             trigger="click"
             :disabled="!activeWorkspace"
@@ -2705,12 +3429,14 @@ onBeforeUnmount(() => {
                   >{{ $tr('导入 Kettle') }}</el-dropdown-item
                 >
                 <el-dropdown-item command="export">{{ $tr('导出 JSON') }}</el-dropdown-item>
+                <el-dropdown-item command="history">{{ $tr('历史版本') }}</el-dropdown-item>
                 <el-dropdown-item command="runs">{{ $tr('运行记录') }}</el-dropdown-item>
                 <el-dropdown-item command="share">{{ $tr('协同成员') }}</el-dropdown-item>
                 <el-dropdown-item command="merge">{{ $tr('合并其他工作区') }}</el-dropdown-item>
                 <el-dropdown-item v-if="isWorkspaceOwner" command="schedule">{{ $tr('定时执行') }}</el-dropdown-item>
                 <el-dropdown-item v-if="isWorkspaceOwner" command="notify">{{ $tr('消息通知') }}</el-dropdown-item>
                 <el-dropdown-item command="rename">{{ $tr('改名') }}</el-dropdown-item>
+                <el-dropdown-item command="copy">{{ $tr('复制工作区') }}</el-dropdown-item>
                 <el-dropdown-item v-if="dirty" command="abandon"
                   >{{ $tr('放弃本地未保存修改') }}</el-dropdown-item
                 >
@@ -2780,6 +3506,23 @@ onBeforeUnmount(() => {
         <aside v-if="sidebarOpen" class="workspace-sidebar">
           <div class="sidebar-title">
             <span>{{ $tr('工作区') }}</span>
+            <el-dropdown trigger="click" @command="setWorkspaceSort">
+              <el-button :icon="Sort" circle link :title="$tr('排序')" :aria-label="$tr('排序')" />
+              <template #dropdown>
+                <el-dropdown-menu>
+                  <el-dropdown-item
+                    v-for="option in ETL_WORKSPACE_SORT_OPTIONS"
+                    :key="option.value"
+                    :command="option.value"
+                  >
+                    {{ workspaceSort.mode === option.value ? '✓ ' : '' }}{{ $tr(option.label) }}
+                  </el-dropdown-item>
+                  <el-dropdown-item divided command="asc">{{ !workspaceSort.desc ? '✓ ' : '' }}{{ $tr(workspaceSort.mode === 'name' ? 'A → Z' : workspaceSort.mode === 'custom' ? '正序' : '最早在前') }}</el-dropdown-item>
+                  <el-dropdown-item command="desc">{{ workspaceSort.desc ? '✓ ' : '' }}{{ $tr(workspaceSort.mode === 'name' ? 'Z → A' : workspaceSort.mode === 'custom' ? '倒序' : '最新在前') }}</el-dropdown-item>
+                  <el-dropdown-item v-if="workspaceSort.mode !== 'custom'" disabled divided>{{ $tr('切换到“自定义顺序”后可拖动排序') }}</el-dropdown-item>
+                </el-dropdown-menu>
+              </template>
+            </el-dropdown>
             <el-button
               :icon="Plus"
               circle
@@ -2789,22 +3532,31 @@ onBeforeUnmount(() => {
             />
           </div>
           <div
-            v-for="workspace in workspaces"
+            v-for="workspace in sortedWorkspaces"
             :key="String(workspace.id)"
             class="workspace-item"
             :class="{
               active: String(workspace.id) === String(activeWorkspace?.id),
               dirty: isWorkspaceDirty(workspace),
+              dragging: workspaceDrag?.sourceId === String(workspace.id),
+              'drop-before': workspaceDrag?.overId === String(workspace.id) && !workspaceDrag.after && workspaceDrag.sourceId !== String(workspace.id),
+              'drop-after': workspaceDrag?.overId === String(workspace.id) && workspaceDrag.after && workspaceDrag.sourceId !== String(workspace.id),
             }"
+            :draggable="workspaceSort.mode === 'custom'"
+            :title="workspaceSort.mode === 'custom' ? $tr('拖动可调整顺序') : undefined"
+            @dragstart="onWorkspaceDragStart($event, workspace)"
+            @dragover="onWorkspaceDragOver($event, workspace)"
+            @drop="onWorkspaceDrop($event)"
+            @dragend="onWorkspaceDragEnd"
             role="button"
             tabindex="0"
             @click="openWorkspace(workspace, true)"
             @keydown.enter="openWorkspace(workspace, true)"
             @contextmenu.prevent="openWorkspaceMenu($event, workspace)"
           >
-            <strong
+            <strong class="workspace-item__title"
               >{{ workspaceDisplayName(workspace)
-              }}{{ isWorkspaceDirty(workspace) ? ' *' : '' }}</strong
+              }}<span v-if="isWorkspaceDirty(workspace)" class="workspace-item__dirty"> *</span></strong
             >
             <small
               >{{ workspace.accessRole === 'EDITOR' ? $tr('共享') + ' · ' : '' }}{{ $tr('版本') }}
@@ -2837,6 +3589,7 @@ onBeforeUnmount(() => {
               <button v-if="menuTargetIsOwner" @click="configureNotify">{{ $tr('消息通知配置') }}</button>
               <button @click="openShareFromMenu">{{ $tr('协同成员') }}</button>
               <button @click="renameWorkspace">{{ $tr('改名') }}</button>
+              <button @click="copyWorkspaceFromMenu">{{ $tr('复制') }}</button>
               <button
                 v-if="
                   workspaces.some(
@@ -2858,9 +3611,11 @@ onBeforeUnmount(() => {
         <main
           v-if="activeWorkspace"
           class="workspace-main"
-          :class="`tasks-${taskPosition}`"
+          :class="[`tasks-${taskPosition}`, { 'tabs-hidden': currentEditorView !== 'form' }]"
         >
+          <!-- 画布和 JSON 视图已包含全部任务，不再显示任务标签栏；表单视图照旧。 -->
           <TaskTabs
+            v-show="currentEditorView === 'form'"
             :key="String(activeWorkspace.id)"
             class="workspace-tabs"
             :workspace-id="activeWorkspace.id"
@@ -2872,6 +3627,8 @@ onBeforeUnmount(() => {
             @select="selectPipeline"
             @add="addPipeline"
             @add-example="addExamplePipeline"
+            @copy="copyPipeline"
+            @restore="restorePipeline"
             @delete="removePipeline"
             @enabled="setPipelineEnabled"
             @position="setTaskPosition"
@@ -2883,11 +3640,11 @@ onBeforeUnmount(() => {
                 v-model="jsonText"
                 v-model:valid="jsonValid"
                 mode="text"
-                height="calc(100vh - 290px)"
+                height="100%"
               />
             </div>
             <template v-else-if="pipeline">
-              <div class="pipeline-header">
+              <div v-show="stepsView !== 'canvas'" class="pipeline-header">
                 <el-input
                   v-model="pipeline.name"
                   :placeholder="$tr('同步任务名称')"
@@ -2908,7 +3665,29 @@ onBeforeUnmount(() => {
                   >{{ $tr('运行') }}</el-button
                 >
               </div>
-              <div class="flow-strip" :aria-label="$tr('步骤流水线')">
+              <EtlCanvas
+                v-if="stepsView === 'canvas'"
+                :pipelines="doc.pipelines"
+                :active-pipeline-id="activePipelineId"
+                :running="running"
+                :can-undo="historyState.canUndo"
+                :can-redo="historyState.canRedo"
+                @undo="undoDoc"
+                @redo="redoDoc"
+                @add-task="addPipeline()"
+                @run="runCanvasTask"
+                @rename-task="renameCanvasTask"
+                @enable-task="setPipelineEnabled"
+                @delete-task="removePipeline"
+                :selected-id="selectedNodeId"
+                :title-of="canvasNodeTitle"
+                :subtitle-of="canvasNodeSubtitle"
+                @add="addStepCommand"
+                @edit="editCanvasNode"
+                @remove="removeCanvasNode"
+                @select="selectCanvasCell"
+              />
+              <div v-else class="flow-strip" :aria-label="$tr('步骤流水线')">
                 <div
                   v-for="(step, index) in pipeline.nodes"
                   :key="step.id"
@@ -3007,10 +3786,30 @@ onBeforeUnmount(() => {
                   </div>
                 </el-popover>
               </div>
+              <template v-if="node && stepsView === 'canvas' && canvasEditorOpen">
+                <div class="canvas-drawer-mask" @click="canvasEditorOpen = false"></div>
+                <div
+                  class="canvas-drawer-resizer"
+                  :style="nodeDrawerStyle"
+                  role="separator"
+                  aria-orientation="vertical"
+                  :title="$tr('拖动调整宽度，双击恢复默认')"
+                  @pointerdown="startNodeDrawerResize"
+                  @dblclick="resetNodeDrawerWidth"
+                ></div>
+                <div class="canvas-drawer-header" :style="nodeDrawerStyle">
+                  <strong>{{ $tr('编辑节点') }}：{{ canvasNodeTitle(node) }}</strong>
+                  <span>{{ $tr('修改会立即写入 JSON') }}</span>
+                  <el-button type="primary" size="small" @click="canvasEditorOpen = false">{{ $tr('完成') }}</el-button>
+                </div>
+              </template>
               <div
                 v-if="node"
+                v-show="stepsView !== 'canvas' || canvasEditorOpen"
                 class="step-split"
-                :class="`result-${resultDock}`"
+                :class="[`result-${resultDock}`, { 'canvas-node-drawer': stepsView === 'canvas' }]"
+                :style="stepsView === 'canvas' ? nodeDrawerStyle : undefined"
+                @keydown="onCanvasDrawerKey"
               >
                 <section class="step-editor">
                   <div class="step-header">
@@ -3672,6 +4471,11 @@ onBeforeUnmount(() => {
     <WorkspaceSchedule ref="scheduleDialog" @logs="openScheduleLogs" />
     <WorkspaceNotify ref="notifyDialog" />
     <EtlShareDialog ref="shareDialog" />
+    <EtlHistoryDialog
+      ref="historyDialog"
+      :busy="historyBusy"
+      @restore="restoreHistory"
+    />
     <EtlMergeDialog
       ref="mergeDialog"
       :workspaces="workspaces"
@@ -3829,7 +4633,11 @@ onBeforeUnmount(() => {
       etl-mode
       :db-config-id="aiSource?.dbConfigId"
       :instance-name="aiSource?.instance"
-      :conn-label="aiSource?.displayName"
+      :conn-label="
+        aiEditPreference === 'pipeline' && pipeline
+          ? pipeline.name || pipeline.id
+          : aiSource?.displayName
+      "
       :before-send="prepareAi"
       :get-extra-context="aiContext"
       @apply-etl-config="applyAi"
@@ -3838,6 +4646,14 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
+.editor-view-switch { flex: none; }
+.canvas-drawer-resizer { position: fixed; top: 0; bottom: 0; right: calc(min(var(--etl-node-drawer-width), 90vw) - 4px); z-index: 1502; width: 8px; cursor: col-resize; touch-action: none; }
+.canvas-drawer-resizer::after { content: ''; position: absolute; top: 0; bottom: 0; left: 3px; width: 2px; background: transparent; transition: background 0.15s; }
+.canvas-drawer-resizer:hover::after { background: var(--el-color-primary); }
+.canvas-drawer-mask { position: fixed; inset: 0; z-index: 1500; background: rgb(0 0 0 / 30%); }
+.canvas-drawer-header { position: fixed; top: 0; right: 0; z-index: 1501; display: flex; gap: 12px; align-items: center; box-sizing: border-box; width: min(var(--etl-node-drawer-width, 1000px), 90vw); height: 52px; padding: 0 16px; background: var(--el-bg-color); border-bottom: 1px solid var(--el-border-color-lighter); }
+.canvas-drawer-header span { flex: 1; color: var(--el-text-color-secondary); font-size: 12px; }
+.step-split.canvas-node-drawer { position: fixed; top: 52px; right: 0; bottom: 0; z-index: 1501; box-sizing: border-box; width: min(var(--etl-node-drawer-width, 1000px), 90vw); margin: 0; padding: 12px 16px; overflow: auto; background: var(--el-bg-color); box-shadow: var(--el-box-shadow-dark); }
 :global(.etl-runs-drawer) {
   color: var(--el-text-color-primary);
 }
@@ -3880,6 +4696,9 @@ onBeforeUnmount(() => {
 }
 .toolbar-actions {
   flex-wrap: wrap;
+}
+.save-split :deep(.el-dropdown) {
+  display: inline-flex;
 }
 .nav-select {
   width: 180px;
@@ -3936,15 +4755,60 @@ onBeforeUnmount(() => {
   text-align: left;
   cursor: pointer;
 }
-.workspace-item strong {
-  max-width: 170px;
+.workspace-item {
+  /* 宽度含内边距，长名称也不会把卡片撑出侧栏。 */
+  box-sizing: border-box;
+  min-width: 0;
+}
+.workspace-item__title {
+  /* 名称完整显示，字号略小，过长自动换行；无空格的长中英文也能断开。 */
+  display: block;
+  width: 100%;
+  font-size: 13px;
+  line-height: 1.45;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+.workspace-item__dirty {
+  white-space: nowrap;
+}
+.workspace-item[draggable='true'] {
+  cursor: grab;
+}
+.workspace-item.dragging {
+  opacity: 0.45;
+}
+.workspace-item.drop-before {
+  box-shadow: inset 0 2px 0 var(--el-color-primary);
+}
+.workspace-item.drop-after {
+  box-shadow: inset 0 -2px 0 var(--el-color-primary);
+}
+.sidebar-title > .el-dropdown {
+  margin-left: auto;
+}
+.sidebar-title {
+  gap: 2px;
+}
+.workspace-item small {
+  max-width: 100%;
+  color: var(--el-text-color-secondary);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.sidebar-title > span {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.workspace-item small {
-  color: var(--el-text-color-secondary);
-  font-size: 12px;
+.sidebar-title > .el-button {
+  flex: none;
+}
+.workspace-source-btn {
+  max-width: 100%;
+  overflow: hidden;
 }
 .workspace-item.active {
   border-color: var(--el-color-primary-light-5);
@@ -4039,6 +4903,12 @@ onBeforeUnmount(() => {
 .workspace-main.tasks-right .workspace-tabs {
   height: 100%;
   overflow: hidden;
+}
+/* 画布和 JSON 视图隐藏标签栏后，不论标签栏在哪一侧都只留编辑区，避免空出 220px 的侧栏。 */
+.workspace-main.tabs-hidden.tabs-hidden {
+  grid-template-areas: 'editor';
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
 }
 .workspace-head,
 .task-bar,
@@ -4464,9 +5334,13 @@ button.step-item.flow-step {
   font-size: 12px;
 }
 .json-panel {
+  /* 编辑器高度跟随剩余空间（原 calc(100vh - 290px) 与实际布局不符，底部会留白）。 */
+  display: flex;
   flex: 1 1 auto;
+  flex-direction: column;
+  box-sizing: border-box;
   min-height: 0;
-  overflow: auto;
+  overflow: hidden;
   padding: 16px;
 }
 .empty-workspace {

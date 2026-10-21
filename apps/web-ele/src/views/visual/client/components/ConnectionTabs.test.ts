@@ -4,6 +4,7 @@ import ElementPlus from 'element-plus';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { DbConnection } from '../composables/useConnectionStore';
+import { useClientPreferences } from '../composables/useClientPreferences';
 import ConnectionTabs from './ConnectionTabs.vue';
 
 /** 挂载真实连接栏，核对右键菜单文案和关闭事件。 @author yanch */
@@ -112,5 +113,54 @@ describe('数据库连接栏右键菜单', () => {
     expect(blank.textContent).toContain('保存工作现场');
     expect(blank.textContent).not.toContain('关闭所有');
     expect(blank.textContent).not.toContain('关闭其他');
+  });
+
+  it('精简链接标题只显示连接名，环境标识浮在左上角', async () => {
+    const { compactConnectionTitle } = useClientPreferences();
+    compactConnectionTitle.value = true;
+    try {
+      const host = mount([
+        {
+          ...connection('sess-a', '订单库'),
+          env: 'PROD',
+          envLabel: '生产库',
+        },
+      ]);
+      await nextTick();
+      const tab = host.querySelector<HTMLElement>('.conn-tab')!;
+      expect(tab.classList.contains('conn-tab--compact')).toBe(true);
+      expect(tab.querySelector('.meta')).toBeNull();
+      expect(tab.querySelector('.name')?.textContent).toBe('订单库');
+      const badge = tab.querySelector('.env-badge');
+      expect(badge?.classList.contains('env-badge--corner')).toBe(true);
+      expect(badge?.textContent).toBe('PROD');
+      expect(tab.getAttribute('title')).toContain('生产库');
+      expect(tab.getAttribute('title')).toContain('MySQL');
+      expect(tab.getAttribute('title')).toContain('127.0.0.1');
+    } finally {
+      compactConnectionTitle.value = false;
+    }
+  });
+
+  it('默认模式保留类型和主机，环境标识浮在左上角', async () => {
+    const { compactConnectionTitle } = useClientPreferences();
+    compactConnectionTitle.value = false;
+    const host = mount([
+      {
+        ...connection('sess-a', '订单库'),
+        env: 'TEST',
+        envLabel: '测试',
+      },
+    ]);
+    await nextTick();
+    const tab = host.querySelector<HTMLElement>('.conn-tab')!;
+    expect(tab.classList.contains('conn-tab--compact')).toBe(false);
+    expect(tab.querySelector('.meta')?.textContent).toContain('MySQL');
+    expect(tab.querySelector('.meta')?.textContent).toContain('127.0.0.1');
+    const badge = tab.querySelector('.env-badge');
+    expect(badge?.classList.contains('env-badge--corner')).toBe(true);
+    expect(tab.querySelector('.name')?.contains(badge!)).toBe(false);
+    expect(badge?.textContent).toBe('TEST');
+    expect(tab.getAttribute('title')).toContain('测试');
   });
 });

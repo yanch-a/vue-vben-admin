@@ -42,6 +42,8 @@ function dispatchBlock(block: string, handlers: SseHandlers) {
   let event = 'message';
   const dataLines: string[] = [];
   for (const line of block.split(/\r?\n/)) {
+    // 服务端心跳是 SSE 注释（":ping"），没有 data，不能当成对话事件
+    if (line.startsWith(':')) continue;
     if (line.startsWith('event:')) event = line.slice(6).trim();
     else if (line.startsWith('data:')) dataLines.push(line.slice(5).trimStart());
   }

@@ -64,6 +64,9 @@ export default defineConfig(async ({ command }) => {
             changeOrigin: true,
             // lemon 本地默认端口，见 lemon-main application-dev.yml
             target: 'http://localhost:7806',
+            // 慢 SQL 预览可能超过一分钟。0 表示代理不按空闲时间断开上游。
+            timeout: 0,
+            proxyTimeout: 0,
             ws: true,
           },
         },

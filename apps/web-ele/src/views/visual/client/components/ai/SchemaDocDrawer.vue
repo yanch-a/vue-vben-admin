@@ -13,6 +13,7 @@
  */
 import { computed, onBeforeUnmount, reactive, ref, watch } from 'vue';
 import DOMPurify from 'dompurify';
+import { Refresh } from '@element-plus/icons-vue';
 import MarkdownIt from 'markdown-it';
 import { ElMessage, ElMessageBox } from 'element-plus';
 
@@ -73,6 +74,10 @@ const modelId = ref<any>();
 const selectedInstance = ref('');
 const localInstances = ref<string[]>([]);
 const tableKeyword = ref('');
+/** 左侧表列表的文档状态筛选。空字符串表示不按状态过滤。 */
+const tableStatus = ref<TableDocStatus | ''>('');
+/** 左侧「刷新表结构」进行中，避免重复点击连打 tree 接口。 */
+const treeLoading = ref(false);
 const genLoading = ref(false);
 const initLoading = ref(false);
 const ctxMenu = reactive({
@@ -109,6 +114,7 @@ const currentScopeText = computed(() => {
 const treeData = computed(() => {
   const inst = selectedInstance.value || tree.value?.instanceName || '未选实例';
   const tables = (tree.value?.tables || []).filter((t: any) => {
+    if (tableStatus.value && tableDocStatus(t) !== tableStatus.value) return false;
     if (!tableKeyword.value) return true;
     const kw = tableKeyword.value.toLowerCase();
     return String(t.tableName || '')
@@ -134,14 +140,59 @@ const treeData = computed(() => {
   ];
 });
 
-function statusIcon(t: any) {
-  if (t.userLocked === 1) return '🔒';
-  if (t.status === 'DROPPED') return '🔴';
-  if (t.status === 'STALE') return '🟡';
-  if (t.status === 'NONE' || !t.docId) return '⚪';
-  if (t.filled === false) return '○';
-  return '🟢';
+/**
+ * 左侧列表展示的文档状态。
+ * 优先级与图标一致：用户锁定 > 表已删除 > 结构变化 > 未初始化 > 仅骨架 > 已填写。
+ */
+type TableDocStatus = 'LOCKED' | 'DROPPED' | 'STALE' | 'NONE' | 'SKELETON' | 'FILLED';
+
+const STATUS_ICON: Record<TableDocStatus, string> = {
+  LOCKED: '🔒',
+  DROPPED: '🔴',
+  STALE: '🟡',
+  NONE: '⚪',
+  SKELETON: '○',
+  FILLED: '🟢',
+};
+
+/** 状态下拉选项，文案与图例保持一致。 */
+const STATUS_FILTER_OPTIONS: { value: TableDocStatus; label: string }[] = [
+  { value: 'FILLED', label: '已填写' },
+  { value: 'SKELETON', label: '仅骨架' },
+  { value: 'NONE', label: '未初始化' },
+  { value: 'STALE', label: '结构变化' },
+  { value: 'DROPPED', label: '表已删除' },
+  { value: 'LOCKED', label: '用户锁定' },
+];
+
+function tableDocStatus(t: any): TableDocStatus {
+  if (t?.userLocked === 1) return 'LOCKED';
+  if (t?.status === 'DROPPED') return 'DROPPED';
+  if (t?.status === 'STALE') return 'STALE';
+  if (t?.status === 'NONE' || !t?.docId) return 'NONE';
+  if (t?.filled === false) return 'SKELETON';
+  return 'FILLED';
 }
+
+function statusIcon(t: any) {
+  return STATUS_ICON[tableDocStatus(t)];
+}
+
+/** 各状态的表数量，供下拉选项展示，不随表名关键字变化。 */
+const statusCounts = computed(() => {
+  const counts: Record<TableDocStatus, number> = {
+    LOCKED: 0,
+    DROPPED: 0,
+    STALE: 0,
+    NONE: 0,
+    SKELETON: 0,
+    FILLED: 0,
+  };
+  for (const table of tree.value?.tables || []) {
+    counts[tableDocStatus(table)] += 1;
+  }
+  return counts;
+});
 
 function unwrap(res: any) {
   return res?.data ?? res;
@@ -169,6 +220,19 @@ async function loadTree() {
     instanceName: selectedInstance.value,
   });
   tree.value = unwrap(res);
+}
+
+/** 手动刷新左侧表结构：重新拉取当前实例的文档树与覆盖率。 */
+async function refreshTree() {
+  if (!requireScope()) return;
+  treeLoading.value = true;
+  try {
+    await loadTree();
+  } catch (e: any) {
+    ElMessage.error(e?.message || '刷新表结构失败');
+  } finally {
+    treeLoading.value = false;
+  }
 }
 
 async function onNode(node: any) {
@@ -610,7 +674,38 @@ const keyFields = computed(() => {
     </div>
     <div class="body">
       <div class="left">
-        <ElInput v-model="tableKeyword" size="small" clearable :placeholder="$tr('搜索表名')" />
+        <div class="left-filters">
+          <div class="left-search">
+            <ElInput v-model="tableKeyword" size="small" clearable :placeholder="$tr('搜索表名')" />
+            <ElButton
+              size="small"
+              :icon="Refresh"
+              :title="$tr('刷新表结构')"
+              :aria-label="$tr('刷新表结构')"
+              :loading="treeLoading"
+              @click="refreshTree"
+            />
+          </div>
+          <ElSelect
+            v-model="tableStatus"
+            size="small"
+            clearable
+            class="left-status"
+            :placeholder="$tr('全部状态')"
+          >
+            <ElOption
+              v-for="opt in STATUS_FILTER_OPTIONS"
+              :key="opt.value"
+              :label="`${STATUS_ICON[opt.value]} ${$tr(opt.label)}`"
+              :value="opt.value"
+            >
+              <span class="status-opt">
+                <span>{{ STATUS_ICON[opt.value] }} {{ $tr(opt.label) }}</span>
+                <span class="status-opt-n">{{ statusCounts[opt.value] }}</span>
+              </span>
+            </ElOption>
+          </ElSelect>
+        </div>
         <div class="status-legend" :aria-label="$tr('表文档状态说明')">
           <span :title="$tr('AI 或用户已经填写文档')">🟢 {{ $tr('已填写') }}</span>
           <span :title="$tr('只有数据库结构骨架，尚未由 AI 或用户补充')">○ {{ $tr('仅骨架') }}</span>
@@ -660,6 +755,9 @@ const keyFields = computed(() => {
         />
         <div v-if="!(tree?.tables || []).length" class="left-empty">
           {{ $tr('该实例下没有表，或尚未打开连接') }}
+        </div>
+        <div v-else-if="!(treeData[0]?.children || []).length" class="left-empty">
+          {{ $tr('没有符合当前检索条件的表') }}
         </div>
       </div>
       <div class="right">
@@ -776,6 +874,23 @@ const keyFields = computed(() => {
   padding-right: 8px;
   border-right: 1px solid var(--el-border-color-lighter);
 }
+.left-filters {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.left-search {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+.left-search :deep(.el-input) {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.left-status {
+  width: 100%;
+}
 .table-tree {
   flex: 1 1 auto;
   min-height: 0;
@@ -878,6 +993,17 @@ const keyFields = computed(() => {
 .schema-ctx .item:hover {
   background: var(--el-fill-color-light);
   color: var(--el-color-primary);
+}
+/* 状态下拉挂到 body，不能写在 scoped 里 */
+.status-opt {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.status-opt-n {
+  color: var(--el-text-color-secondary);
+  font-variant-numeric: tabular-nums;
 }
 /* 收紧标题与「当前目标」间距，正文区用 flex 铺满到底 */
 .schema-doc-drawer.el-drawer {

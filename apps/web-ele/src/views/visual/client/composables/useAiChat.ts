@@ -63,12 +63,13 @@ export interface AiMsg {
     columns: string[];
     rows: any[];
   };
-  /** ETL 候选保留本轮完整基准，避免应用历史建议覆盖较新的草稿。 */
+  /** ETL 候选保留本轮编辑基准。单任务范围用于合并回原工作区，避免覆盖其他任务。 */
   etlConfig?: {
     workspace: any;
     explanation?: string;
     warnings?: string[];
     baseJson?: string;
+    editScope?: { mode?: string; pipelineId?: string; pipelineName?: string };
   };
   error?: string;
   done: boolean;
@@ -337,7 +338,11 @@ function createAiChatStore(isolatedContext?: () => AiChatContext) {
             }
             case 'etl.proposed': {
               if (data?.workspace)
-                msg.etlConfig = { ...data, baseJson: context?.etlWorkspace };
+                msg.etlConfig = {
+                  ...data,
+                  baseJson: context?.etlWorkspace,
+                  editScope: data?.editScope || context?.etlEditScope,
+                };
               touch();
               break;
             }

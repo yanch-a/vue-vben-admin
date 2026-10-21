@@ -86,16 +86,32 @@ function tabLabel(c: DbConnection) {
   return name;
 }
 
-/** 页签前的环境色块：PROD 红 / UAT 橙 / TEST 蓝 / DEV 绿；未标记且非生产时不显示 */
+/**
+ * 页签环境标识：PROD 红 / UAT 橙 / TEST 蓝 / DEV 绿；未标记且非生产时不显示。
+ * 小标识绝对定位在页签左上角，不占标题行；只用短环境码，自定义显示名留给悬停。
+ */
 function envBadge(c: DbConnection) {
   const resolved = resolveConnectionEnv(c);
   if (!resolved.text) return null;
-  return { text: resolved.text, type: envTagType(resolved.env), legacy: resolved.source === 'LEGACY_NAME' };
+  return {
+    text: resolved.text,
+    short: resolved.env || resolved.text,
+    type: envTagType(resolved.env),
+    legacy: resolved.source === 'LEGACY_NAME',
+  };
+}
+
+/** 左上角小标识文字。精简与完整模式共用，不进入标题排版。 */
+function envBadgeLabel(c: DbConnection) {
+  const badge = envBadge(c);
+  if (!badge) return '';
+  return `${badge.short}${badge.legacy ? '?' : ''}`;
 }
 
 function tabTitle(c: DbConnection) {
   const badge = envBadge(c);
-  const prefix = badge ? `[${badge.text}] ` : '';
+  // 悬停带上环境、类型和主机；精简标题时类型和主机不出现在页签正文里
+  const prefix = badge ? `[${badge.text}${badge.legacy ? '?' : ''}] ` : '';
   return `${prefix}${tabLabel(c)} · ${c.dbType} · ${c.dbHost || ''}`;
 }
 
@@ -308,7 +324,11 @@ defineExpose({
       v-for="c in connections"
       :key="c.sessionId"
       class="conn-tab"
-      :class="{ active: c.sessionId === activeId, 'tab--prod': isProductionConnection(c) }"
+      :class="{
+        active: c.sessionId === activeId,
+        'tab--prod': isProductionConnection(c),
+        'conn-tab--compact': preferences.compactConnectionTitle,
+      }"
       :style="tabStyle(c)"
       :title="tabTitle(c)"
       @click="emit('change', c.sessionId)"
@@ -317,11 +337,11 @@ defineExpose({
       <span v-if="c.sessionId === activeId" class="active-marker" aria-hidden="true" />
       <span
         v-if="envBadge(c)"
-        class="env-badge"
+        class="env-badge env-badge--corner"
         :class="`env-badge--${envBadge(c)?.type}`"
-      >{{ envBadge(c)?.text }}{{ envBadge(c)?.legacy ? '?' : '' }}</span>
+      >{{ envBadgeLabel(c) }}</span>
       <span class="name">{{ tabLabel(c) }}</span>
-      <span class="meta">{{ c.dbType }} · {{ c.dbHost || '' }}</span>
+      <span v-if="!preferences.compactConnectionTitle" class="meta">{{ c.dbType }} · {{ c.dbHost || '' }}</span>
       <button
         class="close"
         type="button"
@@ -548,7 +568,6 @@ defineExpose({
 }
 .env-badge {
   flex-shrink: 0;
-  margin-right: 4px;
   padding: 0 5px;
   border-radius: 3px;
   font-size: 11px;
@@ -569,5 +588,29 @@ defineExpose({
 }
 .env-badge--success {
   background: var(--el-color-success);
+}
+/* 精简标题：页签只留连接名，类型和主机不占标题行 */
+.conn-tab--compact {
+  gap: 6px;
+  padding-right: 10px;
+  padding-left: 10px;
+}
+/* 环境小标识浮在页签左上角，不参与标题排版，标题仍垂直居中 */
+.env-badge--corner {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 2;
+  max-width: 36px;
+  margin: 0;
+  padding: 0 2px;
+  overflow: hidden;
+  border-radius: 3px 0 3px 0;
+  font-size: 8px;
+  font-weight: 700;
+  line-height: 10px;
+  letter-spacing: 0;
+  text-overflow: ellipsis;
+  pointer-events: none;
 }
 </style>

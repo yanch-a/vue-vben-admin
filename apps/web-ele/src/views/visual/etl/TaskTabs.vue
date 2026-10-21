@@ -3,7 +3,10 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { Plus, Close, MoreFilled } from '@element-plus/icons-vue';
 import type { EtlPipeline } from '#/api/visual/etl';
-import { getDesktopScopedStorageKey } from '../../../desktop/runtime';
+import {
+  loadClosedPipelineIds,
+  saveClosedPipelineIds,
+} from './etlTabState';
 
 /** 标签栏停靠位置，交互对齐 Chrome DevTools 三点菜单。 */
 type TabPosition = 'top' | 'left' | 'right';
@@ -13,47 +16,6 @@ const DOCK_OPTIONS: { value: TabPosition; labelKey: string }[] = [
   { value: 'left', labelKey: '左侧标签' },
   { value: 'right', labelKey: '右侧标签' },
 ];
-
-/** 按工作区持久化已关闭标签，刷新后保持 tabbar 状态。 */
-const CLOSED_STORE_KEY = 'lemon-etl-closed-tabs-v1';
-
-function closedStorageKey() {
-  return getDesktopScopedStorageKey(CLOSED_STORE_KEY);
-}
-
-function readClosedStore(): Record<string, string[]> {
-  try {
-    const raw = localStorage.getItem(closedStorageKey());
-    if (!raw) return {};
-    const parsed = JSON.parse(raw);
-    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-      return {};
-    }
-    return parsed as Record<string, string[]>;
-  } catch {
-    return {};
-  }
-}
-
-function loadClosedIds(workspaceId: string): string[] {
-  const list = readClosedStore()[workspaceId];
-  return Array.isArray(list) ? list.map(String).filter(Boolean) : [];
-}
-
-function saveClosedIds(workspaceId: string, ids: string[]) {
-  const store = readClosedStore();
-  if (!ids.length) delete store[workspaceId];
-  else store[workspaceId] = [...new Set(ids)];
-  try {
-    if (!Object.keys(store).length) {
-      localStorage.removeItem(closedStorageKey());
-    } else {
-      localStorage.setItem(closedStorageKey(), JSON.stringify(store));
-    }
-  } catch {
-    /* 配额不足时忽略，不影响当前会话 */
-  }
-}
 
 /** 去掉已删除任务，并保证当前激活任务始终可见；任务尚未加载时不做删减，避免冲掉本地缓存。 */
 function sanitizeClosed(
@@ -85,6 +47,10 @@ const emit = defineEmits<{
   add: [boolean];
   addExample: [];
   delete: [string];
+  /** 右键复制任务。组件只把任务 ID 交出去，由页面插入新草稿。 */
+  copy: [string];
+  /** 右键把该任务退回上次保存的内容，不影响其它任务。 */
+  restore: [string];
   /** 右键启用或停用任务，只改草稿里的 enabled，不立刻请求后端。 */
   enabled: [id: string, enabled: boolean];
   position: [string];
@@ -93,7 +59,7 @@ const emit = defineEmits<{
 const workspaceKey = computed(() => String(props.workspaceId));
 const closed = ref<string[]>(
   sanitizeClosed(
-    loadClosedIds(String(props.workspaceId)),
+    loadClosedPipelineIds(props.workspaceId),
     props.tasks,
     props.active,
   ),
@@ -153,8 +119,22 @@ function context(event: MouseEvent, id: string) {
   menu.value = {
     id,
     x: Math.max(8, Math.min(event.clientX, window.innerWidth - 170)),
-    y: Math.max(8, Math.min(event.clientY, window.innerHeight - 280)),
+    y: Math.max(8, Math.min(event.clientY, window.innerHeight - 360)),
   };
+}
+/** 复制当前右键的任务。菜单先关掉，避免新标签出现后还盖在上面。 */
+function copyTask() {
+  if (!menu.value) return;
+  const id = menu.value.id;
+  menu.value = undefined;
+  emit('copy', id);
+}
+/** 还原当前右键任务到上次保存的版本。没有未保存修改时不发事件。 */
+function restoreTask() {
+  if (!menu.value || !isDirty(menu.value.id)) return;
+  const id = menu.value.id;
+  menu.value = undefined;
+  emit('restore', id);
 }
 /** 启用/停用当前右键任务。未显式停用（enabled 缺省）视为启用。 */
 function setEnabled(enabled: boolean) {
@@ -175,7 +155,7 @@ function dismiss() {
 }
 
 watch(workspaceKey, (id) => {
-  closed.value = sanitizeClosed(loadClosedIds(id), props.tasks, props.active);
+  closed.value = sanitizeClosed(loadClosedPipelineIds(id), props.tasks, props.active);
 });
 
 /** 任务增删或激活切换时，校正关闭列表并保证当前任务可见。 */
@@ -195,7 +175,7 @@ watch(
 watch(
   closed,
   (ids) => {
-    saveClosedIds(
+    saveClosedPipelineIds(
       workspaceKey.value,
       sanitizeClosed(ids, props.tasks, props.active),
     );
@@ -286,6 +266,9 @@ defineExpose({ hide });
         :class="{ 'picker-dirty': isDirty(active) }"
         :model-value="active || undefined"
         filterable
+        fit-input-width
+        placement="bottom-start"
+        :fallback-placements="['bottom-start', 'top-start']"
         popper-class="etl-task-picker-popper"
         :placeholder="$tr('选择任务')"
         :title="$tr('选择任务（包含已关闭任务）')"
@@ -364,6 +347,16 @@ defineExpose({ hide });
         >
           {{ $tr('打开全部任务') }}
         </button>
+        <button @click="copyTask">{{ $tr('复制任务') }}</button>
+        <button
+          :disabled="!isDirty(menu.id)"
+          :title="
+            isDirty(menu.id) ? $tr('还原任务') : $tr('当前任务没有未保存的修改')
+          "
+          @click="restoreTask"
+        >
+          {{ $tr('还原任务') }}
+        </button>
         <button
           :disabled="menuTask?.enabled !== false"
           @click="setEnabled(true)"
@@ -415,8 +408,9 @@ defineExpose({ hide });
 .dock-trigger {
   padding: 8px;
 }
+/* 选择框在标签栏最右侧。面板比它宽时会被挤到左侧，所以加宽并让面板与选择框同宽。 */
 .task-picker {
-  width: 200px;
+  width: 320px;
   min-width: 140px;
 }
 .tab-items {

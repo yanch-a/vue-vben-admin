@@ -6,6 +6,7 @@
  * - 界面字号（工具栏 / 对象树 / 页签 / 结果区 / 弹窗，不含框架全局字号）
  * - AI 对话字号（助手浮窗消息、输入区、SQL 卡片）
  * - 对象树是否隐藏表备注
+ * - 连接页签是否精简标题（只显示连接名；环境是页签左上角小标识）
  *
  * @author yanch
  */
@@ -36,6 +37,11 @@ export interface ClientPreferences {
   connectionColors: Record<string, string>;
   /** 左侧对象树隐藏表名后的括号备注，默认不隐藏 */
   hideTableComments: boolean;
+  /**
+   * 连接栏精简标题。开启后页签只显示连接名称，类型和主机留在悬停提示里。
+   * 环境小标识与是否精简无关，始终浮在页签左上角，不占用标题位置。
+   */
+  compactConnectionTitle: boolean;
 }
 
 const defaults: ClientPreferences = {
@@ -46,6 +52,7 @@ const defaults: ClientPreferences = {
   aiChatFontSize: 13,
   connectionColors: {},
   hideTableComments: false,
+  compactConnectionTitle: false,
 };
 
 const TABS_LEFT_MIN = 80;
@@ -110,6 +117,7 @@ function load(): ClientPreferences {
       ),
       connectionColors: normalizeConnectionColors(parsed?.connectionColors),
       hideTableComments: parsed?.hideTableComments === true,
+      compactConnectionTitle: parsed?.compactConnectionTitle === true,
     };
   } catch {
     return { ...defaults };
@@ -165,6 +173,7 @@ watch(
           aiChatFontSize: state.aiChatFontSize,
           connectionColors: state.connectionColors,
           hideTableComments: state.hideTableComments,
+          compactConnectionTitle: state.compactConnectionTitle,
         }),
       );
     } catch {
@@ -234,6 +243,13 @@ export function useClientPreferences() {
     },
   });
 
+  const compactConnectionTitle = computed({
+    get: () => state.compactConnectionTitle,
+    set: (v: boolean) => {
+      state.compactConnectionTitle = !!v;
+    },
+  });
+
   function setQueryTabsPlacement(v: QueryTabsPlacement) {
     queryTabsPlacement.value = v;
   }
@@ -262,6 +278,7 @@ export function useClientPreferences() {
     uiFontSize,
     aiChatFontSize,
     hideTableComments,
+    compactConnectionTitle,
     setQueryTabsPlacement,
     getConnectionColor,
     setConnectionColor,
