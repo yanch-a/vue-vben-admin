@@ -28,6 +28,8 @@ export interface EtlHistory {
   /** 清空历史，以当前文档为起点（加载、切换工作区时调用）。 */
   reset: (doc?: EtlWorkspaceDocument) => void;
   size: () => { redo: number; undo: number };
+  /** 只保留最近 max 步撤销 / 重做（放入非活动工作区缓存时用，节省内存）。 */
+  trim: (max: number) => void;
   undo: () => EtlWorkspaceDocument | null;
 }
 
@@ -100,6 +102,12 @@ export function createEtlHistory(limit = ETL_HISTORY_LIMIT): EtlHistory {
       lastKey = '';
     },
     size: () => ({ undo: undoStack.length, redo: redoStack.length }),
+    trim(max) {
+      const keep = Math.max(0, max);
+      // 栈顶（数组末尾）是离当前最近的一步。
+      undoStack = keep ? undoStack.slice(-keep) : [];
+      redoStack = keep ? redoStack.slice(-keep) : [];
+    },
     undo() {
       const previous = undoStack.pop();
       if (!previous || !current) return null;

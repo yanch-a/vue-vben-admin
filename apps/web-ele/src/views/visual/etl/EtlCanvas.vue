@@ -9,6 +9,7 @@
 import type { Cell, Edge, Node } from '@antv/x6';
 
 import type { EtlCanvasEdge, EtlCanvasGroupLayout, EtlCanvasMatch } from './etlCanvasModel';
+import type { EtlCanvasViewState } from './etlWorkspaceSession';
 
 import type { EtlNode, EtlPipeline } from '#/api/visual/etl';
 
@@ -660,6 +661,27 @@ onMounted(() => {
     resizeObserver.observe(containerRef.value);
   }
 });
+/** 画布视图状态（缩放、平移、搜索词），切换工作区时由父组件按工作区保存 / 恢复。 */
+function captureView(): EtlCanvasViewState | undefined {
+  if (!graph) return undefined;
+  const { tx, ty } = graph.translate();
+  return { keyword: keyword.value, matchIndex: matchIndex.value, scale: graph.zoom(), tx, ty };
+}
+async function restoreView(view?: EtlCanvasViewState) {
+  if (!view) return;
+  fitPending = false;
+  keyword.value = view.keyword;
+  // 等搜索 / 选中任务触发的自动居中先跑完，再覆盖为保存的视图。
+  await nextTick();
+  await nextTick();
+  matchIndex.value = Math.min(view.matchIndex, Math.max(0, matches.value.length - 1));
+  render();
+  if (!graph) return;
+  graph.zoomTo(view.scale);
+  graph.translate(view.tx, view.ty);
+}
+defineExpose({ captureView, restoreView });
+
 onBeforeUnmount(() => {
   document.removeEventListener('pointerdown', onDocumentPointer, true);
   window.removeEventListener('resize', syncGraphSize);

@@ -8,10 +8,12 @@ import { parseEtlJson } from './etlSafeJson';
 import {
   computed,
   defineAsyncComponent,
+  markRaw,
   nextTick,
   onBeforeUnmount,
   onMounted,
   ref,
+  toRaw,
   watch,
 } from 'vue';
 import { onBeforeRouteLeave } from 'vue-router';
@@ -79,6 +81,9 @@ import { createEtlPreviewSession } from './etlPreviewSession';
 import EtlFieldRules from './EtlFieldRules.vue';
 import EtlCanvas from './EtlCanvas.vue';
 import { createEtlHistory } from './etlHistory';
+import type { EtlHistory } from './etlHistory';
+import { createEtlWorkspaceSessionCache, ETL_SESSION_HISTORY_STEPS, trimEtlSessionPreviews } from './etlWorkspaceSession';
+import type { EtlCanvasViewState } from './etlWorkspaceSession';
 import {
   ETL_WORKSPACE_SORT_KEY,
   ETL_WORKSPACE_SORT_OPTIONS,
@@ -652,7 +657,7 @@ function selectCanvasCell(pipelineId: string, nodeId?: string) {
  * 文档变化后停顿 400ms 记一步（拖动结束、一次连线、一次改名各一步）；节点抽屉打开期间的修改合并成一步。
  * 打开 / 重新加载工作区时清空；保存不清空，撤销后草稿会重新变成未保存。运行任务不改文档，不进历史。
  */
-const docHistory = createEtlHistory();
+let docHistory: EtlHistory = createEtlHistory();
 const historyState = ref({ canRedo: false, canUndo: false });
 let historyTimer: ReturnType<typeof setTimeout> | undefined;
 let drawerSession = 0;
@@ -669,10 +674,12 @@ function commitDocHistory() {
   refreshHistoryState();
 }
 function resetDocHistory() {
+  const history = docHistory;
   const reset = () => {
     if (historyTimer) clearTimeout(historyTimer);
     historyTimer = undefined;
-    docHistory.reset(doc.value);
+    if (history !== docHistory) return;
+    history.reset(doc.value);
     refreshHistoryState();
   };
   reset();
@@ -898,6 +905,117 @@ async function onWorkspaceDrop(event: DragEvent) {
 function onWorkspaceDragEnd() {
   workspaceDrag.value = undefined;
 }
+/** 切换工作区时保留的页面状态（仅本次页面会话，内存中）。 */
+interface EtlWorkspaceSession {
+  activePipelineId: string;
+  baseDocument?: EtlWorkspaceDocument;
+  baseMeta: { description: string; name: string };
+  canvasEditorOpen: boolean;
+  canvasView?: EtlCanvasViewState;
+  description: string;
+  doc: EtlWorkspaceDocument;
+  editorMode: 'json' | 'steps';
+  history: EtlHistory;
+  jsonText: string;
+  jsonValid: boolean;
+  knownRemoteRevision: number;
+  latestRemoteDocument?: EtlWorkspaceDocument;
+  latestRemoteMeta: { description: string; name: string };
+  preferLocalUntilSave: boolean;
+  previews: typeof previews.value;
+  remoteRevision: number;
+  saved: string;
+  savedRevision: number;
+  scrollTop: number;
+  selectedNodeId: string;
+  validationErrors: string[];
+  validationWarnings: string[];
+  workspaceName: string;
+}
+const workspaceSessions = createEtlWorkspaceSessionCache<EtlWorkspaceSession>();
+const etlCanvasRef = ref<{ captureView: () => EtlCanvasViewState | undefined; restoreView: (view?: EtlCanvasViewState) => Promise<void> }>();
+function taskScrollElement() {
+  return document.querySelector<HTMLElement>('.workspace-main .task-scroll');
+}
+function captureWorkspaceSession() {
+  const row = activeWorkspace.value;
+  if (!row) return;
+  commitDocHistory();
+  docHistory.trim(ETL_SESSION_HISTORY_STEPS);
+  // 存原始对象（去掉 Vue 代理），并 markRaw，避免缓存对象被深度响应式追踪。
+  workspaceSessions.set(row.id, markRaw({
+    activePipelineId: activePipelineId.value,
+    baseDocument: rawOf(baseDocument.value),
+    baseMeta: { ...baseMeta.value },
+    canvasEditorOpen: canvasEditorOpen.value,
+    canvasView: etlCanvasRef.value?.captureView(),
+    description: row.description || '',
+    doc: toRaw(doc.value),
+    editorMode: editorMode.value,
+    history: docHistory,
+    jsonText: jsonText.value,
+    jsonValid: jsonValid.value,
+    knownRemoteRevision: knownRemoteRevision.value,
+    latestRemoteDocument: rawOf(latestRemoteDocument.value),
+    latestRemoteMeta: { ...latestRemoteMeta.value },
+    preferLocalUntilSave,
+    previews: trimEtlSessionPreviews(toRaw(previews.value)),
+    remoteRevision: Number(row.revision) || 0,
+    saved: saved.value,
+    savedRevision: savedRevision.value,
+    scrollTop: taskScrollElement()?.scrollTop || 0,
+    selectedNodeId: selectedNodeId.value,
+    validationErrors: [...validationErrors.value],
+    validationWarnings: [...validationWarnings.value],
+    workspaceName: row.workspaceName || '',
+  }));
+}
+function rawOf<T>(value: T | undefined) {
+  return value === undefined ? undefined : (toRaw(value) as T);
+}
+/**
+ * 切回工作区：服务端 revision 未变时完整恢复（未保存修改、撤销历史、视图）；
+ * 变了则保留刚加载 / 合并好的文档，只恢复任务、节点和画布位置等界面状态。
+ */
+function restoreWorkspaceSession(detail: EtlWorkspaceRow) {
+  const cached = workspaceSessions.take(detail.id, Number(detail.revision) || 0);
+  if (!cached) return;
+  const state = cached.state;
+  if (cached.full) {
+    if (activeWorkspace.value) {
+      activeWorkspace.value.workspaceName = state.workspaceName;
+      activeWorkspace.value.description = state.description;
+    }
+    doc.value = state.doc;
+    docHistory = state.history;
+    refreshHistoryState();
+    editorMode.value = state.editorMode;
+    jsonText.value = state.jsonText;
+    jsonValid.value = state.jsonValid;
+    saved.value = state.saved;
+    savedRevision.value = state.savedRevision;
+    knownRemoteRevision.value = state.knownRemoteRevision;
+    baseDocument.value = state.baseDocument;
+    baseMeta.value = state.baseMeta;
+    latestRemoteDocument.value = state.latestRemoteDocument;
+    latestRemoteMeta.value = state.latestRemoteMeta;
+    preferLocalUntilSave = state.preferLocalUntilSave;
+    previews.value = state.previews;
+    validationErrors.value = state.validationErrors;
+    validationWarnings.value = state.validationWarnings;
+  }
+  if (doc.value.pipelines.some((item) => item.id === state.activePipelineId)) {
+    activePipelineId.value = state.activePipelineId;
+    if (pipeline.value?.nodes.some((item) => item.id === state.selectedNodeId)) selectedNodeId.value = state.selectedNodeId;
+  }
+  void nextTick(async () => {
+    if (String(activeWorkspace.value?.id) !== String(detail.id)) return;
+    await etlCanvasRef.value?.restoreView(state.canvasView);
+    const scroller = taskScrollElement();
+    if (scroller) scroller.scrollTop = state.scrollTop;
+    if (cached.full && state.canvasEditorOpen && stepsView.value === 'canvas' && node.value) canvasEditorOpen.value = true;
+  });
+}
 /** 每次打开意图都有独立代次，陈旧响应及其 finally 不允许覆盖新的工作区。 */
 async function openWorkspace(
   row: EtlWorkspaceRow,
@@ -924,6 +1042,8 @@ async function openWorkspace(
     loading.value = false;
     return false;
   }
+  if (activeWorkspace.value && String(activeWorkspace.value.id) !== String(row.id)) captureWorkspaceSession();
+  if (force) workspaceSessions.delete(row.id);
   cachePaused = true;
   if (cacheTimer) {
     clearTimeout(cacheTimer);
@@ -937,7 +1057,9 @@ async function openWorkspace(
     suppressedPipelineIds.value = [];
     activeWorkspace.value = detail;
     doc.value = document;
+    docHistory = createEtlHistory();
     resetDocHistory();
+    canvasEditorOpen.value = false;
     draftConflict.value = undefined;
     editorMode.value = 'steps';
     activePipelineId.value = doc.value.pipelines[0]?.id || '';
@@ -969,6 +1091,7 @@ async function openWorkspace(
     if (!pipeline.value?.nodes.some((item) => item.id === selectedNodeId.value)) {
       selectedNodeId.value = pipeline.value?.nodes[0]?.id || '';
     }
+    restoreWorkspaceSession(detail);
     rememberEtlWorkspace(detail.id);
     scheduleCollabPull();
     await refreshRuns();
@@ -1755,6 +1878,7 @@ async function deleteWorkspace() {
     });
     const id = activeWorkspace.value.id;
     await deleteEtlWorkspace(id);
+    workspaceSessions.delete(id);
     clearEtlLocalDraft(id);
     activeWorkspace.value = undefined;
     await refreshWorkspaces();
@@ -3667,6 +3791,7 @@ onBeforeUnmount(() => {
               </div>
               <EtlCanvas
                 v-if="stepsView === 'canvas'"
+                ref="etlCanvasRef"
                 :pipelines="doc.pipelines"
                 :active-pipeline-id="activePipelineId"
                 :running="running"
