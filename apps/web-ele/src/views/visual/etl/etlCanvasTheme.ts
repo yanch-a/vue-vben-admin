@@ -20,6 +20,7 @@ export interface EtlCanvasTheme {
   hitFill: string;
   labelFill: string;
   muted: string;
+  danger: string;
   nodeBase: string;
   primary: string;
   shadow: string;
@@ -36,6 +37,7 @@ export const ETL_CANVAS_THEMES: Record<'dark' | 'light', EtlCanvasTheme> = {
     shadowHover: 'rgba(16,24,40,0.14)',
     text: '#303133',
     muted: '#909399',
+    danger: '#f56c6c',
     primary: '#409eff',
     groupFill: 'rgba(0,0,0,0.022)',
     groupBorder: '#e4e7ec',
@@ -58,6 +60,7 @@ export const ETL_CANVAS_THEMES: Record<'dark' | 'light', EtlCanvasTheme> = {
     shadowHover: 'rgba(0,0,0,0.55)',
     text: '#e5eaf3',
     muted: '#8d9095',
+    danger: '#f56c6c',
     primary: '#409eff',
     groupFill: 'rgba(255,255,255,0.025)',
     groupBorder: '#2e3034',
@@ -92,6 +95,9 @@ export function etlTextWidth(text: string, fontSize: number) {
   return width;
 }
 
+/** 节点标题可用宽度：节点宽 148 - 左边圆点区 20 - 右边内边距 8 */
+export const ETL_CANVAS_NODE_TITLE_MAX = 120;
+
 export function etlFitText(text: string, fontSize: number, maxWidth: number) {
   if (etlTextWidth(text, fontSize) <= maxWidth) return text;
   let result = '';
@@ -110,6 +116,8 @@ export interface EtlGroupStyleState {
   disabled: boolean;
   hit: boolean;
   name: string;
+  /** 停用等状态文案；单独渲染为红色，不拼进 name，避免超长被截掉 */
+  status?: string;
   width: number;
 }
 
@@ -118,8 +126,12 @@ const GROUP_LABEL_X = 10;
 /** 分组：无边框浅色区域；标题是纯文字（名称 + 灰色步骤数），活动任务名称前加主色小圆点。 */
 export function etlGroupAttrs(theme: EtlCanvasTheme, state: EtlGroupStyleState) {
   const nameX = state.active ? GROUP_LABEL_X + 10 : GROUP_LABEL_X;
+  const status = state.status || (state.disabled ? '停用' : '');
+  const statusGap = status ? 6 : 0;
+  const statusWidth = status ? etlTextWidth(status, 11) + statusGap : 0;
   const countWidth = etlTextWidth(state.count, 11) + 6;
-  const name = etlFitText(state.name, 12, Math.max(24, state.width - nameX - GROUP_LABEL_X - countWidth));
+  const name = etlFitText(state.name, 12, Math.max(24, state.width - nameX - GROUP_LABEL_X - countWidth - statusWidth));
+  const nameEnd = nameX + etlTextWidth(name, 12);
   const ring = state.current || state.hit;
   const opacity = state.dim ? 0.35 : 1;
   return {
@@ -133,11 +145,19 @@ export function etlGroupAttrs(theme: EtlCanvasTheme, state: EtlGroupStyleState) 
     label: {
       text: name,
       refX: nameX,
-      fill: state.hit ? theme.hit : state.active ? theme.primary : state.disabled ? theme.muted : theme.text,
-      fontStyle: state.disabled ? 'italic' : 'normal',
+      fill: state.hit ? theme.hit : state.active ? theme.primary : theme.text,
+      fontStyle: 'normal',
       opacity,
     },
-    count: { text: state.count, refX: nameX + etlTextWidth(name, 12) + 6, fill: theme.muted, opacity },
+    status: {
+      text: status,
+      refX: status ? nameEnd + statusGap : nameEnd,
+      fill: theme.danger,
+      fontSize: 11,
+      fontWeight: 500,
+      opacity,
+    },
+    count: { text: state.count, refX: nameEnd + statusWidth + 6, fill: theme.muted, opacity },
   };
 }
 
@@ -154,6 +174,8 @@ export interface EtlNodeStyleState {
 /** 节点：中性无边框卡片 + 柔和阴影；选中才出现 1.5px 主色环，命中为暖色底 + 环。 */
 export function etlNodeAttrs(theme: EtlCanvasTheme, state: EtlNodeStyleState) {
   const ring = state.hit || state.current ? theme.hit : state.selected ? theme.primary : 'none';
+  // 不用 X6 textWrap：超长标题在 height:16 + ellipsis 下会整段消失；改成预截断保证始终可见。
+  const title = etlFitText(state.title || '', 12, ETL_CANVAS_NODE_TITLE_MAX);
   return {
     body: {
       fill: state.hit ? theme.hitFill : theme.nodeBase,
@@ -163,7 +185,7 @@ export function etlNodeAttrs(theme: EtlCanvasTheme, state: EtlNodeStyleState) {
       opacity: state.dim ? 0.25 : state.disabled ? 0.5 : 1,
     },
     dot: { fill: state.accent, opacity: state.dim ? 0.25 : state.disabled ? 0.4 : 1 },
-    title: { text: state.title, fill: state.disabled ? theme.muted : theme.text, opacity: state.dim ? 0.35 : 1 },
+    title: { text: title, fill: state.disabled ? theme.muted : theme.text, opacity: state.dim ? 0.35 : 1 },
   };
 }
 

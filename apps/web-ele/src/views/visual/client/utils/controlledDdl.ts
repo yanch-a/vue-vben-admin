@@ -17,13 +17,25 @@ function stripSqlNoise(sql: string): string {
 /**
  * 表/库/索引/序列/物化视图及维护类语句；与 SqlDdlValidator 白名单对齐。
  * LOAD DATA / DROP USER / SET / 事务控制不在此放行。
+ * FLUSH 只放行 PRIVILEGES。FLUSH TABLES / LOGS 可能锁表或轮转日志，继续走只读接口会被拒绝。
  */
 const CONTROLLED_DDL_HEAD =
   /^(CREATE\s+(OR\s+REPLACE\s+)?((GLOBAL\s+)?(TEMPORARY|TEMP)\s+|UNLOGGED\s+)?TABLE\b|CREATE\s+(OR\s+REPLACE\s+|OR\s+ALTER\s+)?(?:DEFINER\s*=\s*\S+\s+)?(VIEW|PROCEDURE|FUNCTION|TRIGGER|EVENT|ALIAS|DATABASE|SCHEMA|USER|SEQUENCE|TYPE|PROC)\b|CREATE\s+(OR\s+REPLACE\s+)?MATERIALIZED\s+VIEW\b|CREATE\s+(UNIQUE\s+|FULLTEXT\s+|SPATIAL\s+)?INDEX\b|DROP\s+(TEMPORARY\s+)?TABLE\b|DROP\s+(IF\s+EXISTS\s+)?(VIEW|PROCEDURE|FUNCTION|TRIGGER|EVENT|ALIAS|TABLE|DATABASE|SCHEMA|INDEX|SEQUENCE|TYPE)\b|DROP\s+(IF\s+EXISTS\s+)?MATERIALIZED\s+VIEW\b|ALTER\s+(TABLE|VIEW|PROCEDURE|FUNCTION|TRIGGER|EVENT|INDEX|DATABASE|SCHEMA|USER|SEQUENCE|TYPE)\b|ALTER\s+MATERIALIZED\s+VIEW\b|ALTER\s+SESSION\b|TRUNCATE\s+(TABLE\s+)?|RENAME\b|REVOKE\b|GRANT\b|COMMENT\s+ON\b|REFRESH\s+MATERIALIZED\s+VIEW\b|OPTIMIZE(\s+TABLE)?\b|ANALYZE(\s+TABLE)?\b|REPAIR\s+TABLE\b|CHECK\s+TABLE\b|VACUUM\b|REINDEX\b|CLUSTER\b|CALL\b|EXEC\b|EXECUTE\b|DO\b)/i;
 
+/** MySQL：重新加载权限表。允许可选的 LOCAL / NO_WRITE_TO_BINLOG，不允许再拼其它 FLUSH 项。 */
+const FLUSH_PRIVILEGES =
+  /^FLUSH\s+(?:NO_WRITE_TO_BINLOG\s+|LOCAL\s+)?PRIVILEGES\s*;?\s*$/i;
+
+export function isFlushPrivileges(sql: string): boolean {
+  const s = stripSqlNoise(sql);
+  return !!s && FLUSH_PRIVILEGES.test(s);
+}
+
 export function looksLikeControlledDdl(sql: string): boolean {
   const s = stripSqlNoise(sql);
   if (!s) return false;
+  // FLUSH 不能并进上面的大正则：FLUSH TABLES 也会命中 FLUSH 前缀，必须整句精确匹配。
+  if (/^FLUSH\b/i.test(s)) return isFlushPrivileges(sql);
   return CONTROLLED_DDL_HEAD.test(s);
 }
 

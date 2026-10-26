@@ -13,6 +13,9 @@ import { RouteCachedPage, RouteCachedView } from '../../route-cached';
 
 defineOptions({ name: 'LayoutContent' });
 
+/** 最多保留的页面实例数，超出按最近最少使用淘汰，防止开很多标签后内存膨胀 */
+const KEEP_ALIVE_MAX = 20;
+
 const tabbarStore = useTabbarStore();
 const route = useRoute();
 const { keepAlive } = usePreferences();
@@ -71,6 +74,7 @@ const showComponent = (route: RouteLocationNormalizedLoadedGeneric) => {
           v-if="keepAlive"
           :exclude="getExcludeCachedTabs"
           :include="getCachedTabs"
+          :max="KEEP_ALIVE_MAX"
         >
           <component
             :is="transformComponent(Component, route)"
@@ -90,6 +94,7 @@ const showComponent = (route: RouteLocationNormalizedLoadedGeneric) => {
           v-if="keepAlive"
           :exclude="getExcludeCachedTabs"
           :include="getCachedTabs"
+          :max="KEEP_ALIVE_MAX"
         >
           <component
             :is="transformComponent(Component, route)"

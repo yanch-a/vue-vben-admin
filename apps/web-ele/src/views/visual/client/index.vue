@@ -115,7 +115,7 @@ import { humanizeApiError } from './utils/humanizeApiError';
 import { resolveSqlDialect, resolveTableIdent } from './dialect/sqlDialect';
 import { resolveDbType, resolveDialectFamily } from './dialect/dbTypes';
 import type { TableDesignSqlResult } from './dialect/tableDesignerDialect';
-import { isDestructiveDdl, looksLikeControlledDdl } from './utils/controlledDdl';
+import { isDestructiveDdl, isFlushPrivileges, looksLikeControlledDdl } from './utils/controlledDdl';
 import {
   metadataInstanceName,
   metadataTableName,
@@ -2415,7 +2415,7 @@ function feedbackSchemaDocSilent(sql: string, conn = activeConnection.value, ins
   }).catch(() => {});
 }
 
-/** 受控 DDL / CALL：默认仅 DROP 等删除类需确认；AI 入口可 forceConfirm */
+/** 受控 DDL / CALL：DROP、TRUNCATE、REVOKE、FLUSH PRIVILEGES 需要确认；AI 入口一律确认 */
 async function runControlledDdl(
   sql: string,
   opts?: { skipConfirm?: boolean; forceConfirm?: boolean },
@@ -2424,15 +2424,17 @@ async function runControlledDdl(
   const conn = { ...activeConnection.value };
   const tab = activeTab.value;
   const instanceName = tab.instanceName;
-  if (!opts?.skipConfirm && (opts?.forceConfirm || isDestructiveDdl(sql))) {
+  if (!opts?.skipConfirm && (opts?.forceConfirm || isDestructiveDdl(sql) || isFlushPrivileges(sql))) {
     const head = String(sql || '').replace(/\/\*[\s\S]*?\*\//g, ' ').trim();
     const tip = /^\s*TRUNCATE\b/i.test(head)
       ? '即将执行 TRUNCATE 清空表，确认继续？'
       : /^\s*REVOKE\b/i.test(head)
         ? '即将执行 REVOKE 收回权限，确认继续？'
-        : isDestructiveDdl(sql)
-          ? '即将执行删除类 DDL（DROP），确认继续？'
-          : describeSqlWriteRisk(sql);
+        : isFlushPrivileges(sql)
+          ? '即将执行 FLUSH PRIVILEGES，重新加载服务器权限缓存，确认继续？'
+          : isDestructiveDdl(sql)
+            ? '即将执行删除类 DDL（DROP），确认继续？'
+            : describeSqlWriteRisk(sql);
     if (!(await confirmSqlWrite(sql, { message: tip }))) return;
   }
   if (tab.executing || closingQueryTabs.has(tab.id)) return;

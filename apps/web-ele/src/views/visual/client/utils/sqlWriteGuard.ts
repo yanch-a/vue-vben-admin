@@ -48,6 +48,7 @@ const WRITE_PREFIXES = new Set([
   'VACUUM',
   'REINDEX',
   'CLUSTER',
+  'FLUSH',
 ]);
 
 /**
@@ -110,7 +111,9 @@ export function describeSqlWriteRisk(sql: string): string {
                     ? 'RENAME 重命名'
                     : first === 'REVOKE'
                       ? 'REVOKE 收回权限'
-                      : first === 'ALTER' || first === 'CREATE'
+                      : first === 'FLUSH'
+                        ? 'FLUSH PRIVILEGES 刷新权限'
+                        : first === 'ALTER' || first === 'CREATE'
                         ? `${first} 结构变更`
                         : first
                           ? `${first} 写操作`

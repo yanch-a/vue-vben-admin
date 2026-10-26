@@ -2706,5 +2706,16 @@
   "还没有任务": "No tasks yet",
   "运行任务": "Run task",
   "任务名称": "Task name",
-  "重做": "Redo"
+  "重做": "Redo",
+  "配置或工作区已变化": "Config or workspace changed",
+  "任务未成功": "Task did not succeed",
+  "请先回到步骤视图再运行": "Switch back to the steps view before running",
+  "没有可运行的启用任务": "No enabled tasks to run",
+  "运行全部启用任务": "Run all enabled tasks",
+  "运行全部": "Run all",
+  "提交中": "Submitting",
+  "已取消，未启动": "Cancelled; not started",
+  "前置任务失败，已跳过": "Skipped because a previous task failed",
+  "按顺序运行全部启用任务": "Run all enabled tasks in order",
+  "全部任务": "All tasks"
 }

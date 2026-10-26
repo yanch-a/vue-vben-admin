@@ -4,7 +4,7 @@ import type {
   RouteLocationNormalizedLoadedGeneric,
 } from 'vue-router';
 
-import { computed, defineComponent } from 'vue';
+import { computed, defineComponent, h } from 'vue';
 
 import { preferences, usePreferences } from '@vben/preferences';
 
@@ -12,6 +12,25 @@ const MissingView = defineComponent({
   name: 'MissingView',
   render: () => null,
 });
+
+/** 每个路由名只建一个外壳组件，避免每次渲染新建组件导致重挂载 */
+const namedRouteWrappers = new Map<string, ReturnType<typeof defineComponent>>();
+
+function getNamedRouteWrapper(routeName: string) {
+  let wrapper = namedRouteWrappers.get(routeName);
+  if (!wrapper) {
+    wrapper = defineComponent({
+      name: routeName,
+      inheritAttrs: false,
+      props: { page: { required: true, type: Object } },
+      setup(props) {
+        return () => props.page as VNode;
+      },
+    });
+    namedRouteWrappers.set(routeName, wrapper);
+  }
+  return wrapper;
+}
 
 /**
  * 转换组件，自动添加 name（供 KeepAlive include 匹配）
@@ -35,8 +54,13 @@ export function transformComponent(
 
   const type = component.type as any;
   const componentName = type?.name || type?.__name;
-  if (componentName) {
+  if (componentName === routeName) {
     return component;
+  }
+  if (componentName) {
+    // <script setup> 页面的 __name 是文件名（如 index），与路由名对不上，
+    // KeepAlive include 按路由名匹配，必须套一层同名外壳才能命中缓存。
+    return h(getNamedRouteWrapper(routeName), { page: component });
   }
 
   // 仅补 name，不替换组件类型（保持引用稳定）

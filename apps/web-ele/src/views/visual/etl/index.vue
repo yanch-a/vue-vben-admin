@@ -10,7 +10,9 @@ import {
   defineAsyncComponent,
   markRaw,
   nextTick,
+  onActivated,
   onBeforeUnmount,
+  onDeactivated,
   onMounted,
   ref,
   toRaw,
@@ -76,11 +78,22 @@ import EtlShareDialog from './EtlShareDialog.vue';
 import EtlMergeDialog from './EtlMergeDialog.vue';
 import EtlHistoryDialog from './EtlHistoryDialog.vue';
 import { translateUiText } from '#/locales/ui-text';
+import {
+  buildRunAllConfirmMessage,
+  formatBatchLogPrefix,
+  isTerminalRunStatus,
+  listEnabledBatchTasks,
+  runBatchSequentially,
+  summarizeBatch,
+  tagBatchLogLine,
+  type EtlBatchItem,
+} from './etlRunBatch';
 import { createEtlRequestGate } from './etlRequestGate';
 import { createEtlPreviewSession } from './etlPreviewSession';
 import EtlFieldRules from './EtlFieldRules.vue';
 import EtlCanvas from './EtlCanvas.vue';
 import { createEtlHistory } from './etlHistory';
+import { isEtlSaveShortcut, shouldHandleEtlSave } from './etlSaveShortcut';
 import type { EtlHistory } from './etlHistory';
 import { createEtlWorkspaceSessionCache, ETL_SESSION_HISTORY_STEPS, trimEtlSessionPreviews } from './etlWorkspaceSession';
 import type { EtlCanvasViewState } from './etlWorkspaceSession';
@@ -430,6 +443,13 @@ const liveLogs = ref<any[]>([]);
 const liveConsoleOpen = ref(false);
 const liveLogBody = ref<HTMLElement>();
 let liveLogRequest = 0;
+/** 顶部「运行」全部任务批次；画布/任务头单跑时保持 false。 */
+const liveBatchMode = ref(false);
+const liveBatchItems = ref<EtlBatchItem[]>([]);
+const liveBatchSummary = computed(() => summarizeBatch(liveBatchItems.value));
+let batchCancelRequested = false;
+/** 当前轮询日志所属任务，用于给日志行打任务名前缀。 */
+let liveLogTagTask: { id: string; name: string } | undefined;
 /** 只取消还没返回的预览。正式运行一旦提交就不能靠断开 HTTP 停掉。 */
 let previewAbort: AbortController | undefined;
 /** 接口按时间倒序返回，页面从旧到新往下追加，便于跟着最新一行看。 */
@@ -781,6 +801,10 @@ function resetLiveConsole() {
   liveRunSnapshot.value = undefined;
   liveLogs.value = [];
   liveConsoleOpen.value = false;
+  liveBatchMode.value = false;
+  liveBatchItems.value = [];
+  batchCancelRequested = false;
+  liveLogTagTask = undefined;
 }
 function abortPreviewRequest() {
   previewAbort?.abort();
@@ -1851,18 +1875,29 @@ async function publish() {
       dirty.value
     )
       return;
-    await publishEtlWorkspace(id!);
+    const published = unbox<{ versionNo?: number }>(await publishEtlWorkspace(id!));
     if (!workspaceRequests.current(request) || !sameWorkspace(activeWorkspace.value?.id, id)) return;
-    say('success', '发布成功');
-    await refreshWorkspaces();
-    const listed = workspaces.value.find((item) => sameWorkspace(item.id, id));
-    if (listed && activeWorkspace.value && sameWorkspace(activeWorkspace.value.id, id)) {
+    if (activeWorkspace.value && sameWorkspace(activeWorkspace.value.id, id)) {
       activeWorkspace.value = {
         ...activeWorkspace.value,
-        revision: listed.revision ?? activeWorkspace.value.revision,
-        publishedVersion: listed.publishedVersion,
-        status: listed.status,
+        publishedVersion: published?.versionNo ?? (Number(activeWorkspace.value.publishedVersion || 0) + 1),
+        status: 'PUBLISHED',
       };
+    }
+    say('success', '发布成功');
+    try {
+      await refreshWorkspaces();
+      const listed = workspaces.value.find((item) => sameWorkspace(item.id, id));
+      if (listed && activeWorkspace.value && sameWorkspace(activeWorkspace.value.id, id)) {
+        activeWorkspace.value = {
+          ...activeWorkspace.value,
+          revision: listed.revision ?? activeWorkspace.value.revision,
+          publishedVersion: listed.publishedVersion,
+          status: listed.status,
+        };
+      }
+    } catch {
+      /* list refresh failure must not hide a successful publish */
     }
   } catch (error) {
     say('error', errorMessage(error));
@@ -2614,7 +2649,9 @@ function liveNodeName(nodeId?: string) {
  * 若这一轮新增超过一页，继续往前翻，直到和已有记录接上，避免实时区只剩最新 50 条。
  */
 async function loadNewLiveLogs(id: string, request: number) {
-  const known = new Set(liveLogs.value.map((item) => item.id));
+  const known = new Set(
+    liveLogs.value.map((item) => item.batchKey || `${item.runId || id}:${item.id}`),
+  );
   const incoming: any[] = [];
   let page = 1;
   let total = Number.POSITIVE_INFINITY;
@@ -2626,19 +2663,28 @@ async function loadNewLiveLogs(id: string, request: number) {
     if (!records.length) break;
     let overlapped = false;
     for (const record of records) {
-      if (known.has(record.id)) {
+      const tagged = liveLogTagTask
+        ? tagBatchLogLine(record, liveLogTagTask, id)
+        : { ...record, runId: id, batchKey: `${id}:${record.id}` };
+      const key = tagged.batchKey;
+      if (known.has(key)) {
         overlapped = true;
         continue;
       }
-      if (!incoming.some((item) => item.id === record.id)) incoming.push(record);
+      if (!incoming.some((item) => item.batchKey === key)) incoming.push(tagged);
     }
     if (overlapped && known.size) break;
     if (records.length < 50) break;
     page += 1;
   }
   if (!incoming.length) return false;
-  const incomingIds = new Set(incoming.map((item) => item.id));
-  liveLogs.value = [...incoming, ...liveLogs.value.filter((item) => !incomingIds.has(item.id))].slice(0, 1000);
+  const incomingKeys = new Set(incoming.map((item) => item.batchKey));
+  liveLogs.value = [
+    ...incoming,
+    ...liveLogs.value.filter(
+      (item) => !incomingKeys.has(item.batchKey || `${item.runId || id}:${item.id}`),
+    ),
+  ].slice(0, 2000);
   return true;
 }
 
@@ -2675,6 +2721,7 @@ function openLiveHistory() {
 }
 
 async function cancelLiveRun() {
+  if (liveBatchMode.value) batchCancelRequested = true;
   if (!liveRunSnapshot.value) return;
   selectedRun.value = liveRunSnapshot.value;
   await cancelRun();
@@ -2752,6 +2799,225 @@ async function runPipeline() {
     running.value = false;
   }
 }
+
+/** 把已提交的运行挂到实时日志区；全部运行时不清空已有任务日志。 */
+function attachLiveRun(started: EtlRun, task: { id: string; name: string }, clearLogs: boolean) {
+  selectedRun.value = started;
+  liveRunSnapshot.value = started;
+  liveRunId.value = started.id;
+  liveLogTagTask = task;
+  if (clearLogs) liveLogs.value = [];
+  liveConsoleOpen.value = true;
+}
+
+function patchBatchItem(
+  pipelineId: string,
+  patch: Partial<EtlBatchItem>,
+) {
+  liveBatchItems.value = liveBatchItems.value.map((item) =>
+    item.pipelineId === pipelineId ? { ...item, ...patch } : item,
+  );
+}
+
+/**
+ * 提交单个任务后轮询到终态。失败/取消抛错，供全部运行编排跳过后续。
+ */
+async function executeAndWaitPipeline(
+  workspaceId: string | number,
+  pipelineId: string,
+  revision: number,
+  task: { id: string; name: string },
+  stillCurrent: () => boolean,
+  clearLogs: boolean,
+): Promise<EtlRun> {
+  const started = unbox<EtlRun>(
+    await executeEtlWorkflow(workspaceId, pipelineId, revision),
+  );
+  if (!stillCurrent()) throw new Error('配置或工作区已变化');
+  attachLiveRun(started, task, clearLogs);
+  patchBatchItem(pipelineId, {
+    runId: started.id,
+    status: 'RUNNING',
+    message: started.message,
+  });
+  while (true) {
+    if (!stillCurrent()) throw new Error('配置或工作区已变化');
+    if (batchCancelRequested) {
+      try {
+        await cancelEtlRun(started.id);
+      } catch {
+        /* ignore cancel transport errors */
+      }
+    }
+    await refreshLiveLogs();
+    const snap =
+      liveRunSnapshot.value?.id === started.id
+        ? liveRunSnapshot.value
+        : unbox<EtlRun>(await getEtlRun(started.id, true));
+    if (snap) {
+      liveRunSnapshot.value = snap;
+      patchBatchItem(pipelineId, {
+        status: (isTerminalRunStatus(snap.status)
+          ? snap.status
+          : 'RUNNING') as EtlBatchItem['status'],
+        message: snap.message,
+      });
+      if (isTerminalRunStatus(snap.status)) {
+        if (snap.status === 'SUCCESS') return snap;
+        const err: any = new Error(snap.message || snap.status || '任务未成功');
+        err.runStatus = snap.status;
+        throw err;
+      }
+    }
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+  }
+}
+
+/** 顶部工具栏：按工作区任务定义顺序，逐个运行全部启用任务。 */
+async function runAllPipelines() {
+  if (!activeWorkspace.value || running.value) return;
+  if (editorMode.value === 'json') {
+    say('warning', '请先回到步骤视图再运行');
+    return;
+  }
+  const enabled = listEnabledBatchTasks(doc.value.pipelines);
+  if (!enabled.length) {
+    say('warning', '没有可运行的启用任务');
+    return;
+  }
+  const disabledCount = doc.value.pipelines.length - enabled.length;
+  const request = workspaceRequests.stamp();
+  const workspaceId = activeWorkspace.value.id;
+  running.value = true;
+  batchCancelRequested = false;
+  try {
+    if (dirty.value && !(await saveDraft())) return;
+    if (
+      !workspaceRequests.current(request) ||
+      !sameWorkspace(activeWorkspace.value.id, workspaceId) ||
+      dirty.value
+    )
+      return;
+    const base = snapshot();
+    const revision = activeWorkspace.value.revision;
+    const stillCurrent = () =>
+      workspaceRequests.current(request) &&
+      snapshot() === base &&
+      sameWorkspace(activeWorkspace.value?.id, workspaceId) &&
+      activeWorkspace.value?.revision === revision;
+    const result = unbox<any>(await validateEtlWorkspace(JSON.stringify(doc.value)));
+    if (!stillCurrent()) {
+      say('info', '配置或工作区已变化，请重新运行');
+      return;
+    }
+    validationErrors.value = result.errors || [];
+    validationWarnings.value = result.warnings || [];
+    validatedSnapshot = snapshot();
+    if (!result.valid) {
+      say('error', result.errors?.[0] || '配置无效');
+      return;
+    }
+    const incomplete = incompleteDraftWarnings();
+    if (incomplete.length) {
+      say('warning', incomplete[0]);
+      return;
+    }
+    await ElMessageBox.confirm(
+      buildRunAllConfirmMessage(enabled.length, disabledCount),
+      '运行全部启用任务',
+      { type: 'warning', confirmButtonText: '运行全部' },
+    );
+    if (!stillCurrent()) {
+      say('info', '配置或工作区已变化，请重新确认运行');
+      return;
+    }
+    liveBatchMode.value = true;
+    liveBatchItems.value = enabled.map((task) => ({
+      pipelineId: task.id,
+      pipelineName: task.name || task.id,
+      status: 'PENDING' as const,
+    }));
+    liveLogs.value = [];
+    liveConsoleOpen.value = true;
+    liveRunId.value = '';
+    liveRunSnapshot.value = undefined;
+    liveLogTagTask = undefined;
+
+    const batch = await runBatchSequentially({
+      tasks: enabled.map((task) => ({
+        id: task.id,
+        name: task.name || task.id,
+      })),
+      isCancelRequested: () => batchCancelRequested,
+      shouldContinue: stillCurrent,
+      onItemStart: (task) => {
+        patchBatchItem(task.id, { status: 'RUNNING', message: '提交中' });
+      },
+      onSkipRemaining: (task, _index, reason) => {
+        patchBatchItem(task.id, {
+          status: reason === 'cancel' ? 'CANCELLED' : 'SKIPPED',
+          message: reason === 'cancel' ? '已取消，未启动' : '前置任务失败，已跳过',
+        });
+      },
+      runOne: async (task) => {
+        if (!stillCurrent()) throw new Error('配置或工作区已变化');
+        return await executeAndWaitPipeline(
+          workspaceId,
+          task.id,
+          revision,
+          task,
+          stillCurrent,
+          false,
+        );
+      },
+      onItemDone: (task, _index, outcome) => {
+        if (outcome.ok) {
+          patchBatchItem(task.id, {
+            status: 'SUCCESS',
+            message: outcome.value.message,
+            runId: outcome.value.id,
+          });
+          return;
+        }
+        const status =
+          (outcome.error as any)?.runStatus === 'CANCELLED' || batchCancelRequested
+            ? 'CANCELLED'
+            : 'FAILED';
+        patchBatchItem(task.id, {
+          status,
+          message:
+            status === 'CANCELLED'
+              ? '已取消'
+              : String((outcome.error as any)?.message || 'FAILED'),
+        });
+      },
+    });
+
+    if (!workspaceRequests.current(request)) return;
+    await refreshRuns();
+    const summary = summarizeBatch(liveBatchItems.value);
+    if (batch.cancelled || batchCancelRequested) {
+      say(
+        'warning',
+        `全部运行已取消：成功 ${summary.success} · 跳过 ${summary.skipped + summary.cancelled}`,
+      );
+    } else if (batch.failed || summary.failed) {
+      say(
+        'error',
+        `全部运行中断：成功 ${summary.success} · 失败 ${summary.failed} · 跳过 ${summary.skipped}`,
+      );
+    } else {
+      say('success', `全部启用任务已完成：${summary.success}/${summary.total}`);
+    }
+  } catch (error: any) {
+    if (error !== 'cancel' && error !== 'close')
+      say('error', errorMessage(error));
+  } finally {
+    running.value = false;
+  }
+}
+
+
 /** 进行中的实时日志要继续轮询；离开页面或已经换了工作区则停止。 */
 function scheduleLivePoll(workspaceId?: string | number) {
   if (!pageAlive || pollTimer) return;
@@ -3373,7 +3639,33 @@ watch(
   () => scheduleFlushDraft(),
   { deep: true },
 );
+/**
+ * 页面任意位置 Ctrl+S / Cmd+S 保存（画布、表单、输入框、左侧列表、抽屉都可以）。
+ * 冒泡阶段监听：SQL 编辑器自己处理 Ctrl+S 时会 preventDefault，这里就跳过，避免保存两次。
+ * 只在 ETL 页面激活时挂监听，keep-alive 切到别的页面后移除。
+ */
+function onSaveShortcut(event: KeyboardEvent) {
+  if (!isEtlSaveShortcut(event)) return;
+  const handle = shouldHandleEtlSave(event);
+  // 无论是否保存都拦住浏览器的“另存网页”。
+  event.preventDefault();
+  if (!handle || !activeWorkspace.value || saving.value || loading.value) return;
+  void saveDraft();
+}
+let saveShortcutBound = false;
+function bindSaveShortcut() {
+  if (saveShortcutBound) return;
+  saveShortcutBound = true;
+  window.addEventListener('keydown', onSaveShortcut);
+}
+function unbindSaveShortcut() {
+  saveShortcutBound = false;
+  window.removeEventListener('keydown', onSaveShortcut);
+}
+onActivated(bindSaveShortcut);
+onDeactivated(unbindSaveShortcut);
 onMounted(async () => {
+  bindSaveShortcut();
   refreshEtlDirtyIds();
   window.addEventListener('beforeunload', beforeUnload);
   document.addEventListener('visibilitychange', onDocumentVisible);
@@ -3397,6 +3689,7 @@ onMounted(async () => {
   }
 });
 onBeforeUnmount(() => {
+  unbindSaveShortcut();
   pageAlive = false;
   abortPreviewRequest();
   flushActiveDraft();
@@ -3500,9 +3793,10 @@ onBeforeUnmount(() => {
           >
           <el-button
             type="primary"
-            :disabled="!pipeline || editorMode === 'json'"
+            :disabled="!activeWorkspace || editorMode === 'json'"
             :loading="running"
-            @click="runPipeline"
+            :title="$tr('按顺序运行全部启用任务')"
+            @click="runAllPipelines"
             >{{ $tr('运行') }}</el-button
           >
           <el-button-group class="save-split">
@@ -4529,7 +4823,7 @@ onBeforeUnmount(() => {
             </div>
             </div>
             <section
-              v-if="liveRunSnapshot"
+              v-if="liveRunSnapshot || liveBatchMode"
               class="run-console"
               aria-live="polite"
               :aria-label="$tr('执行日志')"
@@ -4537,16 +4831,43 @@ onBeforeUnmount(() => {
               <header class="run-console-head">
                 <strong
                   >{{ $tr('执行日志') }} ·
-                  {{ liveRunSnapshot.pipelineName || pipeline?.name }}</strong
+                  <template v-if="liveBatchMode"
+                    >{{ $tr('全部任务') }} ·
+                    {{ liveBatchSummary.headline }}</template
+                  >
+                  <template v-else>{{
+                    liveRunSnapshot?.pipelineName || pipeline?.name
+                  }}</template></strong
                 >
                 <el-tag size="small">{{
-                  statusLabel(liveRunSnapshot.status)
+                  liveBatchMode
+                    ? statusLabel(
+                        liveBatchSummary.finished
+                          ? liveBatchSummary.failed
+                            ? 'FAILED'
+                            : liveBatchSummary.cancelled
+                              ? 'CANCELLED'
+                              : 'SUCCESS'
+                          : liveRunSnapshot?.status || 'RUNNING',
+                      )
+                    : statusLabel(liveRunSnapshot?.status || '')
                 }}</el-tag>
                 <span class="run-console-message">{{
-                  liveRunSnapshot.message
+                  liveBatchMode
+                    ? liveBatchSummary.headline
+                    : liveRunSnapshot?.message
                 }}</span>
                 <el-button
-                  v-if="['PENDING', 'RUNNING'].includes(liveRunSnapshot.status)"
+                  v-if="
+                    liveBatchMode
+                      ? running ||
+                        ['PENDING', 'RUNNING'].includes(
+                          liveRunSnapshot?.status || '',
+                        )
+                      : ['PENDING', 'RUNNING'].includes(
+                          liveRunSnapshot?.status || '',
+                        )
+                  "
                   link
                   type="danger"
                   @click="cancelLiveRun"
@@ -4569,12 +4890,17 @@ onBeforeUnmount(() => {
                 </p>
                 <div
                   v-for="item in liveLogLines"
-                  :key="item.id"
+                  :key="item.batchKey || item.id"
                   class="run-console-line"
                   :data-level="item.level"
                 >
                   <time>{{ formatLogTime(item.createdAt) }}</time>
                   <em>{{ item.level }}</em>
+                  <span
+                    v-if="item.pipelineName"
+                    class="run-console-task"
+                    >{{ formatBatchLogPrefix(item.pipelineName) }}</span
+                  >
                   <span v-if="item.nodeId" class="run-console-node">{{
                     liveNodeName(item.nodeId)
                   }}</span>
@@ -5358,6 +5684,12 @@ button.step-item.flow-step {
 }
 .run-console-line time,
 .run-console-line em,
+.run-console-task {
+  color: var(--el-color-primary);
+  font-style: normal;
+  margin-right: 6px;
+  flex-shrink: 0;
+}
 .run-console-node {
   flex: 0 0 auto;
   color: var(--el-text-color-secondary);

@@ -45,4 +45,28 @@ describe('画布主题样式', () => {
     expect(etlFitText('非常非常非常非常长的任务名称', 12, 60)).toMatch(/…$/);
     expect(etlGroupAttrs(ETL_CANVAS_THEMES.light, { ...group, name: '非常非常非常非常非常非常长的任务名称', width: 120 }).label.text).toMatch(/…$/);
   });
+
+  it('节点长标题预截断而不是整段消失', () => {
+    const long = '这是一个特别特别特别特别长的步骤标题用来复现不显示';
+    const attrs = etlNodeAttrs(ETL_CANVAS_THEMES.light, { ...node, title: long });
+    expect(attrs.title.text.length).toBeGreaterThan(0);
+    expect(attrs.title.text).toMatch(/…$/);
+    expect(attrs.title.text.length).toBeLessThan(long.length);
+  });
+
+  it('停用状态单独标红且不拼进名称', () => {
+    const attrs = etlGroupAttrs(ETL_CANVAS_THEMES.light, {
+      ...group,
+      disabled: true,
+      status: '停用',
+      name: '数据同步',
+      width: 340,
+    });
+    expect(attrs.label.text).toBe('数据同步');
+    expect(attrs.status.text).toBe('停用');
+    expect(attrs.status.fill).toBe(ETL_CANVAS_THEMES.light.danger);
+    expect(attrs.status.refX).toBeGreaterThan(attrs.label.refX);
+    expect(attrs.count.refX).toBeGreaterThan(attrs.status.refX);
+    expect(attrs.label.fill).toBe(ETL_CANVAS_THEMES.light.text);
+  });
 });

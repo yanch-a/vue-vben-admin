@@ -57,9 +57,10 @@ function enableStatefulPageCache(
   menus: RouteRecordStringComponent[],
 ): RouteRecordStringComponent[] {
   return menus.map((menu) => {
-    const pageKey = toPageKey(menu.component);
+    // 所有页面默认缓存；菜单里显式配置 keepAlive=false 的页面才不缓存。
+    // 关闭标签时 tabbar 会把它移出 include，实例随之销毁。
     const cached =
-      pageKey === '/visual/etl/index.vue' || menu.name === 'EtlWorkspace';
+      isPageComponent(menu.component) && menu.meta?.keepAlive !== false;
     const children = Array.isArray(menu.children)
       ? enableStatefulPageCache(menu.children as RouteRecordStringComponent[])
       : menu.children;
@@ -69,7 +70,11 @@ function enableStatefulPageCache(
     return {
       ...menu,
       children,
-      meta: { ...menu.meta, keepAlive: true },
+      meta: {
+        ...menu.meta,
+        keepAlive: true,
+        title: menu.meta?.title ?? String(menu.name ?? menu.path ?? ''),
+      },
     };
   });
 }

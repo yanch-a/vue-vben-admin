@@ -153,9 +153,9 @@ function registerShapes() {
       attrs: {
         body: { refWidth: '100%', refHeight: '100%', rx: 6, ry: 6, stroke: 'none', strokeWidth: 0 },
         dot: { r: 3.5, refX: 11, refY: '50%' },
+        // 标题超长由 etlFitText 预截断；X6 textWrap+height:16 对长中文会整段不显示
         title: {
           refX: 20, refY: '50%', fontSize: 12, fontWeight: 500, textAnchor: 'start', textVerticalAnchor: 'middle',
-          textWrap: { width: -28, height: 16, ellipsis: true },
         },
       },
       ports: {
@@ -175,6 +175,7 @@ function registerShapes() {
         { tagName: 'rect', selector: 'body' },
         { tagName: 'circle', selector: 'dot' },
         { tagName: 'text', selector: 'label' },
+        { tagName: 'text', selector: 'status' },
         { tagName: 'text', selector: 'count' },
       ],
       // 没有单独的标题栏矩形（之前的 header 矩形继承了 SVG 默认描边，显示成一条框线）；标题只是文字。
@@ -182,6 +183,7 @@ function registerShapes() {
         body: { refWidth: '100%', refHeight: '100%', rx: 10, ry: 10, stroke: 'none', strokeWidth: 0, cursor: 'move' },
         dot: { refX: 14, refY: 13, r: 0 },
         label: { refX: 10, refY: 13, fontSize: 12, fontWeight: 500, textAnchor: 'start', textVerticalAnchor: 'middle' },
+        status: { refX: 10, refY: 13, fontSize: 11, fontWeight: 500, textAnchor: 'start', textVerticalAnchor: 'middle' },
         count: { refX: 60, refY: 13, fontSize: 11, textAnchor: 'start', textVerticalAnchor: 'middle' },
       },
     },
@@ -391,7 +393,8 @@ function render() {
         dim: groupDim,
         disabled: pipeline.enabled === false,
         hit: groupHit,
-        name: `${pipeline.name || pipeline.id}${pipeline.enabled === false ? ` (${translateUiText('停用')})` : ''}`,
+        name: pipeline.name || pipeline.id,
+        status: pipeline.enabled === false ? translateUiText('停用') : '',
         width: layout.width,
       }),
     });
