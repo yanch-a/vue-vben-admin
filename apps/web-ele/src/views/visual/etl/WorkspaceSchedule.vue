@@ -78,6 +78,8 @@ const tasks = computed(() =>
   ),
 );
 const published = computed(() => detail.value?.publishedVersion || 0);
+/** Schedule config panel shows only the latest 5 fires (full list: More -> schedule logs). */
+const recentFires = computed(() => (detail.value?.recentFires || []).slice(0, 5));
 /** 尚未加入前置链的其他已发布工作区。 */
 const availablePeers = computed(() => {
   const used = new Set(
@@ -352,6 +354,19 @@ async function openRunLog(runId: string) {
   } catch (error: any) {
     say('error', error.msg || error.message || '运行记录加载失败');
   }
+}
+/** 触发历史末列：打开本次定时触发对应的执行日志（多任务时取最后一条，通常为本工作区） */
+async function openFireLogs(row: { runIdsJson?: string }) {
+  const ids = runIds(row.runIdsJson || '');
+  if (!ids.length) {
+    say('warning', '本次触发没有可查看的执行记录');
+    return;
+  }
+  // multi-task fire: open last run; tip when multiple
+  if (ids.length > 1) {
+    say('info', `本次触发共 ${ids.length} 条运行，已打开最新一条；可在运行记录中切换其它任务`);
+  }
+  await openRunLog(ids[ids.length - 1]!);
 }
 defineExpose({ open });
 </script>
@@ -643,8 +658,8 @@ defineExpose({ open });
         }}</el-button>
       </div>
       <el-table
-        :data="detail?.recentFires || []"
-        max-height="220"
+        :data="recentFires"
+        max-height="200"
         :empty-text="$tr('暂无定时触发记录')"
         ><el-table-column :label="$tr('计划时间')" width="175"
           ><template #default="{ row }">{{
@@ -668,16 +683,15 @@ defineExpose({ open });
           :label="$tr('说明')"
           min-width="150"
           show-overflow-tooltip
-        /><el-table-column :label="$tr('运行日志')" width="100"
+        /><el-table-column :label="$tr('执行日志')" width="88"
           ><template #default="{ row }"
             ><el-button
-              v-for="(id, index) in runIds(row.runIdsJson)"
-              :key="id"
+              v-if="runIds(row.runIdsJson).length"
               link
               type="primary"
-              @click="openRunLog(id)"
-              >{{ $tr('任务') }} {{ index + 1 }}</el-button
-            ></template
+              @click="openFireLogs(row)"
+              >{{ $tr('查看') }}</el-button
+            ><span v-else>—</span></template
           ></el-table-column
         ></el-table
       >

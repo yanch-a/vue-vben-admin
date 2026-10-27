@@ -414,7 +414,7 @@ export function listEtlTables(id: number | string, instance: string) {
     timeout: 0,
   });
 }
-/** 查询步骤预览，只读执行必要上游，不运行写入节点。timeout 为 0 表示不按浏览器请求时长掐断慢查询。 */
+/** 查询步骤预览：json 应为当前任务精简文档（含上游步骤/资源/变量），只读执行必要上游，不运行写入。timeout 为 0 表示不按浏览器请求时长掐断慢查询。 */
 export function previewEtlStep(
   json: string,
   pipelineId: string,
@@ -479,6 +479,8 @@ export interface EtlConnectionOption {
 
 export interface EtlRun {
   id: string;
+  /** 发起人；旁观者取消权限要和后端对照这个字段 */
+  userId?: number | string;
   pipelineId: string;
   pipelineName: string;
   revision: number;
@@ -561,14 +563,15 @@ export function validateEtlWorkspace(json: string, pipelineId?: string) {
 }
 
 /**
- * 发布不可变版本。
- * 发布前会连真实库做结构预检，慢查询不能按默认 10 秒掐断。
+ * 异步发布：立即返回运行实例（pipelineId=__publish__）。
+ * 前端轮询日志查看预检进度；预检通过后才落库版本。
  */
 export function publishEtlWorkspace(id: number | string) {
   return request({
     url: `${url}${encodeURIComponent(id)}/publish`,
     method: 'post',
     timeout: 0,
+    showErrorMessage: false,
   });
 }
 

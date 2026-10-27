@@ -73,10 +73,12 @@ import WorkspaceSources from './WorkspaceSources.vue';
 import TaskTabs from './TaskTabs.vue';
 import KettleImportWizard from './KettleImportWizard.vue';
 import WorkspaceSchedule from './WorkspaceSchedule.vue';
+import WorkspaceScheduleLogs from './WorkspaceScheduleLogs.vue';
 import WorkspaceNotify from './WorkspaceNotify.vue';
 import EtlShareDialog from './EtlShareDialog.vue';
 import EtlMergeDialog from './EtlMergeDialog.vue';
 import EtlHistoryDialog from './EtlHistoryDialog.vue';
+import { useUserStore } from '@vben/stores';
 import { translateUiText } from '#/locales/ui-text';
 import {
   buildRunAllConfirmMessage,
@@ -88,8 +90,15 @@ import {
   tagBatchLogLine,
   type EtlBatchItem,
 } from './etlRunBatch';
+import {
+  canCancelEtlRun,
+  isActiveEtlRunStatus,
+  nextEtlLiveDiscoverTick,
+  pickActiveEtlRun,
+} from './etlLiveAttach';
 import { createEtlRequestGate } from './etlRequestGate';
 import { createEtlPreviewSession } from './etlPreviewSession';
+import { buildEtlPreviewJson } from './etlPreviewPayload';
 import EtlFieldRules from './EtlFieldRules.vue';
 import EtlCanvas from './EtlCanvas.vue';
 import { createEtlHistory } from './etlHistory';
@@ -311,7 +320,7 @@ const syncing = ref(false);
 /** 本次同步新出现的任务 ID。标签栏在渲染前收起，避免先闪一下再关掉。 */
 const suppressedPipelineIds = ref<string[]>([]);
 /** 后台对齐对方保存的间隔。手动同步不受这个间隔限制。 */
-const COLLAB_SYNC_MS = 2 * 60 * 1000;
+const COLLAB_SYNC_MS = 10 * 1000;
 let collabTimer: ReturnType<typeof setTimeout> | undefined;
 let collabPulling = false;
 /** 自动同步进行中又点了手动同步时，当前这次结束后再拉一次。 */
@@ -436,9 +445,53 @@ const createBusy = ref(false);
 const runs = ref<EtlRun[]>([]),
   runsVisible = ref(false);
 const selectedRun = ref<EtlRun>();
+/** 运行记录抽屉：按状态筛选 + 客户端分页（后端最多返回 100 条） */
+const runsStatusFilter = ref('');
+const runsPage = ref(1);
+const runsPageSize = 30;
+const filteredRuns = computed(() => {
+  const status = runsStatusFilter.value;
+  if (!status) return runs.value;
+  return runs.value.filter((item) => item.status === status);
+});
+const pagedRuns = computed(() => {
+  const start = (runsPage.value - 1) * runsPageSize;
+  return filteredRuns.value.slice(start, start + runsPageSize);
+});
+const runsStatusOptions = [
+  'PENDING',
+  'VALIDATING',
+  'RUNNING',
+  'SUCCESS',
+  'FAILED',
+  'CANCELLED',
+];
+watch(runsStatusFilter, () => {
+  runsPage.value = 1;
+});
+watch(filteredRuns, (list) => {
+  const maxPage = Math.max(1, Math.ceil(list.length / runsPageSize) || 1);
+  if (runsPage.value > maxPage) runsPage.value = maxPage;
+});
 /** 当前这次单任务运行的实时日志。收起只藏内容，运行中仍继续拉取。 */
 const liveRunId = ref('');
 const liveRunSnapshot = ref<EtlRun>();
+const userStore = useUserStore();
+/** 旁观者可看日志；取消仅所有者或发起人（与后端 cancel ACL 一致） */
+const canCancelLiveRun = computed(() =>
+  canCancelEtlRun({
+    run: liveRunSnapshot.value,
+    currentUserId: userStore.userInfo?.userId,
+    isWorkspaceOwner: isWorkspaceOwner.value,
+  }),
+);
+const canCancelSelectedRun = computed(() =>
+  canCancelEtlRun({
+    run: selectedRun.value,
+    currentUserId: userStore.userInfo?.userId,
+    isWorkspaceOwner: isWorkspaceOwner.value,
+  }),
+);
 const liveLogs = ref<any[]>([]);
 const liveConsoleOpen = ref(false);
 const liveLogBody = ref<HTMLElement>();
@@ -501,6 +554,12 @@ const runSteps = computed(() => {
 });
 let pollTimer: ReturnType<typeof setTimeout> | undefined;
 /** 页面卸载后，进行中的轮询不能再预约下一次。 */
+/** 合并 onActivated 与定时器并发的 refreshRuns，避免重复 listRuns/logs。 */
+let refreshRunsTail: Promise<void> | undefined;
+let refreshRunsQueued = false;
+let refreshRunsForceList = false;
+/** 已挂活跃运行时，隔 N 次轮询才再 listRuns 发现更高优先级/定时新跑。 */
+let liveDiscoverTick = 0;
 let pageAlive = true;
 let catalogRequest = 0;
 const jsonInput = ref<HTMLInputElement>(),
@@ -665,6 +724,65 @@ function resetNodeDrawerWidth() {
   nodeDrawerWidth.value = clampNodeDrawerWidth(NODE_DRAWER_DEFAULT_WIDTH);
   localStorage.setItem(NODE_DRAWER_WIDTH_KEY, String(nodeDrawerWidth.value));
 }
+const RUN_CONSOLE_HEIGHT_KEY = 'lemon-etl-run-console-height';
+const RUN_CONSOLE_MIN_HEIGHT = 80;
+const RUN_CONSOLE_DEFAULT_HEIGHT = 180;
+function clampRunConsoleHeight(height: number) {
+  const max = Math.max(
+    RUN_CONSOLE_MIN_HEIGHT,
+    Math.floor(window.innerHeight * 0.6),
+  );
+  return Math.min(
+    max,
+    Math.max(
+      RUN_CONSOLE_MIN_HEIGHT,
+      Math.round(height) || RUN_CONSOLE_DEFAULT_HEIGHT,
+    ),
+  );
+}
+const runConsoleBodyHeight = ref(
+  clampRunConsoleHeight(
+    Number(localStorage.getItem(RUN_CONSOLE_HEIGHT_KEY)) ||
+      RUN_CONSOLE_DEFAULT_HEIGHT,
+  ),
+);
+/** Drag the top edge of the bottom execution log to resize height. */
+function startRunConsoleResize(event: PointerEvent) {
+  event.preventDefault();
+  liveConsoleOpen.value = true;
+  const startY = event.clientY;
+  const startH = runConsoleBodyHeight.value;
+  const move = (next: PointerEvent) => {
+    runConsoleBodyHeight.value = clampRunConsoleHeight(
+      startH + (startY - next.clientY),
+    );
+  };
+  const stop = () => {
+    window.removeEventListener('pointermove', move);
+    window.removeEventListener('pointerup', stop);
+    window.removeEventListener('pointercancel', stop);
+    document.body.style.userSelect = '';
+    document.body.style.cursor = '';
+    localStorage.setItem(
+      RUN_CONSOLE_HEIGHT_KEY,
+      String(runConsoleBodyHeight.value),
+    );
+  };
+  document.body.style.userSelect = 'none';
+  document.body.style.cursor = 'row-resize';
+  window.addEventListener('pointermove', move);
+  window.addEventListener('pointerup', stop);
+  window.addEventListener('pointercancel', stop);
+}
+function resetRunConsoleHeight() {
+  runConsoleBodyHeight.value = clampRunConsoleHeight(
+    RUN_CONSOLE_DEFAULT_HEIGHT,
+  );
+  localStorage.setItem(
+    RUN_CONSOLE_HEIGHT_KEY,
+    String(runConsoleBodyHeight.value),
+  );
+}
 /** 画布显示全部任务：点到哪个任务的节点，就把它设为当前任务，表单 / JSON / 运行都作用在它上面。 */
 function selectCanvasCell(pipelineId: string, nodeId?: string) {
   const changed = activePipelineId.value !== pipelineId;
@@ -772,6 +890,60 @@ async function removeCanvasNode(pipelineId: string, nodeId: string) {
   await nextTick();
   await removeStep();
 }
+async function renameCanvasNode(pipelineId: string, nodeId: string) {
+  const task = doc.value.pipelines.find((item) => item.id === pipelineId);
+  const step = task?.nodes.find((item) => item.id === nodeId);
+  if (!step) return;
+  selectCanvasCell(pipelineId, nodeId);
+  try {
+    const { value } = await ElMessageBox.prompt(translateUiText('输入名称'), translateUiText('改名'), {
+      inputValue: step.name || '',
+      inputPattern: /\S+/,
+      inputErrorMessage: translateUiText('名称不能为空'),
+      confirmButtonText: translateUiText('确认'),
+      cancelButtonText: translateUiText('取消'),
+    });
+    const current = doc.value.pipelines
+      .find((item) => item.id === pipelineId)
+      ?.nodes.find((item) => item.id === nodeId);
+    if (current) current.name = value.trim().slice(0, 100);
+  } catch {
+    /* 取消则保留原名 */
+  }
+}
+
+/** 表单流水线节点右键菜单：改名 / 删除 */
+const formStepMenu = ref<{ nodeId: string; x: number; y: number }>();
+const formStepMenuTitle = computed(() => {
+  const id = formStepMenu.value?.nodeId;
+  const step = id ? pipeline.value?.nodes.find((item) => item.id === id) : undefined;
+  return step ? (step.name || stepTitle(step) || step.id) : '';
+});
+function closeFormStepMenu() {
+  formStepMenu.value = undefined;
+}
+function openFormStepMenu(event: MouseEvent, nodeId: string) {
+  selectedNodeId.value = nodeId;
+  formStepMenu.value = { nodeId, x: event.clientX, y: event.clientY };
+  const close = (ev: MouseEvent) => {
+    const target = ev.target as HTMLElement | null;
+    if (target?.closest?.('.etl-step-context-menu')) return;
+    closeFormStepMenu();
+    window.removeEventListener('pointerdown', close, true);
+  };
+  window.setTimeout(() => window.addEventListener('pointerdown', close, true), 0);
+}
+async function formStepMenuAction(action: 'rename' | 'delete') {
+  const menu = formStepMenu.value;
+  closeFormStepMenu();
+  if (!menu || !pipeline.value) return;
+  if (action === 'rename') await renameCanvasNode(pipeline.value.id, menu.nodeId);
+  else {
+    selectedNodeId.value = menu.nodeId;
+    await nextTick();
+    await removeStep();
+  }
+}
 function onCanvasDrawerKey(event: KeyboardEvent) {
   if (event.key === 'Escape' && canvasEditorOpen.value) canvasEditorOpen.value = false;
 }
@@ -805,6 +977,7 @@ function resetLiveConsole() {
   liveBatchItems.value = [];
   batchCancelRequested = false;
   liveLogTagTask = undefined;
+  liveDiscoverTick = 0;
 }
 function abortPreviewRequest() {
   previewAbort?.abort();
@@ -1053,6 +1226,8 @@ async function openWorkspace(
     loading.value = false;
     if (dirty.value) flushActiveDraft();
     rememberEtlWorkspace(row.id);
+    // 已在本工作区时也拉一次运行，挂接他人/定时正在跑的实时日志
+    void refreshRuns();
     return true;
   }
   // 在暂停缓存前同步落盘，不能依赖尚未触发的 400ms debounce。
@@ -1862,10 +2037,23 @@ async function changeMode(mode: 'steps' | 'json') {
   if (!node.value) selectedNodeId.value = pipeline.value?.nodes[0]?.id || '';
 }
 async function publish() {
-  if (publishing.value) return;
+  if (publishing.value || running.value) return;
+  if (
+    liveRunId.value &&
+    isActiveEtlRunStatus(String(liveRunSnapshot.value?.status || ''))
+  ) {
+    say(
+      'warning',
+      liveRunSnapshot.value?.pipelineId === '__publish__'
+        ? '当前有发布预检进行中，请结束后再发布'
+        : '当前有任务正在运行，请结束后再发布',
+    );
+    return;
+  }
   const request = workspaceRequests.stamp();
   const id = activeWorkspace.value?.id;
   publishing.value = true;
+  liveBatchMode.value = false;
   try {
     if (dirty.value && !(await saveDraft())) return;
     if (
@@ -1875,36 +2063,68 @@ async function publish() {
       dirty.value
     )
       return;
-    const published = unbox<{ versionNo?: number }>(await publishEtlWorkspace(id!));
+    const started = unbox<EtlRun>(await publishEtlWorkspace(id!));
     if (!workspaceRequests.current(request) || !sameWorkspace(activeWorkspace.value?.id, id)) return;
-    if (activeWorkspace.value && sameWorkspace(activeWorkspace.value.id, id)) {
-      activeWorkspace.value = {
-        ...activeWorkspace.value,
-        publishedVersion: published?.versionNo ?? (Number(activeWorkspace.value.publishedVersion || 0) + 1),
-        status: 'PUBLISHED',
-      };
-    }
-    say('success', '发布成功');
-    try {
-      await refreshWorkspaces();
-      const listed = workspaces.value.find((item) => sameWorkspace(item.id, id));
-      if (listed && activeWorkspace.value && sameWorkspace(activeWorkspace.value.id, id)) {
-        activeWorkspace.value = {
-          ...activeWorkspace.value,
-          revision: listed.revision ?? activeWorkspace.value.revision,
-          publishedVersion: listed.publishedVersion,
-          status: listed.status,
-        };
+    attachLiveRun(
+      started,
+      { id: '__publish__', name: '发布预检' },
+      true,
+    );
+    say('info', '发布预检已开始，详情见底部日志');
+    while (true) {
+      if (!workspaceRequests.current(request) || !sameWorkspace(activeWorkspace.value?.id, id)) return;
+      await refreshLiveLogs();
+      const snap =
+        liveRunSnapshot.value?.id === started.id
+          ? liveRunSnapshot.value
+          : unbox<EtlRun>(await getEtlRun(started.id, true));
+      if (snap) {
+        liveRunSnapshot.value = snap;
+        if (isTerminalRunStatus(snap.status)) {
+          if (snap.status === 'SUCCESS') {
+            const match = String(snap.message || '').match(/版本\s*(\d+)/);
+            const versionNo = match
+              ? Number(match[1])
+              : Number(activeWorkspace.value?.publishedVersion || 0) + 1;
+            if (activeWorkspace.value && sameWorkspace(activeWorkspace.value.id, id)) {
+              activeWorkspace.value = {
+                ...activeWorkspace.value,
+                publishedVersion: versionNo,
+                status: 'PUBLISHED',
+              };
+            }
+            say('success', snap.message || '发布成功');
+            try {
+              await refreshWorkspaces();
+              const listed = workspaces.value.find((item) => sameWorkspace(item.id, id));
+              if (listed && activeWorkspace.value && sameWorkspace(activeWorkspace.value.id, id)) {
+                activeWorkspace.value = {
+                  ...activeWorkspace.value,
+                  revision: listed.revision ?? activeWorkspace.value.revision,
+                  publishedVersion: listed.publishedVersion,
+                  status: listed.status,
+                };
+              }
+            } catch {
+              /* list refresh failure must not hide a successful publish */
+            }
+          } else if (snap.status === 'CANCELLED') {
+            say('warning', snap.message || '发布已取消');
+          } else {
+            say('error', snap.message || '发布预检失败');
+          }
+          return;
+        }
       }
-    } catch {
-      /* list refresh failure must not hide a successful publish */
+      await new Promise((resolve) => setTimeout(resolve, 1200));
     }
-  } catch (error) {
-    say('error', errorMessage(error));
+  } catch (error: any) {
+    if (error !== 'cancel' && error !== 'close') say('error', errorMessage(error));
   } finally {
     publishing.value = false;
   }
 }
+
 async function deleteWorkspace() {
   if (!activeWorkspace.value) return;
   try {
@@ -1963,6 +2183,7 @@ async function abandonLocalDraft() {
 }
 /** 定时和通知按右键选中的工作区打开，不因此切换当前草稿。 */
 const scheduleDialog = ref<InstanceType<typeof WorkspaceSchedule>>();
+const scheduleLogsDialog = ref<InstanceType<typeof WorkspaceScheduleLogs>>();
 const notifyDialog = ref<InstanceType<typeof WorkspaceNotify>>();
 function configureSchedule() {
   const target = menuWorkspace() || activeWorkspace.value;
@@ -1974,6 +2195,14 @@ function configureNotify() {
   dismissWorkspaceMenu();
   if (target) void notifyDialog.value?.open(target);
 }
+/** 「更多」→定时任务日志：打开本工作区触发历史抽屉。 */
+function openScheduleLogsMenu() {
+  const target = menuWorkspace() || activeWorkspace.value;
+  dismissWorkspaceMenu();
+  if (!target) return;
+  void scheduleLogsDialog.value?.open(target);
+}
+
 /** 从定时触发历史打开原任务运行日志，切换工作区仍遵守未保存草稿保护。 */
 async function openScheduleLogs(workspaceId: string | number, runId: string) {
   const target = workspaces.value.find(
@@ -1991,6 +2220,7 @@ async function openScheduleLogs(workspaceId: string | number, runId: string) {
   await refreshRuns();
   try {
     selectedRun.value = unbox<EtlRun>(await getEtlRun(runId));
+    runsPage.value = 1;
     runsVisible.value = true;
     await refreshLogs();
   } catch (error) {
@@ -2189,9 +2419,12 @@ function onMore(command: string) {
   else if (command === 'import-kettle') kettleInput.value?.click();
   else if (command === 'export') void exportJson();
   else if (command === 'runs') {
+    runsPage.value = 1;
+    runsStatusFilter.value = '';
     runsVisible.value = true;
     void refreshRuns();
   } else if (command === 'schedule') configureSchedule();
+  else if (command === 'schedule-logs') openScheduleLogsMenu();
   else if (command === 'notify') configureNotify();
   else if (command === 'share') openShare();
   else if (command === 'merge') openMergeWorkspaces();
@@ -2416,7 +2649,9 @@ async function previewQuery(id: string) {
   const base = JSON.stringify(doc.value);
   const current = () => previewRequests.current(previewRequest) && workspaceRequests.current(request) && pipeline.value?.id === pipelineId && !controller.signal.aborted;
   try {
-    const result = unbox<any>(await previewEtlStep(jsonText.value, pipelineId, id, controller.signal));
+    // 单任务预览只上传当前任务及其上游步骤/资源/变量，不传整个工作区其它任务
+    const previewJson = buildEtlPreviewJson(doc.value, pipelineId, id);
+    const result = unbox<any>(await previewEtlStep(previewJson, pipelineId, id, controller.signal));
     if (!current()) return;
     if (base !== JSON.stringify(doc.value)) { say('info', '配置已修改，请重新预览'); return; }
     previews.value[id] = result;
@@ -2477,27 +2712,50 @@ const catalogTableOptions = computed(() =>
  * 字段映射行高。一次只挂载视口内的行，避免几百个下拉框同时创建。
  */
 const MAPPING_ROW_HEIGHT = 42;
-const MAPPING_VIEWPORT_MAX = 420;
+const MAPPING_VIEWPORT_FALLBACK = 420;
 const mappingScrollTop = ref(0);
 const mappingViewport = ref<HTMLElement>();
+const mappingViewportPx = ref(0);
+let mappingResizeObserver: ResizeObserver | null = null;
 const mappingCount = computed(() =>
   Array.isArray(node.value?.config?.mappings)
     ? node.value.config.mappings.length
     : 0,
 );
-const mappingViewportHeight = computed(() =>
-  Math.min(mappingCount.value * MAPPING_ROW_HEIGHT, MAPPING_VIEWPORT_MAX),
-);
+function disconnectMappingResizeObserver() {
+  mappingResizeObserver?.disconnect();
+  mappingResizeObserver = null;
+}
+function bindMappingResizeObserver(el: HTMLElement | null | undefined) {
+  disconnectMappingResizeObserver();
+  if (!el) {
+    mappingViewportPx.value = 0;
+    return;
+  }
+  mappingResizeObserver = new ResizeObserver((entries) => {
+    const height = entries[0]?.contentRect?.height ?? el.clientHeight;
+    mappingViewportPx.value = Math.max(0, Math.round(height));
+  });
+  mappingResizeObserver.observe(el);
+  mappingViewportPx.value = el.clientHeight;
+}
+watch(mappingViewport, (el) => {
+  bindMappingResizeObserver(el);
+});
 const visibleMappingRows = computed(() => {
   const mappings = node.value?.config?.mappings;
   if (!Array.isArray(mappings) || !mappings.length) return [];
+  const viewportH =
+    mappingViewportPx.value > 0
+      ? mappingViewportPx.value
+      : MAPPING_VIEWPORT_FALLBACK;
   const start = Math.max(
     0,
     Math.floor(mappingScrollTop.value / MAPPING_ROW_HEIGHT) - 4,
   );
   const end = Math.min(
     mappings.length,
-    start + Math.ceil(MAPPING_VIEWPORT_MAX / MAPPING_ROW_HEIGHT) + 8,
+    start + Math.ceil(viewportH / MAPPING_ROW_HEIGHT) + 8,
   );
   const rows: { index: number; offset: number; mapping: any }[] = [];
   for (let index = start; index < end; index++) {
@@ -2716,20 +2974,34 @@ async function refreshLiveLogs() {
 
 function openLiveHistory() {
   if (liveRunSnapshot.value) selectedRun.value = liveRunSnapshot.value;
+  runsPage.value = 1;
   runsVisible.value = true;
-  void refreshRuns();
+  void refreshRuns(true);
 }
 
 async function cancelLiveRun() {
-  if (liveBatchMode.value) batchCancelRequested = true;
+  if (liveBatchMode.value) {
+    if (!canCancelLiveRun.value && !running.value) {
+      say('warning', '只有工作区所有者或任务发起人可以取消');
+      return;
+    }
+    batchCancelRequested = true;
+  }
   if (!liveRunSnapshot.value) return;
+  if (!canCancelLiveRun.value) {
+    say('warning', '只有工作区所有者或任务发起人可以取消');
+    return;
+  }
   selectedRun.value = liveRunSnapshot.value;
   await cancelRun();
 }
 
 /** 运行只提交保存后的工作区与任务 ID，完整预检在后端完成。只执行当前任务。 */
 async function runPipeline() {
-  if (!pipeline.value || !activeWorkspace.value || running.value) return;
+  if (!pipeline.value || !activeWorkspace.value || running.value || publishing.value) {
+    if (publishing.value) say('warning', '发布预检进行中，请稍后再运行');
+    return;
+  }
   if (!ensurePipelineRunnable()) return;
   const request = workspaceRequests.stamp();
   const workspaceId = activeWorkspace.value.id;
@@ -2786,11 +3058,16 @@ async function runPipeline() {
       await executeEtlWorkflow(workspaceId, pipelineId, revision),
     );
     if (!workspaceRequests.current(request)) return;
-    selectedRun.value = started;
-    liveRunSnapshot.value = started;
-    liveRunId.value = started.id;
-    liveLogs.value = [];
-    liveConsoleOpen.value = true;
+    // 退出「全部任务」批次态，避免标题仍显示上一轮全部运行摘要
+    liveBatchMode.value = false;
+    liveBatchItems.value = [];
+    batchCancelRequested = false;
+    attachLiveRun(
+      started,
+      { id: pipelineId, name: pipeline.value?.name || pipelineId },
+      true,
+    );
+    // attachLiveRun already set current task tag; do not clear
     await refreshRuns();
   } catch (error: any) {
     if (error !== 'cancel' && error !== 'close')
@@ -2808,6 +3085,44 @@ function attachLiveRun(started: EtlRun, task: { id: string; name: string }, clea
   liveLogTagTask = task;
   if (clearLogs) liveLogs.value = [];
   liveConsoleOpen.value = true;
+}
+
+/**
+ * 进入工作区 / 轮询时：若本地不是发起方（未 running/publishing），
+ * 自动挂接本区进行中的运行（含定时触发、发布预检、全部运行当前步）。
+ * 旁观者只跟日志，不置 running/publishing，不挡发起方操作。
+ */
+function maybeAttachActiveLiveRun(items: EtlRun[]) {
+  if (running.value || publishing.value) return;
+  const currentId = liveRunId.value;
+  if (currentId) {
+    const current =
+      items.find((item) => item.id === currentId) || liveRunSnapshot.value;
+    if (current && isActiveEtlRunStatus(current.status)) {
+      if (current.id === currentId && liveRunSnapshot.value?.id === currentId) {
+        liveRunSnapshot.value = {
+          ...liveRunSnapshot.value,
+          ...current,
+        };
+      }
+      return;
+    }
+  }
+  const picked = pickActiveEtlRun(items);
+  if (!picked) return;
+  if (currentId === picked.id) return;
+  attachLiveRun(
+    picked,
+    {
+      id: picked.pipelineId || picked.id,
+      name:
+        picked.pipelineName ||
+        (picked.pipelineId === '__publish__'
+          ? '发布预检'
+          : picked.pipelineId || picked.id),
+    },
+    true,
+  );
 }
 
 function patchBatchItem(
@@ -2875,7 +3190,10 @@ async function executeAndWaitPipeline(
 
 /** 顶部工具栏：按工作区任务定义顺序，逐个运行全部启用任务。 */
 async function runAllPipelines() {
-  if (!activeWorkspace.value || running.value) return;
+  if (!activeWorkspace.value || running.value || publishing.value) {
+    if (publishing.value) say('warning', '发布预检进行中，请稍后再运行');
+    return;
+  }
   if (editorMode.value === 'json') {
     say('warning', '请先回到步骤视图再运行');
     return;
@@ -3019,66 +3337,135 @@ async function runAllPipelines() {
 
 
 /** 进行中的实时日志要继续轮询；离开页面或已经换了工作区则停止。 */
+/** 进行中的实时日志要轮询；离开页面或已经换了工作区则停止。 */
 function scheduleLivePoll(workspaceId?: string | number) {
   if (!pageAlive || pollTimer) return;
-  const sameWorkspace =
+  const sameWs =
     workspaceId == null ||
     String(workspaceId) === String(activeWorkspace.value?.id ?? '');
-  const status = liveRunSnapshot.value?.status;
+  // 不再把空 status 当成“继续轮询”，避免 getEtlRun 失败时死循环打 listRuns。
   if (
-    sameWorkspace &&
+    sameWs &&
     liveRunId.value &&
-    (!status || status === 'PENDING' || status === 'RUNNING')
+    isActiveEtlRunStatus(liveRunSnapshot.value?.status)
   ) {
-    pollTimer = setTimeout(refreshRuns, 1500);
+    pollTimer = setTimeout(() => void refreshRuns(), 1500);
   }
 }
-async function refreshRuns() {
+
+/**
+ * 工作区运行列表 + 旁观者挂载 + 实时日志。
+ * 性能：已挂活跃运行时多数轮询只拉 getEtlRun/logs；隔几轮再 listRuns 发现定时/更高优先级。
+ * 发起方 publishing/running 的 while 循环已在拉日志，这里跳过 refreshLiveLogs 避免双倍请求。
+ */
+async function refreshRuns(forceList = false) {
+  if (forceList) refreshRunsForceList = true;
+  if (refreshRunsTail) {
+    refreshRunsQueued = true;
+    return refreshRunsTail;
+  }
+  refreshRunsTail = (async () => {
+    try {
+      do {
+        refreshRunsQueued = false;
+        const force = refreshRunsForceList;
+        refreshRunsForceList = false;
+        await refreshRunsOnce(force);
+      } while (refreshRunsQueued && pageAlive);
+    } finally {
+      // 漏掉 finally 窗口里新排队的一次可接受：下一轮 1.5s 轮询会补上，避免与并发调用双开。
+      refreshRunsTail = undefined;
+    }
+  })();
+  return refreshRunsTail;
+}
+
+async function refreshRunsOnce(forceList = false) {
   if (pollTimer) clearTimeout(pollTimer);
   pollTimer = undefined;
   if (!pageAlive || !activeWorkspace.value) return;
   const request = workspaceRequests.stamp();
   const workspaceId = activeWorkspace.value.id;
+  const stillCurrent = () =>
+    pageAlive &&
+    workspaceRequests.current(request) &&
+    sameWorkspace(workspaceId, activeWorkspace.value?.id);
+
   try {
-    const items = unbox<EtlRun[]>(await listEtlRuns(workspaceId)) || [];
-    if (
-      !workspaceRequests.current(request) ||
-      !sameWorkspace(workspaceId, activeWorkspace.value?.id)
-    ) {
-      // 打开工作区会推进请求代次。同一工作区的运行不能因此停掉日志轮询。
-      scheduleLivePoll(workspaceId);
-      return;
-    }
-    runs.value = items;
-    if (selectedRun.value)
-      selectedRun.value =
-        items.find((item) => item.id === selectedRun.value?.id) ||
-        selectedRun.value;
-    if (liveRunId.value) {
-      const matched = items.find((item) => item.id === liveRunId.value);
-      if (matched) liveRunSnapshot.value = matched;
-    }
-    if (runsVisible.value && selectedRun.value) await refreshLogs();
-    if (liveRunId.value) await refreshLiveLogs();
-    if (!pageAlive) return;
-    if (!workspaceRequests.current(request)) {
-      scheduleLivePoll(workspaceId);
-      return;
-    }
-    const liveActive =
+    // 仅发布 / 全部运行的 wait-loop 自己拉日志；单任务运行仍靠 refreshRuns 轮询。
+    const ownerWaitLoop = publishing.value || (running.value && liveBatchMode.value);
+    let liveActive =
       !!liveRunId.value &&
-      ['PENDING', 'RUNNING'].includes(liveRunSnapshot.value?.status || '');
-    if (
-      items.some((item) => ['PENDING', 'RUNNING'].includes(item.status)) ||
-      liveActive
-    )
-      pollTimer = setTimeout(refreshRuns, 1500);
+      isActiveEtlRunStatus(liveRunSnapshot.value?.status);
+    const discovery = nextEtlLiveDiscoverTick({
+      forceList,
+      liveActive,
+      discoverTick: liveDiscoverTick,
+    });
+    liveDiscoverTick = discovery.nextTick;
+
+    let items = runs.value;
+    if (discovery.discover) {
+      items = unbox<EtlRun[]>(await listEtlRuns(workspaceId)) || [];
+      if (!stillCurrent()) {
+        scheduleLivePoll(workspaceId);
+        return;
+      }
+      runs.value = items;
+      if (selectedRun.value)
+        selectedRun.value =
+          items.find((item) => item.id === selectedRun.value?.id) ||
+          selectedRun.value;
+      if (liveRunId.value) {
+        const matched = items.find((item) => item.id === liveRunId.value);
+        if (matched) liveRunSnapshot.value = matched;
+      }
+      maybeAttachActiveLiveRun(items);
+      liveActive =
+        !!liveRunId.value &&
+        isActiveEtlRunStatus(liveRunSnapshot.value?.status);
+    }
+
+    if (runsVisible.value && selectedRun.value) await refreshLogs();
+
+    // 发起方 wait-loop 已在 refreshLiveLogs；旁观者/单任务轮询才在这里拉。
+    // 仅活跃运行拉日志，结束后不再每 1.5s 重拉终态日志。
+    if (liveRunId.value && !ownerWaitLoop && liveActive) {
+      await refreshLiveLogs();
+      if (!stillCurrent()) {
+        scheduleLivePoll(workspaceId);
+        return;
+      }
+      liveActive =
+        !!liveRunId.value &&
+        isActiveEtlRunStatus(liveRunSnapshot.value?.status);
+    }
+
+    if (!stillCurrent()) {
+      scheduleLivePoll(workspaceId);
+      return;
+    }
+    const anyActive =
+      liveActive ||
+      items.some((item) => isActiveEtlRunStatus(item.status));
+    if (anyActive) pollTimer = setTimeout(() => void refreshRuns(), 1500);
   } catch {
     scheduleLivePoll(workspaceId);
   }
 }
+
 async function cancelRun() {
   if (!selectedRun.value) return;
+  if (
+    !canCancelEtlRun({
+      run: selectedRun.value,
+      currentUserId: userStore.userInfo?.userId,
+      isWorkspaceOwner: isWorkspaceOwner.value,
+    })
+  ) {
+    say('warning', '只有工作区所有者或任务发起人可以取消');
+    return;
+  }
   try {
     await cancelEtlRun(selectedRun.value.id);
     await refreshRuns();
@@ -3662,7 +4049,11 @@ function unbindSaveShortcut() {
   saveShortcutBound = false;
   window.removeEventListener('keydown', onSaveShortcut);
 }
-onActivated(bindSaveShortcut);
+onActivated(() => {
+  bindSaveShortcut();
+  // keep-alive 回到本页时挂接本区进行中的运行（含定时）
+  if (activeWorkspace.value) void refreshRuns();
+});
 onDeactivated(unbindSaveShortcut);
 onMounted(async () => {
   bindSaveShortcut();
@@ -3689,6 +4080,7 @@ onMounted(async () => {
   }
 });
 onBeforeUnmount(() => {
+  disconnectMappingResizeObserver();
   unbindSaveShortcut();
   pageAlive = false;
   abortPreviewRequest();
@@ -3799,12 +4191,16 @@ onBeforeUnmount(() => {
             @click="runAllPipelines"
             >{{ $tr('运行') }}</el-button
           >
-          <el-button-group class="save-split">
+          <el-button-group class="save-split etl-ai-split">
             <el-button
+              class="etl-ai-btn"
+              type="primary"
+              plain
               :icon="MagicStick"
               :disabled="!activeWorkspace"
+              :title="$tr('打开 AI 助手窗口')"
               @click="openAi('pipeline')"
-              >{{ $tr('只改当前任务') }}</el-button
+              >{{ $tr('AI助手') }}</el-button
             >
             <el-dropdown
               trigger="click"
@@ -3812,6 +4208,9 @@ onBeforeUnmount(() => {
               @command="openAi"
             >
               <el-button
+                class="etl-ai-btn"
+                type="primary"
+                plain
                 :icon="ArrowDown"
                 :disabled="!activeWorkspace"
                 :title="$tr('选择 AI 编辑范围')"
@@ -3851,7 +4250,8 @@ onBeforeUnmount(() => {
                 <el-dropdown-item command="runs">{{ $tr('运行记录') }}</el-dropdown-item>
                 <el-dropdown-item command="share">{{ $tr('协同成员') }}</el-dropdown-item>
                 <el-dropdown-item command="merge">{{ $tr('合并其他工作区') }}</el-dropdown-item>
-                <el-dropdown-item v-if="isWorkspaceOwner" command="schedule">{{ $tr('定时执行') }}</el-dropdown-item>
+                <el-dropdown-item command="schedule">{{ $tr('定时执行') }}</el-dropdown-item>
+                <el-dropdown-item command="schedule-logs">{{ $tr('定时任务日志') }}</el-dropdown-item>
                 <el-dropdown-item v-if="isWorkspaceOwner" command="notify">{{ $tr('消息通知') }}</el-dropdown-item>
                 <el-dropdown-item command="rename">{{ $tr('改名') }}</el-dropdown-item>
                 <el-dropdown-item command="copy">{{ $tr('复制工作区') }}</el-dropdown-item>
@@ -4003,7 +4403,7 @@ onBeforeUnmount(() => {
               }"
               @click.stop
             >
-              <button v-if="menuTargetIsOwner" @click="configureSchedule">{{ $tr('定时执行配置') }}</button>
+              <button @click="configureSchedule">{{ $tr('定时执行配置') }}</button>
               <button v-if="menuTargetIsOwner" @click="configureNotify">{{ $tr('消息通知配置') }}</button>
               <button @click="openShareFromMenu">{{ $tr('协同成员') }}</button>
               <button @click="renameWorkspace">{{ $tr('改名') }}</button>
@@ -4104,6 +4504,7 @@ onBeforeUnmount(() => {
                 @add="addStepCommand"
                 @edit="editCanvasNode"
                 @remove="removeCanvasNode"
+                @rename="renameCanvasNode"
                 @select="selectCanvasCell"
               />
               <div v-else class="flow-strip" :aria-label="$tr('步骤流水线')">
@@ -4124,6 +4525,7 @@ onBeforeUnmount(() => {
                     }"
                     :aria-current="selectedNodeId === step.id ? 'step' : undefined"
                     @click="selectedNodeId = step.id"
+                    @contextmenu.prevent="openFormStepMenu($event, step.id)"
                   >
                     <span class="step-number">{{ index + 1 }}</span>
                     <span class="flow-step-text">
@@ -4205,6 +4607,19 @@ onBeforeUnmount(() => {
                   </div>
                 </el-popover>
               </div>
+              <Teleport to="body">
+                <div
+                  v-if="formStepMenu"
+                  class="etl-step-context-menu"
+                  role="menu"
+                  :style="{ left: `${formStepMenu.x}px`, top: `${formStepMenu.y}px` }"
+                  @keydown.esc="closeFormStepMenu"
+                >
+                  <div class="etl-step-context-menu__title">{{ formStepMenuTitle }}</div>
+                  <button type="button" role="menuitem" @click="formStepMenuAction('rename')">{{ $tr('改名') }}</button>
+                  <button type="button" role="menuitem" class="danger" @click="formStepMenuAction('delete')">{{ $tr('删除') }}</button>
+                </div>
+              </Teleport>
               <template v-if="node && stepsView === 'canvas' && canvasEditorOpen">
                 <div class="canvas-drawer-mask" @click="canvasEditorOpen = false"></div>
                 <div
@@ -4242,7 +4657,7 @@ onBeforeUnmount(() => {
                   </div>
                   <el-form label-position="top">
                     <el-form-item
-                      v-if="node.type.startsWith('database.')"
+                      v-if="node.type.startsWith('database.') && node.type !== 'database.query'"
                       :label="$tr('数据源')"
                       class="form-row-inline source-row"
                       ><div class="inline-control">
@@ -4255,11 +4670,6 @@ onBeforeUnmount(() => {
                             :key="key"
                             :label="`${source.displayName} · ${source.instance || $tr('待绑定')}`"
                             :value="key" /></el-select
-                        ><el-button
-                          link
-                          class="source-settings"
-                          @click="openSources"
-                          >{{ $tr('管理数据源') }}</el-button
                         >
                       </div></el-form-item
                     >
@@ -4369,6 +4779,22 @@ onBeforeUnmount(() => {
                           @execute="preview"
                         />
                       </div>
+                      <el-form-item
+                        :label="$tr('数据源')"
+                        class="form-row-inline source-row sql-meta-row"
+                        ><div class="inline-control">
+                        <el-select
+                          v-model="node.resourceRef"
+                          filterable
+                          :placeholder="$tr('选择工作区数据源别名')"
+                          ><el-option
+                            v-for="[key, source] in resources"
+                            :key="key"
+                            :label="`${source.displayName} · ${source.instance || $tr('待绑定')}`"
+                            :value="key" /></el-select
+                        >
+                      </div></el-form-item
+                      >
                       <div class="section-title">
                         <strong>{{ $tr('查询参数') }}</strong
                         ><el-button link :icon="Plus" @click="addParameter"
@@ -4640,7 +5066,7 @@ onBeforeUnmount(() => {
                     >
                   </div>
                 </section>
-                <aside class="step-result" :aria-label="$tr('预览与字段映射')">
+                <aside class="step-result" :class="{ 'is-mapping': isWriteStep(node.type) }" :aria-label="$tr('预览与字段映射')">
                   <template
                     v-if="
                       isEtlRowSource(node.type)
@@ -4670,6 +5096,7 @@ onBeforeUnmount(() => {
                     </p>
                     <el-table
                       v-if="previewResult"
+                      class="etl-preview-table"
                       :data="previewResult.rows"
                       max-height="420"
                       border
@@ -4692,6 +5119,7 @@ onBeforeUnmount(() => {
                       ['database.write', 'database.upsert'].includes(node.type)
                     "
                   >
+                    <div class="mapping-panel">
                     <div class="section-title">
                       <strong>{{ $tr('字段映射') }}</strong>
                       <div>
@@ -4713,7 +5141,6 @@ onBeforeUnmount(() => {
                       v-if="mappingCount"
                       ref="mappingViewport"
                       class="mapping-viewport"
-                      :style="{ height: `${mappingViewportHeight}px` }"
                       @scroll="onMappingScroll"
                     >
                       <div
@@ -4776,6 +5203,7 @@ onBeforeUnmount(() => {
                         }}</el-button>
                       </p>
                       <el-table
+                        class="etl-preview-table"
                         :data="inputPreview.rows"
                         max-height="240"
                         border
@@ -4788,6 +5216,7 @@ onBeforeUnmount(() => {
                           show-overflow-tooltip
                       /></el-table>
                     </section>
+                    </div>
                   </template>
                   <el-empty
                     v-else
@@ -4828,6 +5257,14 @@ onBeforeUnmount(() => {
               aria-live="polite"
               :aria-label="$tr('执行日志')"
             >
+              <div
+                class="run-console-resizer"
+                role="separator"
+                aria-orientation="horizontal"
+                :title="$tr('拖拽调整高度，双击恢复默认')"
+                @pointerdown="startRunConsoleResize"
+                @dblclick="resetRunConsoleHeight"
+              ></div>
               <header class="run-console-head">
                 <strong
                   >{{ $tr('执行日志') }} ·
@@ -4853,20 +5290,19 @@ onBeforeUnmount(() => {
                     : statusLabel(liveRunSnapshot?.status || '')
                 }}</el-tag>
                 <span class="run-console-message">{{
-                  liveBatchMode
-                    ? liveBatchSummary.headline
-                    : liveRunSnapshot?.message
+                  liveRunSnapshot?.message
                 }}</span>
                 <el-button
                   v-if="
-                    liveBatchMode
+                    canCancelLiveRun &&
+                    (liveBatchMode
                       ? running ||
                         ['PENDING', 'RUNNING'].includes(
                           liveRunSnapshot?.status || '',
                         )
                       : ['PENDING', 'RUNNING'].includes(
                           liveRunSnapshot?.status || '',
-                        )
+                        ))
                   "
                   link
                   type="danger"
@@ -4884,6 +5320,7 @@ onBeforeUnmount(() => {
                 v-show="liveConsoleOpen"
                 ref="liveLogBody"
                 class="run-console-body"
+                :style="{ height: `${runConsoleBodyHeight}px` }"
               >
                 <p v-if="!liveLogLines.length" class="run-console-empty">
                   {{ $tr('等待日志…') }}
@@ -4920,6 +5357,7 @@ onBeforeUnmount(() => {
       </div>
     </div>
     <WorkspaceSchedule ref="scheduleDialog" @logs="openScheduleLogs" />
+    <WorkspaceScheduleLogs ref="scheduleLogsDialog" @logs="openScheduleLogs" />
     <WorkspaceNotify ref="notifyDialog" />
     <EtlShareDialog ref="shareDialog" />
     <EtlHistoryDialog
@@ -4990,93 +5428,152 @@ onBeforeUnmount(() => {
       v-model="runsVisible"
       :title="$tr('运行记录与步骤进度')"
       class="etl-runs-drawer"
-      size="min(800px, 96vw)"
-      ><el-button :icon="Refresh" @click="refreshRuns">{{ $tr('刷新') }}</el-button
-      ><el-table
-        :data="runs"
-        highlight-current-row
-        @current-change="selectedRun = $event || selectedRun"
-        ><el-table-column prop="pipelineName" :label="$tr('任务')" /><el-table-column
-          :label="$tr('状态')"
-          width="90"
-          ><template #default="scope">{{
-            statusLabel(scope.row.status)
-          }}</template></el-table-column
-        ><el-table-column :label="$tr('时间')" width="180"
-          ><template #default="scope">{{
-            new Date(scope.row.startedAt).toLocaleString()
-          }}</template></el-table-column
-        ><el-table-column prop="revision" :label="$tr('版本')" width="65" /></el-table
-      ><template v-if="selectedRun"
-        ><div class="section-title">
-          <strong>{{ selectedRun.message }}</strong
-          ><el-button
-            v-if="['PENDING', 'RUNNING'].includes(selectedRun.status)"
-            type="danger"
-            plain
-            @click="cancelRun"
-            >{{ $tr('取消任务') }}</el-button
-          >
-        </div>
-        <el-table :data="runSteps"
-          ><el-table-column :label="$tr('步骤')" min-width="140"
-            ><template #default="scope">{{
-              runNodeName(scope.row.nodeId)
-            }}</template></el-table-column
-          ><el-table-column :label="$tr('状态')" width="90"
-            ><template #default="scope">{{
-              statusLabel(scope.row.status)
-            }}</template></el-table-column
-          ><el-table-column
-            prop="rows"
-            :label="$tr('行数')"
-            width="90" /><el-table-column prop="message" :label="$tr('信息')"
-        /></el-table>
-        <div class="section-title">
-          <strong>{{ $tr('执行日志') }}</strong
-          ><el-select
-            v-model="logNode"
+      size="35%"
+    >
+      <div class="runs-drawer-body">
+        <div class="runs-drawer-toolbar">
+          <el-select
+            v-model="runsStatusFilter"
             clearable
-            :placeholder="$tr('全部任务与节点日志')"
-            @change="
-              logPage = 1;
-              refreshLogs();
-            "
-            ><el-option
-              v-for="step in runSteps"
-              :key="step.nodeId"
-              :label="runNodeName(step.nodeId)"
-              :value="step.nodeId"
-          /></el-select>
-        </div>
-        <el-table v-loading="logsBusy" :data="runLogs" max-height="360">
-          <el-table-column :label="$tr('时间')" width="180"
-            ><template #default="scope">{{
-              new Date(scope.row.createdAt).toLocaleString()
-            }}</template></el-table-column
+            :placeholder="$tr('按状态筛选')"
+            style="width: 148px"
           >
+            <el-option
+              v-for="status in runsStatusOptions"
+              :key="status"
+              :label="statusLabel(status)"
+              :value="status"
+            />
+          </el-select>
+          <el-button :icon="Refresh" @click="refreshRuns(true)">{{
+            $tr('刷新')
+          }}</el-button>
+          <span v-if="runs.length >= 100" class="runs-cap-hint">{{
+            $tr('仅显示最近 100 条')
+          }}</span>
+        </div>
+        <el-table
+          :data="pagedRuns"
+          highlight-current-row
+          max-height="360"
+          :empty-text="$tr('暂无运行记录')"
+          @current-change="selectedRun = $event || selectedRun"
+        >
           <el-table-column
-            prop="level"
-            :label="$tr('级别')"
-            width="65"
-          /><el-table-column :label="$tr('节点')" min-width="120"
-            ><template #default="scope">{{
-              runNodeName(scope.row.nodeId)
-            }}</template></el-table-column
-          ><el-table-column
-            prop="rowCount"
-            :label="$tr('累计行数')"
-            width="100"
-          /><el-table-column prop="message" :label="$tr('事件')" />
+            prop="pipelineName"
+            :label="$tr('任务')"
+            min-width="100"
+            show-overflow-tooltip
+          />
+          <el-table-column :label="$tr('状态')" width="78">
+            <template #default="scope">{{
+              statusLabel(scope.row.status)
+            }}</template>
+          </el-table-column>
+          <el-table-column :label="$tr('时间')" width="148">
+            <template #default="scope">{{
+              new Date(scope.row.startedAt).toLocaleString()
+            }}</template>
+          </el-table-column>
+          <el-table-column prop="revision" :label="$tr('版本')" width="58" />
         </el-table>
         <el-pagination
-          v-model:current-page="logPage"
-          :page-size="50"
-          :total="logTotal"
+          v-model:current-page="runsPage"
+          :page-size="runsPageSize"
+          :total="filteredRuns.length"
           layout="total, prev, pager, next"
-          @current-change="refreshLogs"
-        /> </template
-    ></el-drawer>
+          small
+          background
+        />
+        <template v-if="selectedRun">
+          <div class="runs-drawer-detail">
+            <div class="section-title">
+              <strong>{{ selectedRun.message }}</strong>
+              <el-button
+                v-if="
+                  canCancelSelectedRun &&
+                  ['PENDING', 'RUNNING'].includes(selectedRun.status)
+                "
+                type="danger"
+                plain
+                @click="cancelRun"
+                >{{ $tr('取消任务') }}</el-button
+              >
+            </div>
+            <el-table :data="runSteps" max-height="160">
+              <el-table-column :label="$tr('步骤')" min-width="120">
+                <template #default="scope">{{
+                  runNodeName(scope.row.nodeId)
+                }}</template>
+              </el-table-column>
+              <el-table-column :label="$tr('状态')" width="78">
+                <template #default="scope">{{
+                  statusLabel(scope.row.status)
+                }}</template>
+              </el-table-column>
+              <el-table-column prop="rows" :label="$tr('行数')" width="72" />
+              <el-table-column
+                prop="message"
+                :label="$tr('信息')"
+                min-width="100"
+                show-overflow-tooltip
+              />
+            </el-table>
+            <div class="section-title">
+              <strong>{{ $tr('执行日志') }}</strong>
+              <el-select
+                v-model="logNode"
+                clearable
+                :placeholder="$tr('全部任务与节点日志')"
+                @change="
+                  logPage = 1;
+                  refreshLogs();
+                "
+              >
+                <el-option
+                  v-for="step in runSteps"
+                  :key="step.nodeId"
+                  :label="runNodeName(step.nodeId)"
+                  :value="step.nodeId"
+                />
+              </el-select>
+            </div>
+            <el-table v-loading="logsBusy" :data="runLogs" max-height="280">
+              <el-table-column :label="$tr('时间')" width="148">
+                <template #default="scope">{{
+                  new Date(scope.row.createdAt).toLocaleString()
+                }}</template>
+              </el-table-column>
+              <el-table-column prop="level" :label="$tr('级别')" width="58" />
+              <el-table-column :label="$tr('节点')" min-width="100">
+                <template #default="scope">{{
+                  runNodeName(scope.row.nodeId)
+                }}</template>
+              </el-table-column>
+              <el-table-column
+                prop="rowCount"
+                :label="$tr('累计行数')"
+                width="88"
+              />
+              <el-table-column
+                prop="message"
+                :label="$tr('事件')"
+                min-width="120"
+                show-overflow-tooltip
+              />
+            </el-table>
+            <el-pagination
+              v-model:current-page="logPage"
+              :page-size="50"
+              :total="logTotal"
+              layout="total, prev, pager, next"
+              small
+              @current-change="refreshLogs"
+            />
+          </div>
+        </template>
+      </div>
+    </el-drawer>
     <AiChatWindow
       v-if="activeWorkspace"
       :key="String(activeWorkspace.id)"
@@ -5107,6 +5604,39 @@ onBeforeUnmount(() => {
 .step-split.canvas-node-drawer { position: fixed; top: 52px; right: 0; bottom: 0; z-index: 1501; box-sizing: border-box; width: min(var(--etl-node-drawer-width, 1000px), 90vw); margin: 0; padding: 12px 16px; overflow: auto; background: var(--el-bg-color); box-shadow: var(--el-box-shadow-dark); }
 :global(.etl-runs-drawer) {
   color: var(--el-text-color-primary);
+}
+:global(.etl-runs-drawer .el-drawer__body) {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  padding-bottom: 12px;
+  overflow: hidden;
+}
+.runs-drawer-body {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 0;
+  height: 100%;
+}
+.runs-drawer-toolbar {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 10px;
+}
+.runs-cap-hint {
+  color: var(--el-text-color-secondary);
+  font-size: 12px;
+}
+.runs-drawer-detail {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 0;
+  overflow: auto;
 }
 .etl-shell {
   color: var(--el-text-color-primary);
@@ -5150,6 +5680,13 @@ onBeforeUnmount(() => {
 }
 .save-split :deep(.el-dropdown) {
   display: inline-flex;
+}
+.etl-ai-split .etl-ai-btn {
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+.etl-ai-split .etl-ai-btn :deep(.el-icon) {
+  color: var(--el-color-primary);
 }
 .nav-select {
   width: 180px;
@@ -5448,6 +5985,29 @@ onBeforeUnmount(() => {
   padding: 8px 16px 24px;
   background: var(--el-fill-color-lighter);
 }
+.step-result.is-mapping {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding-bottom: 12px;
+}
+.mapping-panel {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  height: 100%;
+}
+.mapping-panel > .section-title,
+.mapping-panel > .help {
+  flex: 0 0 auto;
+}
+.mapping-panel > .preview-panel {
+  flex: 0 0 auto;
+  max-height: 42%;
+  overflow: auto;
+  margin-top: 12px;
+}
 .step-split.result-right .step-result {
   border-left: 1px solid var(--el-border-color-light);
 }
@@ -5457,6 +6017,10 @@ onBeforeUnmount(() => {
   min-height: 0;
   height: 100%;
   overflow: auto;
+}
+.step-split.result-right .step-result.is-mapping,
+.step-split.result-bottom .step-result.is-mapping {
+  overflow: hidden;
 }
 .step-split.result-hidden .step-result {
   display: none;
@@ -5561,7 +6125,7 @@ button.step-item.flow-step {
 .step-editor .el-form-item .el-select {
   width: 100%;
 }
-/* 数据源选择框与「管理数据源」同一行 */
+/* 数据源选择行 */
 .inline-control {
   display: flex;
   align-items: center;
@@ -5574,10 +6138,6 @@ button.step-item.flow-step {
   flex: 1;
   min-width: 0;
   width: auto !important;
-}
-.source-settings {
-  flex: 0 0 auto;
-  margin-left: 0;
 }
 /* 标签与控件同一行，label 不换行 */
 .step-editor .form-row-inline {
@@ -5638,6 +6198,44 @@ button.step-item.flow-step {
   gap: 4px;
 }
 /* 原 textarea 为 9 行、14px、行高 1.65，加上下内边距约 218px，这里固定为两倍。 */
+.etl-step-context-menu {
+  position: fixed;
+  z-index: 4000;
+  display: flex;
+  flex-direction: column;
+  min-width: 120px;
+  max-width: 240px;
+  padding: 4px;
+  border: 1px solid var(--el-border-color-light);
+  border-radius: 6px;
+  background: var(--el-bg-color-overlay);
+  box-shadow: var(--el-box-shadow-light);
+}
+.etl-step-context-menu__title {
+  padding: 4px 8px 6px;
+  overflow: hidden;
+  color: var(--el-text-color-secondary);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  border-bottom: 1px solid var(--el-border-color-extra-light);
+  margin-bottom: 2px;
+}
+.etl-step-context-menu button {
+  padding: 6px 8px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--el-text-color-regular);
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+.etl-step-context-menu button:hover { background: var(--el-fill-color-light); }
+.etl-step-context-menu button.danger { color: var(--el-color-danger); }
+.sql-meta-row {
+  margin-top: 10px;
+}
 .etl-sql-editor {
   height: 436px;
   border: 1px solid var(--el-border-color);
@@ -5645,9 +6243,31 @@ button.step-item.flow-step {
   overflow: hidden;
 }
 .run-console {
+  position: relative;
   flex: 0 0 auto;
   border-top: 1px solid var(--el-border-color);
   background: var(--el-bg-color);
+}
+.run-console-resizer {
+  position: relative;
+  z-index: 2;
+  height: 6px;
+  margin-top: -3px;
+  cursor: row-resize;
+  touch-action: none;
+}
+.run-console-resizer::after {
+  content: '';
+  position: absolute;
+  top: 2px;
+  right: 0;
+  left: 0;
+  height: 2px;
+  background: transparent;
+  transition: background 0.15s;
+}
+.run-console-resizer:hover::after {
+  background: var(--el-color-primary);
 }
 .run-console-head {
   display: flex;
@@ -5666,7 +6286,6 @@ button.step-item.flow-step {
   font-size: 12px;
 }
 .run-console-body {
-  height: 180px;
   overflow: auto;
   padding: 0 12px 10px;
   font-family: Consolas, monospace;
@@ -5748,6 +6367,8 @@ button.step-item.flow-step {
   width: 100% !important;
 }
 .mapping-viewport {
+  flex: 1 1 auto;
+  min-height: 120px;
   overflow: auto;
   position: relative;
 }
@@ -5958,5 +6579,37 @@ button.step-item.flow-step {
 }
 .etl-result-dock-popper .dock-icon.active .dock-preview {
   border-color: var(--el-color-primary);
+}
+
+/* ETL preview tables only: thicker, always-visible horizontal scrollbar */
+.etl-preview-table.el-table .el-table__body-wrapper .el-scrollbar__bar.is-horizontal {
+  height: 12px;
+  left: 4px;
+  right: 4px;
+  bottom: 3px;
+  border-radius: 6px;
+  background-color: var(--el-fill-color-dark);
+  opacity: 1 !important;
+  display: block !important;
+}
+.etl-preview-table.el-table .el-table__body-wrapper .el-scrollbar__bar.is-horizontal > .el-scrollbar__thumb {
+  height: 100%;
+  border-radius: 6px;
+  background-color: var(--el-text-color-regular);
+  opacity: 0.78;
+}
+.etl-preview-table.el-table .el-table__body-wrapper .el-scrollbar__bar.is-horizontal > .el-scrollbar__thumb:hover {
+  background-color: var(--el-color-primary);
+  opacity: 1;
+}
+.etl-preview-table.el-table .el-table__body-wrapper .el-scrollbar__bar.is-horizontal.el-scrollbar-fade-enter-from,
+.etl-preview-table.el-table .el-table__body-wrapper .el-scrollbar__bar.is-horizontal.el-scrollbar-fade-leave-active,
+.etl-preview-table.el-table .el-table__body-wrapper .el-scrollbar__bar.is-horizontal.el-scrollbar-fade-leave-to {
+  opacity: 1 !important;
+}
+/* Native fallback hint (Firefox) when custom bar unavailable */
+.etl-preview-table.el-table .el-scrollbar__wrap--hidden-default {
+  scrollbar-width: thin;
+  scrollbar-color: var(--el-text-color-regular) var(--el-fill-color-dark);
 }
 </style>

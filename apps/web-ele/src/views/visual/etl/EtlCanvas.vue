@@ -66,6 +66,7 @@ const emit = defineEmits<{
   edit: [pipelineId: string, nodeId: string];
   enableTask: [pipelineId: string, enabled: boolean];
   remove: [pipelineId: string, nodeId: string];
+  rename: [pipelineId: string, nodeId: string];
   renameTask: [pipelineId: string];
   run: [pipelineId: string];
   select: [pipelineId: string, nodeId?: string];
@@ -83,16 +84,33 @@ let fitPending = true;
 /** 画布自己触发的任务切换不再居中，避免点一下节点画面就跳。 */
 let selectFromCanvas = false;
 let layouts: Record<string, EtlCanvasGroupLayout> = {};
-/** 任务右键菜单，坐标相对画布容器。 */
-const taskMenu = ref<{ pipelineId: string; x: number; y: number }>();
+/** 画布右键菜单：任务组与步骤节点；坐标相对画布容器。 */
+const taskMenu = ref<{ kind: 'task' | 'node'; pipelineId: string; nodeId?: string; x: number; y: number }>();
 const taskMenuPipeline = computed(() => (taskMenu.value ? pipelineOf(taskMenu.value.pipelineId) : undefined));
+const taskMenuNode = computed(() => {
+  const menu = taskMenu.value;
+  if (!menu?.nodeId || !taskMenuPipeline.value) return undefined;
+  return taskMenuPipeline.value.nodes.find((item) => item.id === menu.nodeId);
+});
+const taskMenuTitle = computed(() => {
+  if (taskMenu.value?.kind === 'node' && taskMenuNode.value) {
+    return props.titleOf(taskMenuNode.value) || taskMenuNode.value.name || taskMenuNode.value.id;
+  }
+  return taskMenuPipeline.value?.name || taskMenuPipeline.value?.id || '';
+});
 function closeTaskMenu() {
   taskMenu.value = undefined;
 }
 function taskMenuAction(action: 'delete' | 'enable' | 'rename' | 'run') {
+  const menu = taskMenu.value;
   const pipeline = taskMenuPipeline.value;
   closeTaskMenu();
-  if (!pipeline) return;
+  if (!menu || !pipeline) return;
+  if (menu.kind === 'node' && menu.nodeId) {
+    if (action === 'rename') emit('rename', pipeline.id, menu.nodeId);
+    else if (action === 'delete') emit('remove', pipeline.id, menu.nodeId);
+    return;
+  }
   if (action === 'rename') emit('renameTask', pipeline.id);
   else if (action === 'enable') emit('enableTask', pipeline.id, pipeline.enabled === false);
   else if (action === 'run') emit('run', pipeline.id);
@@ -274,7 +292,7 @@ function initGraph() {
     if (cellRef(node)?.kind === 'node') node.setAttrByPath('body/filter', cardShadow(canvasTheme().shadow));
     if (containerRef.value) containerRef.value.title = '';
   });
-  // 任务分组或其中节点上右键：任务菜单（改名、启用/停用、运行、删除）。
+  // 任务分组：任务菜单；步骤节点：改名 / 删除。
   graph.on('node:contextmenu', ({ e, node }) => {
     const ref = cellRef(node);
     if (!ref || !containerRef.value) return;
@@ -282,7 +300,12 @@ function initGraph() {
     const box = containerRef.value.getBoundingClientRect();
     selectFromCanvas = ref.pipelineId !== props.activePipelineId;
     emit('select', ref.pipelineId, ref.nodeId);
-    taskMenu.value = { pipelineId: ref.pipelineId, x: e.clientX - box.left, y: e.clientY - box.top };
+    const pos = { x: e.clientX - box.left, y: e.clientY - box.top };
+    if (ref.kind === 'node' && ref.nodeId) {
+      taskMenu.value = { kind: 'node', pipelineId: ref.pipelineId, nodeId: ref.nodeId, ...pos };
+    } else {
+      taskMenu.value = { kind: 'task', pipelineId: ref.pipelineId, ...pos };
+    }
   });
   graph.on('blank:mousedown', closeTaskMenu);
   graph.on('cell:mousedown', closeTaskMenu);
@@ -764,13 +787,19 @@ onBeforeUnmount(() => {
         :style="{ left: `${taskMenu.x}px`, top: `${taskMenu.y}px` }"
         @keydown.esc="closeTaskMenu"
       >
-        <div class="etl-canvas__menu-title">{{ taskMenuPipeline.name || taskMenuPipeline.id }}</div>
-        <button type="button" role="menuitem" @click="taskMenuAction('rename')">{{ $tr('改名') }}</button>
-        <button type="button" role="menuitem" @click="taskMenuAction('enable')">
-          {{ $tr(taskMenuPipeline.enabled === false ? '启用' : '停用') }}
-        </button>
-        <button type="button" role="menuitem" :disabled="running" @click="taskMenuAction('run')">{{ $tr('运行任务') }}</button>
-        <button type="button" role="menuitem" class="danger" @click="taskMenuAction('delete')">{{ $tr('删除任务') }}</button>
+        <div class="etl-canvas__menu-title">{{ taskMenuTitle }}</div>
+        <template v-if="taskMenu.kind === 'node'">
+          <button type="button" role="menuitem" @click="taskMenuAction('rename')">{{ $tr('改名') }}</button>
+          <button type="button" role="menuitem" class="danger" @click="taskMenuAction('delete')">{{ $tr('删除') }}</button>
+        </template>
+        <template v-else>
+          <button type="button" role="menuitem" @click="taskMenuAction('rename')">{{ $tr('改名') }}</button>
+          <button type="button" role="menuitem" @click="taskMenuAction('enable')">
+            {{ $tr(taskMenuPipeline.enabled === false ? '启用' : '停用') }}
+          </button>
+          <button type="button" role="menuitem" :disabled="running" @click="taskMenuAction('run')">{{ $tr('运行任务') }}</button>
+          <button type="button" role="menuitem" class="danger" @click="taskMenuAction('delete')">{{ $tr('删除任务') }}</button>
+        </template>
       </div>
     </div>
     <el-empty v-if="!pipelines.length" class="etl-canvas__empty" :image-size="60" :description="$tr('还没有任务')" />

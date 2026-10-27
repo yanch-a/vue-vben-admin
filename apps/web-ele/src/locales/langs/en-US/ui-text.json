@@ -2717,5 +2717,13 @@
   "已取消，未启动": "Cancelled; not started",
   "前置任务失败，已跳过": "Skipped because a previous task failed",
   "按顺序运行全部启用任务": "Run all enabled tasks in order",
-  "全部任务": "All tasks"
+  "全部任务": "All tasks",
+  "发布预检": "Publish preflight",
+  "发布预检已开始，详情见底部日志": "Publish preflight started — see the bottom log for progress",
+  "发布已取消": "Publish cancelled",
+  "发布预检失败": "Publish preflight failed",
+  "发布预检进行中，请稍后再运行": "Publish preflight is running; try again later",
+  "当前有任务正在运行，请结束后再发布": "A task is still running; publish after it finishes",
+  "当前有发布预检进行中，请结束后再发布": "Publish preflight is still running; publish after it finishes",
+  "只有工作区所有者或任务发起人可以取消": "Only the workspace owner or the run starter can cancel"
 }
