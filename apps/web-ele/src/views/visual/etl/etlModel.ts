@@ -13,7 +13,7 @@ import type {
 } from '#/api/visual/etl';
 import { translateUiText } from '#/locales/ui-text';
 import { parseEtlJson } from './etlSafeJson';
-import { createOperatorConfig, ETL_OPERATORS, etlInputReferences } from './etlOperators';
+import { createOperatorConfig, ETL_OPERATORS, etlInputReferences, isEtlRowSource } from './etlOperators';
 
 /** 生成适合作为 JSON 稳定 ID 的短 ID。 */
 export function etlId(prefix: string): string {
@@ -576,6 +576,89 @@ function uniqueEtlId(prefix: string, used: Set<string>): string {
   return id;
 }
 
+
+/** 在流水线节点数组中上移/下移一步，仅调整展示与布局顺序，不改 inputStepId。 */
+export function movePipelineNode(
+  pipeline: EtlPipeline,
+  nodeId: string,
+  delta: -1 | 1,
+): boolean {
+  const from = pipeline.nodes.findIndex((item) => item.id === nodeId);
+  const to = from + delta;
+  if (from < 0 || to < 0 || to >= pipeline.nodes.length) return false;
+  const nodes = pipeline.nodes.slice();
+  const [item] = nodes.splice(from, 1);
+  nodes.splice(to, 0, item!);
+  pipeline.nodes = nodes;
+  return true;
+}
+
+/** 判断步骤是否需要上游行结果作为输入。 */
+function stepNeedsRowInput(type: string): boolean {
+  if (
+    type === 'database.query' ||
+    type === 'source.inline' ||
+    type === 'transform.union'
+  )
+    return false;
+  return (
+    type === 'transform.select' ||
+    type === 'database.write' ||
+    type === 'database.upsert' ||
+    ETL_OPERATORS.some((operator) => operator.type === type)
+  );
+}
+
+/**
+ * 把新步骤插到选中步骤后面；若选中的是写表，则插到写表前面，便于「中间插入」。
+ * 线性流水线会把原下游的 inputStepId 接到新步骤上。
+ */
+export function insertPipelineNode(
+  pipeline: EtlPipeline,
+  node: EtlNode,
+  selectedId?: string,
+): number {
+  let at = pipeline.nodes.length;
+  let pivot: EtlNode | undefined;
+  if (selectedId) {
+    const index = pipeline.nodes.findIndex((item) => item.id === selectedId);
+    if (index >= 0) {
+      pivot = pipeline.nodes[index];
+      const sink = ['database.write', 'database.upsert', 'database.table.write'].includes(
+        pivot?.type || '',
+      );
+      const addingSink = ['database.write', 'database.upsert', 'database.table.write'].includes(
+        node.type,
+      );
+      at = sink && !addingSink ? index : index + 1;
+    }
+  }
+  const before = at > 0 ? pipeline.nodes[at - 1] : undefined;
+  const after = pipeline.nodes[at];
+  if (stepNeedsRowInput(node.type)) {
+    const preferred =
+      (before && isEtlRowSource(before.type) ? before.id : '') ||
+      (typeof after?.config?.inputStepId === 'string' ? after.config.inputStepId : '') ||
+      node.config?.inputStepId ||
+      '';
+    if (preferred) node.config = { ...node.config, inputStepId: preferred };
+  }
+  if (
+    after &&
+    typeof after.config?.inputStepId === 'string' &&
+    after.config.inputStepId &&
+    (after.config.inputStepId === before?.id ||
+      after.config.inputStepId === node.config?.inputStepId) &&
+    isEtlRowSource(node.type)
+  ) {
+    after.config.inputStepId = node.id;
+    syncStepDependencies(pipeline, after);
+  }
+  pipeline.nodes.splice(at, 0, node);
+  syncStepDependencies(pipeline, node);
+  return at;
+}
+
 /** 引用变更时重建自动连线，保留手工/导入连线，避免移除参数后仍残留依赖。 */
 export function syncStepDependencies(
   pipeline: EtlPipeline,
@@ -602,4 +685,17 @@ export function syncStepDependencies(
 
 function edge(source: string, target: string): EtlEdge {
   return { source, sourcePort: 'output', target, targetPort: 'input' };
+}
+
+/** 同名映射：对目标表列做大小写无关匹配，便于 MySQL→瀚高等列名大小写不一致的库。 */
+export function buildSameNameMappings(
+  sources: string[],
+  targets: string[] = [],
+): { source: string; target: string }[] {
+  return sources.map((column) => {
+    const match = targets.find(
+      (item) => item.toLowerCase() === column.toLowerCase(),
+    );
+    return { source: column, target: match || column };
+  });
 }

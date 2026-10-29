@@ -16,7 +16,7 @@ import * as monaco from 'monaco-editor';
 import editorWorker from 'monaco-editor/editor/editor.worker?worker';
 import { usePreferences } from '@vben/preferences';
 import { ElMessage } from 'element-plus';
-import { onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { onActivated, onBeforeUnmount, onDeactivated, onMounted, ref, watch } from 'vue';
 
 import 'monaco-editor/min/vs/editor/editor.main.css';
 
@@ -35,6 +35,10 @@ import {
   type SqlCompletionContext,
 } from '../../utils/sqlEditorAssist';
 import { translateUiText } from '#/locales/ui-text';
+import {
+  matchSqlEditorShortcut,
+  shouldAcceptSqlEditorShortcut,
+} from './sqlEditorShortcuts';
 
 import { formatSqlByDialect } from '../../utils/formatSql';
 import { resolveSqlDialect } from '../../dialect/sqlDialect';
@@ -152,22 +156,74 @@ type TabEditorState = {
   viewState: monaco.editor.ICodeEditorViewState | null;
 };
 const tabStates = new Map<string, TabEditorState>();
+/**
+ * keep-alive 下多页都会挂 Monaco：addCommand 会互相抢全局键绑定，
+ * 后台页 handler 被 pageActive/focus 拦住后，前台页也可能再也收不到键 → 快捷键全失效。
+ * 改为：仅当前激活页挂 window 捕获监听；Monaco addCommand 不再注册执行类快捷键。
+ */
+const pageActive = ref(true);
+let editorShortcutBound = false;
+
+function focusInThisEditor(): boolean {
+  if (editor?.hasTextFocus()) return true;
+  const ae = document.activeElement as Node | null;
+  return !!(ae && container.value && container.value.contains(ae));
+}
+
+function onEditorPageKeydown(e: KeyboardEvent) {
+  if (
+    !shouldAcceptSqlEditorShortcut({
+      pageActive: pageActive.value,
+      readOnly: !!props.readOnly,
+      focusInEditor: focusInThisEditor(),
+      defaultPrevented: e.defaultPrevented,
+      isComposing: e.isComposing,
+      repeat: e.repeat,
+    })
+  ) {
+    return;
+  }
+  const action = matchSqlEditorShortcut(e, !!props.embedded);
+  if (!action) return;
+  e.preventDefault();
+  e.stopPropagation();
+  if (action === 'execute') emit('execute');
+  else if (action === 'save') emit('save');
+  else if (action === 'format') formatCurrentSql();
+  else if (action === 'explain') emit('explain');
+  else if (action === 'ask-ai') emitAskAi();
+}
+
+function bindEditorPageShortcuts() {
+  if (editorShortcutBound) return;
+  editorShortcutBound = true;
+  window.addEventListener('keydown', onEditorPageKeydown, true);
+}
+function unbindEditorPageShortcuts() {
+  if (!editorShortcutBound) return;
+  editorShortcutBound = false;
+  window.removeEventListener('keydown', onEditorPageKeydown, true);
+}
+
+function setPageShortcutActive(active: boolean) {
+  pageActive.value = active;
+  if (active) bindEditorPageShortcuts();
+  else unbindEditorPageShortcuts();
+}
+
+onMounted(() => setPageShortcutActive(true));
+onActivated(() => setPageShortcutActive(true));
+onDeactivated(() => setPageShortcutActive(false));
+
+/** 右键菜单动作：只要本页激活且非只读即可（不依赖焦点） */
+function shouldHandleEditorShortcut(): boolean {
+  return pageActive.value && !props.readOnly;
+}
+
 let currentTabId: string | null = null;
 /** 切换 Model 时忽略 modelValue 回写，避免误 setValue 清掉撤销栈 */
 let applyingModelSwitch = false;
 
-/**
- * 物理 Ctrl 键对应的 monaco 修饰位：macOS 上 CtrlCmd 指 Cmd，因此改用 WinCtrl。
- */
-function physicalCtrlKeyMod(): number {
-  const platform =
-    typeof navigator === 'undefined'
-      ? ''
-      : `${navigator.platform || ''} ${navigator.userAgent || ''}`;
-  return /Mac|iPhone|iPad|iPod/i.test(platform)
-    ? monaco.KeyMod.WinCtrl
-    : monaco.KeyMod.CtrlCmd;
-}
 
 function themeName() {
   return isDark.value ? 'vs-dark' : 'vs';
@@ -799,18 +855,8 @@ onMounted(() => {
     if (props.readOnly || applyingModelSwitch) return;
     emit('update:modelValue', editor?.getValue() || '');
   });
-  editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter, () => {
-    if (!props.readOnly) emit('execute');
-  });
-  editor.addCommand(monaco.KeyCode.F9, () => {
-    if (!props.readOnly) emit('execute');
-  });
-  editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => {
-    if (!props.readOnly) emit('save');
-  });
-  editor.addCommand(monaco.KeyCode.F12, () => {
-    if (!props.readOnly) formatCurrentSql();
-  });
+  // 执行/保存/格式化快捷键改由 window 捕获监听（见 onEditorPageKeydown），
+  // 避免多 Monaco 实例 addCommand 抢全局绑定导致激活页快捷键全失效。
   // SQL 标识符含下划线，避免 Monaco 默认分词把 gp_t_project 拆成多段导致过滤异常
   if (!(window as any).__lemonSqlWordPattern) {
     (window as any).__lemonSqlWordPattern = true;
@@ -833,8 +879,10 @@ onMounted(() => {
     label: '关闭当前',
     contextMenuGroupId: 'navigation',
     contextMenuOrder: 2,
-    keybindings: [physicalCtrlKeyMod() | monaco.KeyCode.KeyQ],
-    run: () => emit('close-tab'),
+    // 快捷键由父页 window 捕获处理；此处仅保留右键菜单
+    run: () => {
+      if (shouldHandleEditorShortcut()) emit('close-tab');
+    },
   });
   // Ctrl+K + 右键菜单：唤出 AI 助手，携带选区 / 全文
   editor.addAction({
@@ -842,8 +890,10 @@ onMounted(() => {
     label: 'AI 助手：生成/优化/解释 SQL',
     contextMenuGroupId: 'navigation',
     contextMenuOrder: 0,
-    keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyK],
-    run: () => emitAskAi(),
+    // Ctrl+K 由 onEditorPageKeydown（编辑器内）/ 父页（编辑器外）处理
+    run: () => {
+      if (shouldHandleEditorShortcut()) emitAskAi();
+    },
   });
   // Ctrl+Shift+E + 右键菜单：查看选中/当前语句的执行计划（只读，不执行语句）
   editor.addAction({
@@ -851,10 +901,10 @@ onMounted(() => {
     label: translateUiText('执行计划'),
     contextMenuGroupId: 'navigation',
     contextMenuOrder: 0.5,
-    keybindings: [
-      monaco.KeyMod.CtrlCmd | monaco.KeyMod.Shift | monaco.KeyCode.KeyE,
-    ],
-    run: () => emit('explain'),
+    // Ctrl+Shift+E 由 onEditorPageKeydown 处理
+    run: () => {
+      if (shouldHandleEditorShortcut()) emit('explain');
+    },
   });
   // 右键：对选中/光标处表名打开「查看表信息」（默认字段页由父级控制）
   editor.addAction({
@@ -919,6 +969,7 @@ watch(isDark, () => {
 });
 
 onBeforeUnmount(() => {
+  setPageShortcutActive(false);
   completionDisposable?.dispose();
   completionDisposable = null;
   signatureDisposable?.dispose();

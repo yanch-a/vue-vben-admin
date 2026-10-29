@@ -10,7 +10,9 @@ import {
   computed,
   markRaw,
   nextTick,
+  onActivated,
   onBeforeUnmount,
+  onDeactivated,
   onMounted,
   reactive,
   ref,
@@ -3480,6 +3482,18 @@ function onTabsLeftSplitterUp() {
   window.removeEventListener('mouseup', onTabsLeftSplitterUp);
 }
 
+let clientShortcutBound = false;
+function bindClientShortcuts() {
+  if (clientShortcutBound) return;
+  clientShortcutBound = true;
+  window.addEventListener('keydown', onGlobalKeydown, true);
+}
+function unbindClientShortcuts() {
+  if (!clientShortcutBound) return;
+  clientShortcutBound = false;
+  window.removeEventListener('keydown', onGlobalKeydown, true);
+}
+
 onMounted(() => {
   unbindClientFontScope = bindVisualClientFontScope();
   nextTick(() => {
@@ -3487,7 +3501,7 @@ onMounted(() => {
     void refreshLicenseStatus();
     void bootstrapTasks();
   });
-  window.addEventListener('keydown', onGlobalKeydown, true);
+  bindClientShortcuts();
   // Electron「文件」菜单：与连接栏空白右键共用同一套导入/导出逻辑
   offDesktopSessionExport = window.lemonDesktop?.onExportTemporarySession?.(
     () => exportTemporarySession(),
@@ -3496,6 +3510,8 @@ onMounted(() => {
     () => connectionTabsRef.value?.openImportPicker(),
   );
 });
+onActivated(bindClientShortcuts);
+onDeactivated(unbindClientShortcuts);
 
 function onGlobalKeydown(e: KeyboardEvent) {
   // Ctrl+Q：直接关闭当前查询页签。Ctrl+W 会关网页，Ctrl+Alt+W 会唤起微信。
@@ -3770,7 +3786,7 @@ onBeforeUnmount(() => {
   sqlRuns.clear();
   stopBackupPoll();
   unbindClientFontScope?.();
-  window.removeEventListener('keydown', onGlobalKeydown, true);
+  unbindClientShortcuts();
   window.removeEventListener('beforeunload', protectWorkspaceUnload);
   offDesktopSessionExport?.();
   offDesktopSessionImport?.();

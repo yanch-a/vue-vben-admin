@@ -90,6 +90,17 @@ test('ServerConfigStore 遇到损坏配置时安全回退为空列表', async (t
   assert.deepEqual(await store.read(), {
     selectedServerId: null,
     servers: [],
+    tabBarCollapsed: false,
     version: 1,
   });
+});
+
+test('ServerConfigStore 可持久化标签栏折叠偏好', async (t) => {
+  const { store } = await createFixture(t);
+  assert.equal((await store.read()).tabBarCollapsed, false);
+  const collapsed = await store.setTabBarCollapsed(true);
+  assert.equal(collapsed.tabBarCollapsed, true);
+  assert.equal((await store.read()).tabBarCollapsed, true);
+  const restored = await store.setTabBarCollapsed(false);
+  assert.equal(restored.tabBarCollapsed, false);
 });

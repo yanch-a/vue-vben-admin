@@ -13,6 +13,18 @@
     <div class="bar">
       <div id="tabs" class="tabs" role="tablist"></div>
       <button id="add-server" class="add" type="button">+</button>
+      <button id="toggle-collapse" class="collapse" type="button" aria-expanded="true">▴</button>
+      <div id="collapsed-strip" class="collapsed-strip" hidden>
+        <span class="expand__label" id="collapsed-label">服务端</span>
+        <div class="switcher">
+          <button id="switcher-toggle" class="switcher__toggle" type="button" aria-haspopup="listbox" aria-expanded="false">
+            <span class="expand__name" id="expand-name"></span>
+            <span class="switcher__caret" aria-hidden="true">▾</span>
+          </button>
+          <div id="switcher-menu" class="switcher__menu" role="listbox" hidden></div>
+        </div>
+        <button id="expand-bar" class="expand-only" type="button" title="显示服务端栏">▾</button>
+      </div>
     </div>
     <script src="./renderer.js"></script>
   </body>

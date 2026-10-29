@@ -68,9 +68,10 @@ const emit = defineEmits<{
   remove: [pipelineId: string, nodeId: string];
   rename: [pipelineId: string, nodeId: string];
   renameTask: [pipelineId: string];
+  move: [pipelineId: string, nodeId: string, delta: -1 | 1];
   run: [pipelineId: string];
   select: [pipelineId: string, nodeId?: string];
-}>();
+>();
 
 const NODE_SHAPE = 'lemon-etl-step';
 const shortcut = /mac/i.test(navigator.platform || navigator.userAgent) ? '⌘' : 'Ctrl';
@@ -101,13 +102,23 @@ const taskMenuTitle = computed(() => {
 function closeTaskMenu() {
   taskMenu.value = undefined;
 }
-function taskMenuAction(action: 'delete' | 'enable' | 'rename' | 'run') {
+function canMoveMenuNode(delta: -1 | 1) {
+  const pipeline = taskMenuPipeline.value;
+  const nodeId = taskMenu.value?.nodeId;
+  if (!pipeline || !nodeId) return false;
+  const index = pipeline.nodes.findIndex((item) => item.id === nodeId);
+  const next = index + delta;
+  return index >= 0 && next >= 0 && next < pipeline.nodes.length;
+}
+function taskMenuAction(action: 'delete' | 'enable' | 'rename' | 'run' | 'moveUp' | 'moveDown') {
   const menu = taskMenu.value;
   const pipeline = taskMenuPipeline.value;
   closeTaskMenu();
   if (!menu || !pipeline) return;
   if (menu.kind === 'node' && menu.nodeId) {
     if (action === 'rename') emit('rename', pipeline.id, menu.nodeId);
+    else if (action === 'moveUp') emit('move', pipeline.id, menu.nodeId, -1);
+    else if (action === 'moveDown') emit('move', pipeline.id, menu.nodeId, 1);
     else if (action === 'delete') emit('remove', pipeline.id, menu.nodeId);
     return;
   }
@@ -790,6 +801,8 @@ onBeforeUnmount(() => {
         <div class="etl-canvas__menu-title">{{ taskMenuTitle }}</div>
         <template v-if="taskMenu.kind === 'node'">
           <button type="button" role="menuitem" @click="taskMenuAction('rename')">{{ $tr('改名') }}</button>
+          <button type="button" role="menuitem" :disabled="!canMoveMenuNode(-1)" @click="taskMenuAction('moveUp')">{{ $tr('上移') }}</button>
+          <button type="button" role="menuitem" :disabled="!canMoveMenuNode(1)" @click="taskMenuAction('moveDown')">{{ $tr('下移') }}</button>
           <button type="button" role="menuitem" class="danger" @click="taskMenuAction('delete')">{{ $tr('删除') }}</button>
         </template>
         <template v-else>

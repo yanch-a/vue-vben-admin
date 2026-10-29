@@ -56,9 +56,19 @@ export class ServerConfigStore {
       const selectedServerId = servers.some((item) => item.id === raw.selectedServerId)
         ? raw.selectedServerId
         : null;
-      return { version: CONFIG_VERSION, selectedServerId, servers };
+      return {
+        version: CONFIG_VERSION,
+        selectedServerId,
+        servers,
+        tabBarCollapsed: raw.tabBarCollapsed === true,
+      };
     } catch {
-      return { version: CONFIG_VERSION, selectedServerId: null, servers: [] };
+      return {
+        version: CONFIG_VERSION,
+        selectedServerId: null,
+        servers: [],
+        tabBarCollapsed: false,
+      };
     }
   }
 
@@ -99,6 +109,7 @@ export class ServerConfigStore {
       version: CONFIG_VERSION,
       selectedServerId: id,
       servers,
+      tabBarCollapsed: config.tabBarCollapsed === true,
     });
     return server;
   }
@@ -139,7 +150,24 @@ export class ServerConfigStore {
     const config = await this.read();
     const servers = config.servers.filter((item) => item.id !== id);
     const selectedServerId = config.selectedServerId === id ? null : config.selectedServerId;
-    const next = { version: CONFIG_VERSION, selectedServerId, servers };
+    const next = {
+      version: CONFIG_VERSION,
+      selectedServerId,
+      servers,
+      tabBarCollapsed: config.tabBarCollapsed === true,
+    };
+    await this.write(next);
+    return next;
+  }
+
+  /** 记住服务端标签栏是否折叠，重启后保持用户偏好。 */
+  async setTabBarCollapsed(collapsed) {
+    const config = await this.read();
+    const tabBarCollapsed = collapsed === true;
+    if (config.tabBarCollapsed === tabBarCollapsed) {
+      return config;
+    }
+    const next = { ...config, tabBarCollapsed };
     await this.write(next);
     return next;
   }

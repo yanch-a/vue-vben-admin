@@ -71,6 +71,7 @@ async function importCsv(event: Event) {
     <el-form-item v-if="!['source.inline', 'transform.union'].includes(node.type)" :label="tr('输入步骤')">
       <el-select v-model="config.inputStepId" @change="dependencies"><el-option v-for="step in upstream" :key="step.id" :value="step.id" :label="step.name || step.id" /></el-select>
     </el-form-item>
+    <p v-if="!['source.inline', 'transform.union'].includes(node.type) && !sourceColumns.length" class="hint">{{ tr('字段下拉为空时，请先在当前或上游步骤点「预览/加载字段」；也可手工输入字段名。') }}</p>
     <template v-if="node.type === 'source.inline'">
       <el-form-item :label="tr('输出字段（留空从非空数据自动推断）')"><el-select v-model="config.columns" multiple filterable allow-create default-first-option /></el-form-item>
       <p>{{ tr('已配置行数') }}: {{ config.rows?.length || 0 }}</p>
@@ -103,7 +104,7 @@ async function importCsv(event: Event) {
     <template v-else-if="node.type === 'transform.join'">
       <el-form-item :label="tr('右侧输入步骤')"><el-select v-model="config.rightStepId" @change="dependencies"><el-option v-for="step in upstream" :key="step.id" :value="step.id" :label="step.name || step.id" /></el-select></el-form-item>
       <el-form-item :label="tr('关联方式')"><el-select v-model="config.joinType"><el-option v-for="option in [{value:'left',label:'左关联'},{value:'inner',label:'内关联'},{value:'semi',label:'只保留匹配的左行'},{value:'anti',label:'只保留未匹配的左行'}]" :key="option.value" :value="option.value" :label="tr(option.label)" /></el-select></el-form-item>
-      <div v-for="(key, index) in config.keys" :key="index" class="rule-row"><el-input v-model="key.left" :placeholder="tr('左侧键字段')" :aria-label="tr('左侧键字段')" /><span>=</span><el-input v-model="key.right" :placeholder="tr('右侧键字段')" :aria-label="tr('右侧键字段')" /><el-button link type="danger" @click="config.keys.splice(index,1)">{{ tr('删除') }}</el-button></div>
+      <div v-for="(key, index) in config.keys" :key="index" class="rule-row"><el-select v-model="key.left" filterable allow-create default-first-option :placeholder="tr('左侧键字段')" :aria-label="tr('左侧键字段')"><el-option v-for="column in sourceColumns" :key="'l-' + column" :value="column" :label="column" /></el-select><span>=</span><el-select v-model="key.right" filterable allow-create default-first-option :placeholder="tr('右侧键字段')" :aria-label="tr('右侧键字段')"><el-option v-for="column in rightColumns" :key="'r-' + column" :value="column" :label="column" /></el-select><el-button link type="danger" @click="config.keys.splice(index,1)">{{ tr('删除') }}</el-button></div>
       <el-button @click="config.keys.push({ left: sourceColumns[0] || '', right: rightColumns[0] || '' })">{{ tr('添加关联键') }}</el-button>
       <el-form-item :label="tr('右侧字段前缀')"><el-input v-model="config.rightPrefix" /></el-form-item>
       <el-checkbox v-model="config.nullEquals">{{ tr('允许 NULL 键匹配') }}</el-checkbox><el-checkbox v-model="config.requireUniqueRight">{{ tr('要求右侧键唯一') }}</el-checkbox>
@@ -113,12 +114,12 @@ async function importCsv(event: Event) {
     <template v-else-if="node.type === 'transform.distinct' || node.type === 'transform.aggregate'">
       <el-form-item :label="tr(node.type === 'transform.distinct' ? '去重键字段' : '分组字段（留空表示全局聚合）')"><el-select v-model="config[node.type === 'transform.distinct' ? 'keys' : 'groupBy']" multiple filterable allow-create default-first-option><el-option v-for="column in sourceColumns" :key="column" :value="column" :label="column" /></el-select></el-form-item>
       <template v-if="node.type === 'transform.aggregate'">
-        <div v-for="(metric,index) in config.metrics" :key="index" class="rule-row"><el-select v-model="metric.op"><el-option v-for="op in ['count','sum','avg','min','max']" :key="op" :label="op" :value="op" /></el-select><el-input v-model="metric.field" :placeholder="tr('字段；count 留空计所有行')" :aria-label="tr('聚合输入字段')" /><el-input v-model="metric.target" :placeholder="tr('输出字段')" :aria-label="tr('聚合输出字段')" /><el-button link type="danger" @click="config.metrics.splice(index,1)">{{ tr('删除') }}</el-button></div>
+        <div v-for="(metric,index) in config.metrics" :key="index" class="rule-row"><el-select v-model="metric.op"><el-option v-for="op in ['count','sum','avg','min','max']" :key="op" :label="op" :value="op" /></el-select><el-select v-model="metric.field" filterable allow-create clearable default-first-option :placeholder="tr('字段；count 留空计所有行')" :aria-label="tr('聚合输入字段')"><el-option v-for="column in sourceColumns" :key="column" :value="column" :label="column" /></el-select><el-input v-model="metric.target" :placeholder="tr('输出字段')" :aria-label="tr('聚合输出字段')" /><el-button link type="danger" @click="config.metrics.splice(index,1)">{{ tr('删除') }}</el-button></div>
         <el-button @click="config.metrics.push({ op:'count',field:'',target:'row_count' })">{{ tr('添加聚合指标') }}</el-button>
       </template>
     </template>
     <template v-else-if="node.type === 'transform.sort'">
-      <div v-for="(order,index) in config.orderBy" :key="index" class="rule-row"><el-input v-model="order.field" :placeholder="tr('排序字段')" :aria-label="tr('排序字段')" /><el-select v-model="order.direction"><el-option value="asc" :label="tr('升序')" /><el-option value="desc" :label="tr('降序')" /></el-select><el-select v-model="order.nulls"><el-option value="first" :label="tr('NULL 最前')" /><el-option value="last" :label="tr('NULL 最后')" /></el-select><el-button link type="danger" @click="config.orderBy.splice(index,1)">{{ tr('删除') }}</el-button></div>
+      <div v-for="(order,index) in config.orderBy" :key="index" class="rule-row"><el-select v-model="order.field" filterable allow-create default-first-option :placeholder="tr('排序字段')" :aria-label="tr('排序字段')"><el-option v-for="column in sourceColumns" :key="column" :value="column" :label="column" /></el-select><el-select v-model="order.direction"><el-option value="asc" :label="tr('升序')" /><el-option value="desc" :label="tr('降序')" /></el-select><el-select v-model="order.nulls"><el-option value="first" :label="tr('NULL 最前')" /><el-option value="last" :label="tr('NULL 最后')" /></el-select><el-button link type="danger" @click="config.orderBy.splice(index,1)">{{ tr('删除') }}</el-button></div>
       <el-button @click="config.orderBy.push({ field:sourceColumns[0] || '', direction:'asc', nulls:'last' })">{{ tr('添加排序字段') }}</el-button>
     </template>
     <div v-if="stateful" class="state-limits">

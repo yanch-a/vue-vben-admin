@@ -27,6 +27,7 @@ import {
   Expand,
   Plus,
   VideoPlay,
+  VideoPause,
   Refresh,
   MoreFilled,
   MagicStick,
@@ -44,6 +45,7 @@ import type {
 } from '#/api/visual/etl';
 import {
   cancelEtlRun,
+  cancelEtlPreview,
   copyEtlWorkspace,
   createEtlWorkspace,
   deleteEtlWorkspace,
@@ -143,6 +145,8 @@ import {
   restoreSavedPipeline,
   sameEtlValue,
   syncStepDependencies,
+  movePipelineNode, buildSameNameMappings,
+  insertPipelineNode,
 } from './etlModel';
 import {
   mergeEtlCollaboration,
@@ -505,7 +509,11 @@ let batchCancelRequested = false;
 let liveLogTagTask: { id: string; name: string } | undefined;
 /** 只取消还没返回的预览。正式运行一旦提交就不能靠断开 HTTP 停掉。 */
 let previewAbort: AbortController | undefined;
-/** 接口按时间倒序返回，页面从旧到新往下追加，便于跟着最新一行看。 */
+
+/** Current preview requestId registered on backend for JDBC cancel. */
+let previewRequestId: string | undefined;
+/** True only when user clicked 取消预览 (not when superseded by a newer preview). */
+let previewUserCancelled = false;/** 接口按时间倒序返回，页面从旧到新往下追加，便于跟着最新一行看。 */
 const liveLogLines = computed(() => [...liveLogs.value].reverse());
 const runLogs = ref<any[]>([]),
   logPage = ref(1),
@@ -933,16 +941,41 @@ function openFormStepMenu(event: MouseEvent, nodeId: string) {
   };
   window.setTimeout(() => window.addEventListener('pointerdown', close, true), 0);
 }
-async function formStepMenuAction(action: 'rename' | 'delete') {
+async function formStepMenuAction(action: 'rename' | 'delete' | 'moveUp' | 'moveDown') {
   const menu = formStepMenu.value;
   closeFormStepMenu();
   if (!menu || !pipeline.value) return;
   if (action === 'rename') await renameCanvasNode(pipeline.value.id, menu.nodeId);
-  else {
+  else if (action === 'moveUp' || action === 'moveDown') {
+    moveStep(menu.nodeId, action === 'moveUp' ? -1 : 1);
+  } else {
     selectedNodeId.value = menu.nodeId;
     await nextTick();
     await removeStep();
   }
+}
+
+/** 上移/下移当前任务内的步骤顺序（表单流水线与画布布局共用 nodes 数组序）。 */
+function moveStep(nodeId = selectedNodeId.value, delta: -1 | 1 = -1) {
+  if (!pipeline.value || !nodeId) return;
+  if (!movePipelineNode(pipeline.value, nodeId, delta)) {
+    say('info', delta < 0 ? '已经是第一个步骤' : '已经是最后一个步骤');
+    return;
+  }
+  selectedNodeId.value = nodeId;
+}
+
+function canMoveStep(nodeId: string | undefined, delta: -1 | 1) {
+  if (!pipeline.value || !nodeId) return false;
+  const index = pipeline.value.nodes.findIndex((item) => item.id === nodeId);
+  const next = index + delta;
+  return index >= 0 && next >= 0 && next < pipeline.value.nodes.length;
+}
+
+async function moveCanvasNode(pipelineId: string, nodeId: string, delta: -1 | 1) {
+  selectCanvasCell(pipelineId, nodeId);
+  await nextTick();
+  moveStep(nodeId, delta);
 }
 function onCanvasDrawerKey(event: KeyboardEvent) {
   if (event.key === 'Escape' && canvasEditorOpen.value) canvasEditorOpen.value = false;
@@ -983,12 +1016,36 @@ function abortPreviewRequest() {
   previewAbort?.abort();
   previewAbort = undefined;
 }
+function newPreviewRequestId() {
+  return `etl-preview-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+}
+/** Best-effort backend JDBC cancel; ignore transport errors so UI still clears. */
+function cancelPreviewBackend(requestId?: string) {
+  if (!requestId) return;
+  void cancelEtlPreview(requestId).catch(() => undefined);
+}
 function isAbortError(error: any) {
   return (
     error?.name === 'CanceledError' ||
     error?.name === 'AbortError' ||
     error?.code === 'ERR_CANCELED'
   );
+}
+function isPreviewCancelledMessage(error: any) {
+  const text = String(error?.msg || error?.message || error || '');
+  return /已取消|预览已取消|canceled|cancelled/i.test(text);
+}
+/** User-visible cancel: abort HTTP + cancel backend statement. */
+function cancelPreview() {
+  if (!previewing.value && !previewAbort) return;
+  previewUserCancelled = true;
+  const requestId = previewRequestId;
+  previewRequestId = undefined;
+  abortPreviewRequest();
+  previewRequests.invalidate();
+  previewing.value = false;
+  cancelPreviewBackend(requestId);
+  say('info', '已取消预览');
 }
 /**
  * 切换工作区 / 离开页面前：把未保存修改落到本地，不再弹「放弃」以免丢稿。
@@ -2531,22 +2588,21 @@ function addStep(type: 'database.query' | 'database.write' | 'transform.select')
   };
   if (type === 'transform.select') {
     item.resourceRef = undefined;
-    item.config = { inputStepId: item.config.inputStepId || pipeline.value.nodes.filter((step) => isEtlRowSource(step.type)).at(-1)?.id || '', fields: [], keepUnspecified: true, removeFields: [] };
+    item.config = { inputStepId: '', fields: [], keepUnspecified: true, removeFields: [] };
   }
-  pipeline.value.nodes.push(item);
+  insertPipelineNode(pipeline.value, item, selectedNodeId.value);
   selectedNodeId.value = item.id;
-  syncStepDependencies(pipeline.value, item);
 }
 /** 下拉只接受已经支持的查询、字段处理和写入节点。 */
 function addStepCommand(type: string) {
   if (type === 'database.query' || type === 'database.write' || type === 'transform.select') { addStep(type); return; }
   const operator = ETL_OPERATORS.find((item) => item.type === type);
   if (!operator || !pipeline.value) return;
-  const input = pipeline.value.nodes.filter((item) => isEtlRowSource(item.type) && item.enabled !== false).at(-1)?.id || '';
-  const item: EtlNode = { id: etlId('transform'), name: translateUiText(operator.label), type, typeVersion: 1, config: createOperatorConfig(type, input) };
+  const item: EtlNode = { id: etlId('transform'), name: translateUiText(operator.label), type, typeVersion: 1, config: createOperatorConfig(type, '') };
   // 新建断言使用当前语言的默认提示；用户后续编辑的业务提示保持原文。
   if (type === 'transform.assert') item.config.message = translateUiText(item.config.message);
-  pipeline.value.nodes.push(item); selectedNodeId.value = item.id; syncStepDependencies(pipeline.value, item);
+  insertPipelineNode(pipeline.value, item, selectedNodeId.value);
+  selectedNodeId.value = item.id;
 }
 async function removeStep() {
   if (!pipeline.value || !node.value) return;
@@ -2640,7 +2696,12 @@ async function previewQuery(id: string) {
   const request = workspaceRequests.stamp();
   const previewRequest = previewRequests.begin();
   const pipelineId = pipeline.value.id;
+  const previousRequestId = previewRequestId;
   abortPreviewRequest();
+  if (previousRequestId) cancelPreviewBackend(previousRequestId);
+  previewUserCancelled = false;
+  const requestId = newPreviewRequestId();
+  previewRequestId = requestId;
   const controller = new AbortController();
   previewAbort = controller;
   previewing.value = true;
@@ -2649,19 +2710,22 @@ async function previewQuery(id: string) {
   const base = JSON.stringify(doc.value);
   const current = () => previewRequests.current(previewRequest) && workspaceRequests.current(request) && pipeline.value?.id === pipelineId && !controller.signal.aborted;
   try {
-    // 单任务预览只上传当前任务及其上游步骤/资源/变量，不传整个工作区其它任务
     const previewJson = buildEtlPreviewJson(doc.value, pipelineId, id);
-    const result = unbox<any>(await previewEtlStep(previewJson, pipelineId, id, controller.signal));
+    const result = unbox<any>(await previewEtlStep(previewJson, pipelineId, id, controller.signal, requestId));
     if (!current()) return;
-    if (base !== JSON.stringify(doc.value)) { say('info', '配置已修改，请重新预览'); return; }
+    if (base !== JSON.stringify(doc.value)) { say('info', '草稿已修改，请重新预览'); return; }
     previews.value[id] = result;
     queryColumns.value = { ...queryColumns.value, ...(result.upstreamColumns || {}), [id]: result.columns };
     say('success', '步骤预览成功');
   } catch (error) {
-    if (isAbortError(error) || controller.signal.aborted) return;
+    if (isAbortError(error) || controller.signal.aborted || previewUserCancelled) return;
+    if (isPreviewCancelledMessage(error)) {
+      if (current()) say('info', '已取消预览');
+      return;
+    }
     if (current()) say('error', errorMessage(error));
   } finally {
-    // 旧请求结束不能解除新请求的 loading，也不能把另一任务的同名步骤结果写入当前任务。
+    if (previewRequestId === requestId) previewRequestId = undefined;
     if (previewRequests.latest(previewRequest)) previewing.value = false;
   }
 }
@@ -2677,7 +2741,10 @@ watch(
 
 /** 任务内步骤 ID 可重复于另一任务，切换任务必须清理预览和字段目录并废弃在途请求。 */
 watch(activePipelineId, () => {
+  const clearedPreviewId = previewRequestId;
+  previewRequestId = undefined;
   abortPreviewRequest();
+  if (clearedPreviewId) cancelPreviewBackend(clearedPreviewId);
   previewRequests.invalidate(); previewing.value = false;
   previews.value = {}; queryColumns.value = {};
 }, { flush: 'sync' });
@@ -2689,19 +2756,84 @@ function inputColumns() {
 const sourceColumnOptions = computed(() =>
   inputColumns().map((column) => ({ value: column, label: column })),
 );
+/** 目标表字段目录：选表后拉取，供写表映射/键字段下拉。 */
+const targetTableColumns = ref<string[]>([]);
+const targetColumnsLoading = ref(false);
+let targetColumnsRequest = 0;
+const targetColumnOptions = computed(() =>
+  targetTableColumns.value.map((column) => ({ value: column, label: column })),
+);
+/** 键字段/更新字段：优先目标表字段，并并入已有映射目标。 */
 const mappingTargetOptions = computed(() => {
-  const mappings = node.value?.config?.mappings;
-  if (!Array.isArray(mappings)) return [];
   const seen = new Set<string>();
   const options: { value: string; label: string }[] = [];
-  for (const mapping of mappings) {
-    const target = String(mapping?.target || '').trim();
-    if (!target || seen.has(target)) continue;
+  const push = (name: string) => {
+    const target = String(name || '').trim();
+    if (!target || seen.has(target)) return;
     seen.add(target);
     options.push({ value: target, label: target });
+  };
+  for (const column of targetTableColumns.value) push(column);
+  const mappings = node.value?.config?.mappings;
+  if (Array.isArray(mappings)) {
+    for (const mapping of mappings) push(String(mapping?.target || ''));
   }
+  for (const column of node.value?.config?.keyColumns || []) push(String(column || ''));
+  for (const column of node.value?.config?.updateColumns || []) push(String(column || ''));
   return options;
 });
+const fieldSourceOptions = computed(() => inputColumns());
+
+async function loadTargetTableColumns() {
+  const step = node.value;
+  const request = ++targetColumnsRequest;
+  if (!step || !['database.write', 'database.upsert'].includes(step.type)) {
+    if (request === targetColumnsRequest) targetTableColumns.value = [];
+    return;
+  }
+  const table = String(step.config?.table || '').trim();
+  const source = nodeResource.value;
+  if (!table || !source?.dbConfigId || !source.instance) {
+    if (request === targetColumnsRequest) targetTableColumns.value = [];
+    return;
+  }
+  targetColumnsLoading.value = true;
+  try {
+    const metaKey = catalogMetaTableName({
+      rawTableName: table.includes('.') ? table.split('.').pop() : table,
+      tableName: table,
+      qualifiedName: table,
+      schemaName: table.includes('.') ? table.split('.').slice(0, -1).join('.') : source.schema,
+    });
+    const response: any = await getTableColumns(source.dbConfigId, source.instance, metaKey || table);
+    if (request !== targetColumnsRequest) return;
+    const list = unbox<any[]>(response) || response?.data || response || [];
+    targetTableColumns.value = (Array.isArray(list) ? list : [])
+      .map((column: any) => String(column?.fieldName || column?.columnName || column?.name || '').trim())
+      .filter(Boolean);
+  } catch (error) {
+    if (request !== targetColumnsRequest) return;
+    targetTableColumns.value = [];
+    say('warning', '读取目标表字段失败：' + errorMessage(error));
+  } finally {
+    if (request === targetColumnsRequest) targetColumnsLoading.value = false;
+  }
+}
+
+watch(
+  () => [
+    node.value?.id,
+    node.value?.type,
+    node.value?.config?.table,
+    node.value?.resourceRef,
+    nodeResource.value?.dbConfigId,
+    nodeResource.value?.instance,
+    nodeResource.value?.schema,
+  ],
+  () => {
+    void loadTargetTableColumns();
+  },
+);
 const catalogTableOptions = computed(() =>
   catalog.value
     .map((table) => String(table.qualifiedName || table.tableName || ''))
@@ -2792,16 +2924,25 @@ function autoMapping() {
   if (!node.value) return;
   const columns = inputColumns();
   if (!columns.length) {
-    say('info', '先预览输入查询，或保持映射为空使用结果同名字段');
+    say('info', '先点「加载字段」拉取来源列，或保持映射为空使用结果同名字段');
     return;
   }
-  node.value.config.mappings = columns.map((column) => ({
-    source: column,
-    target: column,
-  }));
+  const inputId = String(node.value.config?.inputStepId || '');
+  if (inputId && previews.value[inputId]?.stale) {
+    say('warning', '上游配置已改，建议重新「加载字段」后再同名映射');
+  }
+  node.value.config.mappings = buildSameNameMappings(
+    columns,
+    targetTableColumns.value,
+  );
 }
 
-/** 修改查询后保留结果供对照但标为过期；自动映射不能使用旧字段目录。 */
+/**
+ * 修改查询/转换后保留预览样本供对照但标为过期。
+ * 不能清空 queryColumns，也不能作废进行中的「加载字段」：
+ * 字段处理里点「添加字段」、改规则、改写表映射都会改草稿，
+ * 若顺带清目录，下拉会立刻变空，字段处理和写表映射都没法选列。
+ */
 watch(
   () =>
     JSON.stringify({
@@ -2820,8 +2961,6 @@ watch(
         { ...result, stale: true },
       ]),
     );
-    queryColumns.value = {};
-    previewRequests.invalidate(); previewing.value = false;
   },
 );
 
@@ -4083,7 +4222,10 @@ onBeforeUnmount(() => {
   disconnectMappingResizeObserver();
   unbindSaveShortcut();
   pageAlive = false;
+  const leavingPreviewId = previewRequestId;
+  previewRequestId = undefined;
   abortPreviewRequest();
+  if (leavingPreviewId) cancelPreviewBackend(leavingPreviewId);
   flushActiveDraft();
   workspaceRequests.invalidate();
   previewRequests.invalidate();
@@ -4505,6 +4647,7 @@ onBeforeUnmount(() => {
                 @edit="editCanvasNode"
                 @remove="removeCanvasNode"
                 @rename="renameCanvasNode"
+                @move="moveCanvasNode"
                 @select="selectCanvasCell"
               />
               <div v-else class="flow-strip" :aria-label="$tr('步骤流水线')">
@@ -4617,6 +4760,8 @@ onBeforeUnmount(() => {
                 >
                   <div class="etl-step-context-menu__title">{{ formStepMenuTitle }}</div>
                   <button type="button" role="menuitem" @click="formStepMenuAction('rename')">{{ $tr('改名') }}</button>
+                  <button type="button" role="menuitem" :disabled="!canMoveStep(formStepMenu?.nodeId, -1)" @click="formStepMenuAction('moveUp')">{{ $tr('上移') }}</button>
+                  <button type="button" role="menuitem" :disabled="!canMoveStep(formStepMenu?.nodeId, 1)" @click="formStepMenuAction('moveDown')">{{ $tr('下移') }}</button>
                   <button type="button" role="menuitem" class="danger" @click="formStepMenuAction('delete')">{{ $tr('删除') }}</button>
                 </div>
               </Teleport>
@@ -4651,6 +4796,8 @@ onBeforeUnmount(() => {
                       v-model="node.name"
                       :placeholder="$tr('步骤名称')"
                     /><el-tag>{{ $tr(stepTitle(node)) }}</el-tag
+                    ><el-button link :disabled="!canMoveStep(node.id, -1)" @click="moveStep(node.id, -1)">{{ $tr('上移') }}</el-button
+                    ><el-button link :disabled="!canMoveStep(node.id, 1)" @click="moveStep(node.id, 1)">{{ $tr('下移') }}</el-button
                     ><el-button link type="danger" @click="removeStep"
                       >{{ $tr('删除') }}</el-button
                     >
@@ -4705,8 +4852,17 @@ onBeforeUnmount(() => {
                             type="primary"
                             :icon="VideoPlay"
                             :loading="previewing"
+                            :disabled="previewing"
                             @click="preview"
                             >{{ $tr('预览') }}</el-button
+                          >
+                          <el-button
+                            v-if="previewing"
+                            link
+                            type="danger"
+                            :icon="VideoPause"
+                            @click="cancelPreview"
+                            >{{ $tr('取消预览') }}</el-button
                           >
                           <el-popover
                             placement="bottom"
@@ -4865,7 +5021,17 @@ onBeforeUnmount(() => {
                     </template>
                     <template v-else-if="ETL_OPERATORS.some((operator) => operator.type === node?.type)">
                       <EtlOperatorEditor :key="`${activePipelineId}:${node.id}`" :node="node" :upstream="previousQueries" :columns="queryColumns" @dependency-change="dependencyChanged" />
-                      <el-button :loading="previewing" @click="preview">{{ $tr('预览步骤结果') }}</el-button>
+                      <div class="preview-actions">
+                        <el-button :loading="previewing" :disabled="previewing" @click="preview">{{ $tr('预览步骤结果') }}</el-button>
+                        <el-button
+                          v-if="previewing"
+                          type="danger"
+                          plain
+                          :icon="VideoPause"
+                          @click="cancelPreview"
+                          >{{ $tr('取消预览') }}</el-button
+                        >
+                      </div>
                     </template>
                     <template v-else-if="node.type === 'transform.select'">
                       <el-form-item :label="$tr('输入步骤')"
@@ -4882,15 +5048,24 @@ onBeforeUnmount(() => {
                         v-model="node.config.keepUnspecified"
                         :active-text="$tr('保留未选择字段')"
                       />
+                      <p class="help" v-if="!fieldSourceOptions.length">{{ $tr('先选择输入步骤并点「加载字段」，即可下拉选择原字段；也可手工输入。') }}</p>
+                      <div class="preview-actions">
+                        <el-button :loading="previewing" :disabled="previewing || !node.config.inputStepId" @click="previewInput">{{ $tr('加载字段') }}</el-button>
+                        <el-button v-if="previewing" type="danger" plain @click="cancelPreview">{{ $tr('取消预览') }}</el-button>
+                      </div>
                       <div
                         v-for="(field, index) in node.config.fields || []"
                         :key="index"
                         class="mapping-row field-processing-row"
                       >
-                        <el-input
+                        <el-select
                           v-model="field.source"
+                          filterable
+                          allow-create
+                          default-first-option
                           :placeholder="$tr('原字段')"
-                        /><span>→</span
+                        ><el-option v-for="column in fieldSourceOptions" :key="column" :value="column" :label="column" /></el-select
+                        ><span>→</span
                         ><el-input
                           v-model="field.target"
                           :placeholder="$tr('输出字段')"
@@ -4904,7 +5079,7 @@ onBeforeUnmount(() => {
                       </div>
                       <el-button
                         @click="
-                          (node.config.fields ||= []).push({ source: '', target: '', type: 'keep', trim: false, emptyToNull: false })
+                          (node.config.fields ||= []).push({ source: fieldSourceOptions[0] || '', target: fieldSourceOptions[0] || '', type: 'keep', trim: false, emptyToNull: false })
                         "
                         >{{ $tr('添加字段') }}</el-button
                       >
@@ -4915,7 +5090,9 @@ onBeforeUnmount(() => {
                           filterable
                           allow-create
                           default-first-option
-                      /></el-form-item>
+                          :placeholder="$tr('选择要移除的字段')"
+                        ><el-option v-for="column in fieldSourceOptions" :key="column" :value="column" :label="column" /></el-select
+                      ></el-form-item>
                     </template>
                     <template
                       v-else-if="
@@ -5085,6 +5262,16 @@ onBeforeUnmount(() => {
                             ? $tr('最多 100 行样本')
                             : $tr('结果预览')
                       }}</small>
+                    
+                      <el-button
+                        v-if="previewing"
+                        link
+                        type="danger"
+                        size="small"
+                        :icon="VideoPause"
+                        @click="cancelPreview"
+                        >{{ $tr('取消预览') }}</el-button
+                      >
                     </div>
                     <p class="help">
                       {{ $tr('正式运行不截断总行数。这里只留样本，用来确认 SQL 和参数。') }}
@@ -5128,6 +5315,14 @@ onBeforeUnmount(() => {
                           :loading="previewing"
                           @click="previewInput"
                           >{{ $tr('加载字段') }}</el-button
+                        >
+                        ><el-button
+                          v-if="previewing"
+                          link
+                          type="danger"
+                          :icon="VideoPause"
+                          @click="cancelPreview"
+                          >{{ $tr('取消预览') }}</el-button
                         ><el-button link @click="autoMapping">{{ $tr('同名映射') }}</el-button
                         ><el-button link :icon="Plus" @click="addMapping"
                           >{{ $tr('添加字段') }}</el-button
@@ -5135,7 +5330,7 @@ onBeforeUnmount(() => {
                       </div>
                     </div>
                     <p class="help">
-                      {{ $tr('留空时按查询结果同名写入。SQL 字段别名可以直接对应目标字段。') }}
+                      {{ $tr('留空时按查询结果同名写入。点「加载字段」拉来源列；选好目标表后自动加载目标列，两边都可下拉或手工输入。') }}
                     </p>
                     <div
                       v-if="mappingCount"
@@ -5163,9 +5358,14 @@ onBeforeUnmount(() => {
                             :options="sourceColumnOptions"
                             :placeholder="$tr('查询结果字段')"
                           /><span>→</span
-                          ><el-input
+                          ><el-select-v2
                             v-model="row.mapping.target"
-                            :placeholder="$tr('目标字段')"
+                            filterable
+                            allow-create
+                            default-first-option
+                            :loading="targetColumnsLoading"
+                            :options="targetColumnOptions"
+                            :placeholder="$tr('目标表字段')"
                           /><el-button
                             link
                             type="danger"

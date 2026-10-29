@@ -12,7 +12,7 @@ import type { ChartSpec, QueryResult } from '#/api/visual/dashboard';
 import type { DashboardMediaPolicy } from './mediaUrlPolicy';
 
 import { useResizeObserver } from '@vueuse/core';
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
+import { computed, onActivated, onBeforeUnmount, onDeactivated, onMounted, ref } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { ElMessage } from 'element-plus';
 
@@ -404,7 +404,21 @@ function goWorkbench() {
   void router.push('/visualDashboard');
 }
 
+function isTypingTarget(target: EventTarget | null) {
+  const el = target as HTMLElement | null;
+  if (!el) return false;
+  const tag = (el.tagName || '').toLowerCase();
+  return !!(
+    el.closest?.('[role="dialog"], .el-dialog') ||
+    el.isContentEditable ||
+    tag === 'input' ||
+    tag === 'textarea' ||
+    tag === 'select'
+  );
+}
+
 function onKeydown(event: KeyboardEvent) {
+  if (isTypingTarget(event.target)) return;
   if (event.key === 'f' || event.key === 'F') {
     event.preventDefault();
     void toggleFullscreen();
@@ -414,6 +428,17 @@ function onKeydown(event: KeyboardEvent) {
 }
 
 useResizeObserver(viewerRef, () => measureViewport());
+let viewShortcutBound = false;
+function bindViewShortcuts() {
+  if (viewShortcutBound) return;
+  viewShortcutBound = true;
+  window.addEventListener('keydown', onKeydown);
+}
+function unbindViewShortcuts() {
+  if (!viewShortcutBound) return;
+  viewShortcutBound = false;
+  window.removeEventListener('keydown', onKeydown);
+}
 onMounted(() => {
   measureViewport();
   // 被 iframe 加载时，只允许经由同源嵌入网关（其 CSP frame-ancestors 已按链接配置校验）
@@ -424,15 +449,17 @@ onMounted(() => {
   bumpStatus();
   document.addEventListener('fullscreenchange', onFullscreenChange);
   document.addEventListener('visibilitychange', onVisibilityChange);
-  window.addEventListener('keydown', onKeydown);
+  bindViewShortcuts();
   countdownTimer = window.setInterval(() => {
     nowTick.value = Date.now();
   }, 1000);
 });
+onActivated(bindViewShortcuts);
+onDeactivated(unbindViewShortcuts);
 onBeforeUnmount(() => {
   document.removeEventListener('fullscreenchange', onFullscreenChange);
   document.removeEventListener('visibilitychange', onVisibilityChange);
-  window.removeEventListener('keydown', onKeydown);
+  unbindViewShortcuts();
   if (statusHideTimer != null) window.clearTimeout(statusHideTimer);
   if (countdownTimer != null) window.clearInterval(countdownTimer);
   clearRefreshTimer();

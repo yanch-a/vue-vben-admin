@@ -212,3 +212,97 @@ code {
   font-size: 12px;
   text-align: center;
 }
+
+
+/* 跟随系统暗色主题，与主窗口壳层一致。@author yanch */
+@media (prefers-color-scheme: dark) {
+  :root {
+    color: #e2e8f0;
+    background: #0f172a;
+  }
+
+  body {
+    background: radial-gradient(circle at 85% 10%, rgb(65 105 225 / 18%), transparent 34%), #0f172a;
+  }
+
+  .eyebrow {
+    color: #8aa4ef;
+  }
+
+  .subtitle,
+  .help,
+  .privacy-note {
+    color: #94a3b8;
+  }
+
+  .panel {
+    background: rgb(30 41 59 / 94%);
+    border-color: #334155;
+    box-shadow: 0 18px 46px rgb(0 0 0 / 35%);
+  }
+
+  label {
+    color: #cbd5e1;
+  }
+
+  input,
+  select {
+    color: #e2e8f0;
+    background: #0f172a;
+    border-color: #475569;
+  }
+
+  input:focus,
+  select:focus {
+    border-color: #60a5fa;
+    box-shadow: 0 0 0 3px rgb(96 165 250 / 20%);
+  }
+
+  code {
+    color: #93c5fd;
+  }
+
+  .status {
+    color: #94a3b8;
+  }
+
+  .status--success {
+    color: #4ade80;
+  }
+
+  .status--error {
+    color: #f87171;
+  }
+
+  .actions {
+    border-top-color: #334155;
+  }
+
+  .button {
+    color: #e2e8f0;
+    background: #1e293b;
+    border-color: #475569;
+  }
+
+  .button--primary {
+    color: white;
+    background: #3b82f6;
+    border-color: #3b82f6;
+  }
+
+  .button--secondary {
+    color: #93c5fd;
+    background: #1e293b;
+    border-color: #3b82f6;
+  }
+
+  .button--danger {
+    color: #f87171;
+    background: #3f1d24;
+    border-color: #7f1d1d;
+  }
+
+  .button--ghost {
+    background: transparent;
+  }
+}

@@ -420,13 +420,23 @@ export function previewEtlStep(
   pipelineId: string,
   nodeId: string,
   signal?: AbortSignal,
+  requestId?: string,
 ) {
   return request({
     url: `${url}preview`,
     method: 'post',
-    data: { json, pipelineId, nodeId },
+    data: { json, pipelineId, nodeId, requestId },
     timeout: 0,
     signal,
+  });
+}
+/** Cancel in-flight preview; pairs with previewEtlStep requestId + AbortSignal. */
+export function cancelEtlPreview(requestId: string) {
+  return request({
+    url: `${url}preview/cancel`,
+    method: 'post',
+    data: { requestId },
+    showErrorMessage: false,
   });
 }
 /** 执行已保存的 SQL 工作流。 */

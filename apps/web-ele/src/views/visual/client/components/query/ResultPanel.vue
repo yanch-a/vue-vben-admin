@@ -26,7 +26,9 @@ import {
   computed,
   markRaw,
   nextTick,
+  onActivated,
   onBeforeUnmount,
+  onDeactivated,
   onMounted,
   reactive,
   ref,
@@ -1985,19 +1987,27 @@ function onDocumentKeydown(e: KeyboardEvent) {
   }
 }
 
-onMounted(() => {
-  // 保留 click/scroll 作为兜底；主关闭路径走 mousedown 捕获
+let resultDocListenersBound = false;
+function bindResultDocListeners() {
+  if (resultDocListenersBound) return;
+  resultDocListenersBound = true;
   document.addEventListener('click', onGlobalClick);
   document.addEventListener('scroll', onGlobalClick, true);
   document.addEventListener('mousedown', onDocumentMouseDown, true);
   document.addEventListener('keydown', onDocumentKeydown, true);
-});
-onBeforeUnmount(() => {
+}
+function unbindResultDocListeners() {
+  if (!resultDocListenersBound) return;
+  resultDocListenersBound = false;
   document.removeEventListener('click', onGlobalClick);
   document.removeEventListener('scroll', onGlobalClick, true);
   document.removeEventListener('mousedown', onDocumentMouseDown, true);
   document.removeEventListener('keydown', onDocumentKeydown, true);
-});
+}
+onMounted(bindResultDocListeners);
+onActivated(bindResultDocListeners);
+onDeactivated(unbindResultDocListeners);
+onBeforeUnmount(unbindResultDocListeners);
 
 /** 编辑副本和查询结果不是同一批对象。换数组后按行号把当前行指回正在显示的那一行。 */
 watch(displayRows, (rows) => {

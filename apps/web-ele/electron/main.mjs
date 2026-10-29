@@ -10,6 +10,7 @@ import {
   BrowserWindow,
   ipcMain,
   Menu,
+  nativeTheme,
   net,
   protocol,
   session,
@@ -33,6 +34,8 @@ const isAnySmokeTest = isSmokeTest || isRendererSmokeTest;
 const streamingApiFetch = createStreamingFetch((options) => net.request(options));
 /** 标签栏高度，需与 tabs/style.css 中的 40px 保持一致。 */
 const TAB_BAR_HEIGHT = 40;
+/** 折叠后的纤细高度，需与 tabs/style.css 中的 24px 保持一致。 */
+const TAB_BAR_COLLAPSED_HEIGHT = 24;
 
 let configStore;
 /** 同一窗口内同时在线的服务端。键是服务端配置 ID。 */
@@ -42,6 +45,8 @@ const serversById = new Map();
 /** 已经注册过 lemon:// 的会话分区，避免重复注册导致抛错。 */
 const registeredPartitions = new Set();
 let activeTabId = null;
+/** 服务端标签栏是否折叠；默认展开，偏好持久化在 server-config.json。 */
+let tabBarCollapsed = false;
 /** @type {import('electron').BaseWindow | null} */
 let mainWindow = null;
 /** @type {import('electron').WebContentsView | null} */
@@ -268,13 +273,146 @@ function serverTabByWebContents(webContents) {
 function tabsPayload() {
   return {
     activeId: activeTabId,
+    collapsed: tabBarCollapsed,
     locale: desktopLocale,
+    theme: shellTheme(),
     tabs: [...serverTabs.values()].map((tab) => ({
       id: tab.server.id,
       name: tab.server.name,
       url: tab.server.url,
     })),
   };
+}
+
+/** 当前标签栏占用的客户区高度。 */
+function currentTabBarHeight() {
+  return tabBarCollapsed ? TAB_BAR_COLLAPSED_HEIGHT : TAB_BAR_HEIGHT;
+}
+
+/** 壳层（菜单栏/标签栏/选择器）跟随系统亮暗。 */
+function shellTheme() {
+  return nativeTheme.shouldUseDarkColors ? 'dark' : 'light';
+}
+
+/** 主窗口客户区底色，与标签栏主题一致。 */
+function shellBackgroundColor() {
+  return shellTheme() === 'dark' ? '#0f172a' : '#e8eef6';
+}
+
+/** 服务端选择器窗口底色。 */
+function selectorBackgroundColor() {
+  return shellTheme() === 'dark' ? '#0f172a' : '#f4f7fb';
+}
+
+/** 把系统主题同步到窗口底色与标签栏；系统切换时由 nativeTheme.updated 触发。 */
+function applyShellTheme() {
+  const theme = shellTheme();
+  const mainBg = shellBackgroundColor();
+  const selectorBg = selectorBackgroundColor();
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.setBackgroundColor(mainBg);
+  }
+  if (selectorWindow && !selectorWindow.isDestroyed()) {
+    selectorWindow.setBackgroundColor(selectorBg);
+  }
+  if (tabBarView && !tabBarView.webContents.isDestroyed()) {
+    tabBarView.webContents.send('lemon-shell:theme', theme);
+  }
+  broadcastTabs();
+}
+
+/** 在已打开的服务端标签间循环切换。 */
+async function cycleServerTab(delta) {
+  const ids = [...serverTabs.keys()];
+  if (ids.length === 0) {
+    return;
+  }
+  const current = Math.max(0, ids.indexOf(activeTabId));
+  const next = ids[(current + delta + ids.length) % ids.length];
+  if (next === activeTabId) {
+    return;
+  }
+  activeTabId = next;
+  revealActiveTab();
+  broadcastTabs();
+  await rememberSelectedServer(next);
+}
+
+/** 按序号（1 起）激活服务端标签。 */
+async function activateServerTabAt(index) {
+  const ids = [...serverTabs.keys()];
+  const id = ids[index];
+  if (!id) {
+    return;
+  }
+  activeTabId = id;
+  revealActiveTab();
+  broadcastTabs();
+  await rememberSelectedServer(id);
+}
+
+/** 关闭当前服务端标签（Ctrl+F4）；Ctrl+W 留给业务页内查询页签。 */
+async function closeActiveServerTab() {
+  if (!activeTabId) {
+    return;
+  }
+  await closeServerTab(activeTabId);
+}
+
+/**
+ * 在 WebContents 上拦截壳层快捷键，避免业务页抢占 Ctrl+Tab / Ctrl+F4。
+ * Ctrl+W 不拦截，留给查询编辑器关页签。
+ */
+function attachShellShortcuts(webContents) {
+  if (!webContents || webContents.isDestroyed() || webContents.__lemonShellShortcuts) {
+    return;
+  }
+  webContents.__lemonShellShortcuts = true;
+  webContents.on('before-input-event', (event, input) => {
+    if (input.type !== 'keyDown') {
+      return;
+    }
+    const key = String(input.key || '');
+    const ctrl = input.control || input.meta;
+    if (!ctrl) {
+      return;
+    }
+    // Ctrl+Tab / Ctrl+Shift+Tab
+    if (key === 'Tab') {
+      event.preventDefault();
+      void cycleServerTab(input.shift ? -1 : 1);
+      return;
+    }
+    // Ctrl+F4 关闭当前服务端
+    if (key === 'F4' && !input.alt && !input.shift) {
+      event.preventDefault();
+      void closeActiveServerTab();
+      return;
+    }
+    // Ctrl+1..9
+    if (/^[1-9]$/.test(key) && !input.alt && !input.shift) {
+      event.preventDefault();
+      void activateServerTabAt(Number(key) - 1);
+    }
+  });
+}
+
+
+/**
+ * 折叠或展开服务端标签栏，并写回本机偏好。
+ * 折叠后仍保留一条纤细条，便于一键恢复。
+ */
+async function setTabBarCollapsed(collapsed) {
+  tabBarCollapsed = collapsed === true;
+  layoutServerViews();
+  const payload = broadcastTabs();
+  installApplicationMenu();
+  try {
+    await configStore?.setTabBarCollapsed(tabBarCollapsed);
+  } catch (error) {
+    console.warn('[desktop] 保存标签栏折叠偏好失败', error);
+  }
+  return payload;
 }
 
 /** 通知标签栏刷新。页面尚未加载完成时，标签栏会在启动后再拉取一次。 */
@@ -297,12 +435,13 @@ function layoutServerViews() {
     width = 1440;
     height = 860;
   }
-  tabBarView?.setBounds({ x: 0, y: 0, width, height: TAB_BAR_HEIGHT });
+  const barHeight = currentTabBarHeight();
+  tabBarView?.setBounds({ x: 0, y: 0, width, height: barHeight });
   const contentBounds = {
-    height: Math.max(0, height - TAB_BAR_HEIGHT),
+    height: Math.max(0, height - barHeight),
     width,
     x: 0,
-    y: TAB_BAR_HEIGHT,
+    y: barHeight,
   };
   for (const [id, tab] of serverTabs) {
     tab.view.setBounds(contentBounds);
@@ -353,7 +492,7 @@ async function ensureMainWindow() {
 
   mainWindow = new BaseWindow({
     autoHideMenuBar: false,
-    backgroundColor: '#0f172a',
+    backgroundColor: shellBackgroundColor(),
     height: 900,
     icon: path.join(rendererDirectory, 'logo.png'),
     minHeight: 640,
@@ -405,7 +544,9 @@ async function ensureMainWindow() {
     }
   });
   layoutServerViews();
+  attachShellShortcuts(tabBarView.webContents);
   await tabBarView.webContents.loadFile(tabPage);
+  applyShellTheme();
   if (!isRendererSmokeTest) {
     mainWindow.show();
   }
@@ -449,6 +590,7 @@ async function openServerTab(server) {
     },
   });
   secureServerView(view.webContents, server.id);
+  attachShellShortcuts(view.webContents);
   serverTabs.set(server.id, { server, view });
   mainWindow.contentView.addChildView(view);
   activeTabId = server.id;
@@ -669,7 +811,7 @@ async function showServerSelector() {
     mainWindow?.hide();
   }
   selectorWindow = new BrowserWindow({
-    backgroundColor: '#f4f7fb',
+    backgroundColor: selectorBackgroundColor(),
     height: 640,
     maximizable: false,
     minimizable: false,
@@ -765,6 +907,9 @@ function registerIpcHandlers() {
   ipcMain.handle('lemon-tabs:add', async () => {
     await showServerSelector();
   });
+  ipcMain.handle('lemon-tabs:set-collapsed', async (_event, collapsed) => {
+    return setTabBarCollapsed(collapsed === true);
+  });
   ipcMain.handle('lemon-i18n:set-locale', (_event, locale) => {
     desktopLocale = normalizeDesktopLocale(locale);
     installApplicationMenu();
@@ -822,6 +967,37 @@ function installApplicationMenu() {
           click: () => void showServerSelector(),
           label: desktopText('连接服务端…', 'Connect Server…'),
         },
+        {
+          accelerator: 'CmdOrCtrl+Shift+B',
+          click: () => void setTabBarCollapsed(!tabBarCollapsed),
+          label: tabBarCollapsed
+            ? desktopText('显示服务端栏', 'Show Server Bar')
+            : desktopText('隐藏服务端栏', 'Hide Server Bar'),
+        },
+        { type: 'separator' },
+        {
+          accelerator: 'Ctrl+Tab',
+          click: () => void cycleServerTab(1),
+          label: desktopText('下一个服务端', 'Next Server'),
+        },
+        {
+          accelerator: 'Ctrl+Shift+Tab',
+          click: () => void cycleServerTab(-1),
+          label: desktopText('上一个服务端', 'Previous Server'),
+        },
+        {
+          // Ctrl+W 留给业务页查询编辑器关页签；此处用 Ctrl+F4（Windows 关文档惯例）
+          accelerator: 'Ctrl+F4',
+          click: () => void closeActiveServerTab(),
+          label: desktopText('关闭当前服务端', 'Close Current Server'),
+        },
+        { type: 'separator' },
+        ...[1, 2, 3, 4, 5, 6, 7, 8, 9].map((n) => ({
+          accelerator: `CmdOrCtrl+${n}`,
+          click: () => void activateServerTabAt(n - 1),
+          label: desktopText(`切换到服务端 ${n}`, `Switch to Server ${n}`),
+          visible: false,
+        })),
       ],
     },
     {
@@ -914,7 +1090,14 @@ if (!hasSingleInstanceLock) {
 
   app.whenReady().then(async () => {
     desktopLocale = normalizeDesktopLocale(app.getLocale());
+    // 菜单栏与壳层 UI 跟随操作系统亮/暗主题
+    nativeTheme.themeSource = 'system';
+    nativeTheme.on('updated', () => {
+      applyShellTheme();
+      installApplicationMenu();
+    });
     configStore = new ServerConfigStore(path.join(app.getPath('userData'), 'server-config.json'));
+    tabBarCollapsed = (await configStore.read()).tabBarCollapsed === true;
     registerIpcHandlers();
     installApplicationMenu();
     if (isRendererSmokeTest) {

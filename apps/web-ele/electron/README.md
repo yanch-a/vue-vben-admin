@@ -27,7 +27,7 @@ pnpm build:ele
 - macOS：`~/Library/Application Support/Lemon DB Client/server-config.json`
 - Linux：`~/.config/Lemon DB Client/server-config.json`
 
-同一个窗口可以同时连接多个服务端。窗口顶部的标签对应各自的连接，切换标签不会断开其他服务端。菜单“服务端 → 连接服务端…”（快捷键 `Ctrl/Cmd + ,`）或标签栏上的“+”用于再接入一个环境。每个服务端使用独立的浏览器会话，登录令牌、打开的数据库连接、SQL Tab、后台任务和 AI 模型选择不会串用。
+同一个窗口可以同时连接多个服务端。窗口顶部的标签对应各自的连接，切换标签不会断开其他服务端。菜单“服务端 → 连接服务端…”（快捷键 `Ctrl/Cmd + ,`）或标签栏上的“+”用于再接入一个环境。标签栏右侧的 ▴（或菜单“服务端 → 隐藏服务端栏”，快捷键 `Ctrl/Cmd + Shift + B`）可折叠该区域为一条细栏以省出高度；点细栏或“显示服务端栏”即可恢复，偏好会写入本机 `server-config.json`。每个服务端使用独立的浏览器会话，登录令牌、打开的数据库连接、SQL Tab、后台任务和 AI 模型选择不会串用。
 
 ## 打包
 

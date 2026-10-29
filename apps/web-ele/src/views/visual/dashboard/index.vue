@@ -11,7 +11,7 @@ import type {
   ScreenWidget,
 } from '#/api/visual/dashboard';
 
-import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
+import { computed, onActivated, onBeforeUnmount, onDeactivated, onMounted, reactive, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { ElMessage, ElMessageBox } from 'element-plus';
 
@@ -977,12 +977,25 @@ watch(() => route.query.tab, (tab) => {
   if (tab === 'charts' && mode.value !== 'editor') mode.value = 'charts';
 }, { immediate: true });
 
-onMounted(() => {
+let workbenchShortcutBound = false;
+function bindWorkbenchShortcuts() {
+  if (workbenchShortcutBound) return;
+  workbenchShortcutBound = true;
   window.addEventListener('keydown', onWorkbenchKeydown);
+}
+function unbindWorkbenchShortcuts() {
+  if (!workbenchShortcutBound) return;
+  workbenchShortcutBound = false;
+  window.removeEventListener('keydown', onWorkbenchKeydown);
+}
+onMounted(() => {
+  bindWorkbenchShortcuts();
   void loadAll();
   void loadConnections();
 });
-onBeforeUnmount(() => window.removeEventListener('keydown', onWorkbenchKeydown));
+onActivated(bindWorkbenchShortcuts);
+onDeactivated(unbindWorkbenchShortcuts);
+onBeforeUnmount(unbindWorkbenchShortcuts);
 // 字段映射改变后只重绘现有预览，不重复执行 SQL。
 watch(chartSpecForm, fillChartSpec, { deep: true });
 </script>

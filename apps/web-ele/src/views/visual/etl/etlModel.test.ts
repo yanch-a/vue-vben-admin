@@ -11,6 +11,9 @@ import {
   sameEtlValue,
   createSimplePipeline,
   insertTransform,
+  insertPipelineNode,
+  movePipelineNode,
+  buildSameNameMappings,
   mergeAiPipelineEdit,
   restoreSavedPipeline,
   pipelineEditJson,
@@ -106,6 +109,44 @@ describe('etlModel', () => {
     expect(sourceNode(pipeline)?.type).toBe('database.table.read');
     expect(targetNode(pipeline)?.type).toBe('database.table.write');
     expect(pipeline.edges).toHaveLength(1);
+  });
+
+
+  it('moves a step in the pipeline list and inserts between selected and write', () => {
+    const pipeline = createSqlPipeline(['a']);
+    const query = pipeline.nodes[0]!;
+    const write = pipeline.nodes[1]!;
+    expect(movePipelineNode(pipeline, write.id, -1)).toBe(true);
+    expect(pipeline.nodes.map((item) => item.id)).toEqual([write.id, query.id]);
+    expect(movePipelineNode(pipeline, write.id, -1)).toBe(false);
+    // restore query then write
+    movePipelineNode(pipeline, query.id, -1);
+    const transform: any = {
+      id: 'transform_mid',
+      name: '字段处理',
+      type: 'transform.select',
+      typeVersion: 1,
+      config: { inputStepId: '', fields: [], keepUnspecified: true, removeFields: [] },
+    };
+    insertPipelineNode(pipeline, transform, write.id);
+    expect(pipeline.nodes.map((item) => item.type)).toEqual([
+      'database.query',
+      'transform.select',
+      'database.write',
+    ]);
+    expect(transform.config.inputStepId).toBe(query.id);
+    expect(write.config.inputStepId).toBe(transform.id);
+  });
+
+  it('maps source columns to target columns case-insensitively for write auto-mapping', () => {
+    expect(
+      buildSameNameMappings(['feeamount', 'ID', 'orphan'], ['FEEAMOUNT', 'id', 'NAME']),
+    ).toEqual([
+      { source: 'feeamount', target: 'FEEAMOUNT' },
+      { source: 'ID', target: 'id' },
+      { source: 'orphan', target: 'orphan' },
+    ]);
+    expect(buildSameNameMappings(['a'])).toEqual([{ source: 'a', target: 'a' }]);
   });
 
   it('inserts transformations before the target without rebuilding unrelated edges', () => {
