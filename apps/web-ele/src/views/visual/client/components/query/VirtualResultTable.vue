@@ -55,22 +55,18 @@ const props = defineProps<{
 }>();
 
 const emit = defineEmits<{
-  'current-change': [row: Record<string, any> | undefined, index: number];
-  'selection-change': [rows: Record<string, any>[]];
+  'current-change': (row: Record<string, any> | undefined, index: number) => void;
+  'selection-change': (rows: Record<string, any>[]) => void;
   /** 右键：带上列名（点在单元格上时）；点在行号/勾选列时 col 为空 */
-  'row-contextmenu': [
-    row: Record<string, any>,
-    event: MouseEvent,
-    col: string | null,
-  ];
+  'row-contextmenu': (row: Record<string, any>, event: MouseEvent, col: string | null) => void;
   /** 激活单元格（单击）；col 为空表示只选中行 */
-  'cell-activate': [rowIndex: number, col: string | null];
-  'cell-click': [rowIndex: number, col: string];
-  'update:editDraft': [value: string];
-  'cell-blur': [rowIndex: number, col: string];
-  'cell-keydown': [event: KeyboardEvent];
+  'cell-activate': (rowIndex: number, col: string | null) => void;
+  'cell-click': (rowIndex: number, col: string) => void;
+  'update:editDraft': (value: string) => void;
+  'cell-blur': (rowIndex: number, col: string) => void;
+  'cell-keydown': (event: KeyboardEvent) => void;
   /** 正在编辑的行滚出可视区时，通知父级提交 */
-  'edit-offscreen': [];
+  'edit-offscreen': () => void;
 }>();
 
 const scrollRef = ref<HTMLDivElement | null>(null);

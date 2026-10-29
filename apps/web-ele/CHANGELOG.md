@@ -1,23 +1,18 @@
-# @vben/web-ele
+﻿> 说明：本文档为 **LemonDB** 产品更新记录（由 `lemon_db_client/lemondb/CHANGELOG.md` 同步）。原 Vben Admin 模板 CHANGELOG 已备份至 `D:\java\project\lemon_backup\lemondb-docs-to-frontend-20261029\apps\web-ele\CHANGELOG.md`。
+# Changelog
 
-## 5.8.0
+## Unreleased
 
-### Patch Changes
+### Documentation refresh (2026-10-12)
 
-- [#8308](https://github.com/vbenjs/vue-vben-admin/pull/8308) [`81f179e`](https://github.com/vbenjs/vue-vben-admin/commit/81f179ed4c39cffe05aa0243843679ffd5c13dcd) Thanks [@kilisamemarisaaa](https://github.com/kilisamemarisaaa)! - fix(apps): pass withCredentials as request config for refresh/logout
+- Reworked Chinese and English introductions around simultaneous connections to multiple LemonDB servers.
+- Explained server tabs, independent sessions, local profiles, and the difference between server and database connections.
+- Added current MongoDB, ETL, migration, backup, and background-task capabilities to the feature overview.
+- Corrected the backend JAR path and removed the placeholder demo URL and unverified release archive name.
+- Recaptured all existing Chinese and English feature images and added matching server-selector and ETL-preview images. The screenshot inventory records real demonstration data, localization gaps, and the pending second-server tab capture.
 
-- Updated dependencies [[`9ffd42f`](https://github.com/vbenjs/vue-vben-admin/commit/9ffd42f013825f94278165027bc210a5314d3998), [`1d95f29`](https://github.com/vbenjs/vue-vben-admin/commit/1d95f298bdce48a1f3d4cec1ed1f182bfe265268), [`390efe9`](https://github.com/vbenjs/vue-vben-admin/commit/390efe9f604d7994f82156b89b0a76f61788a5d9), [`728ba5f`](https://github.com/vbenjs/vue-vben-admin/commit/728ba5f5744b5c2de3850a99bff5afe0b9872198)]:
-  - @vben/styles@5.8.0
-  - @vben/plugins@5.8.0
-  - @vben/preferences@5.8.0
-  - @vben/layouts@5.8.0
-  - @vben/common-ui@5.8.0
-  - @vben/access@5.8.0
-  - @vben/hooks@5.8.0
-  - @vben/constants@5.8.0
-  - @vben/request@5.8.0
-  - @vben/icons@5.8.0
-  - @vben/locales@5.8.0
-  - @vben/stores@5.8.0
-  - @vben/types@5.8.0
-  - @vben/utils@5.8.0
+### Docs and screenshots (2026-09-24)
+
+- Added Chinese and English screenshots for SQL results, saved queries, AI, Redis, dashboards, and SQL work orders.
+- Introduced AI assistant, schema documentation, and database-scoped query saving in both READMEs.
+

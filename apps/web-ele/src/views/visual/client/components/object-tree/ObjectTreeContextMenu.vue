@@ -70,8 +70,8 @@ const props = withDefaults(
 );
 
 const emit = defineEmits<{
-  close: [];
-  action: [action: TreeCtxAction];
+  close: () => void;
+  action: (action: TreeCtxAction) => void;
 }>();
 
 const isBlank = () => props.targetType === 'blank';

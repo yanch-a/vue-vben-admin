@@ -19,8 +19,8 @@ const props = defineProps<{
 }>();
 
 const emit = defineEmits<{
-  open: [conn: any];
-  create: [];
+  open: (conn: any) => void;
+  create: () => void;
 }>();
 
 const loading = ref(false);

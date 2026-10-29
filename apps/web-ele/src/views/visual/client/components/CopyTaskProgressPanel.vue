@@ -17,10 +17,10 @@ const props = defineProps<{
 }>();
 
 const emit = defineEmits<{
-  'update:modelValue': [boolean];
-  hide: [];
-  cancel: [];
-  select: [taskId: string];
+  'update:modelValue': (arg0: boolean) => void;
+  hide: () => void;
+  cancel: () => void;
+  select: (taskId: string) => void;
 }>();
 
 const visible = computed({

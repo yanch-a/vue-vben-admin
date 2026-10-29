@@ -35,7 +35,7 @@ function sameWorkspace(left?: string | number | null, right?: string | number | 
 }
 
 const emit = defineEmits<{
-  logs: [workspaceId: string | number, runId: string];
+  logs: (workspaceId: string | number, runId: string) => void;
 }>();
 const visible = ref(false),
   loading = ref(false),

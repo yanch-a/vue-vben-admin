@@ -43,17 +43,17 @@ const props = defineProps<{
   dirtyIds?: string[];
 }>();
 const emit = defineEmits<{
-  select: [string];
-  add: [boolean];
-  addExample: [];
-  delete: [string];
+  select: (arg0: string) => void;
+  add: (arg0: boolean) => void;
+  addExample: () => void;
+  delete: (arg0: string) => void;
   /** 右键复制任务。组件只把任务 ID 交出去，由页面插入新草稿。 */
-  copy: [string];
+  copy: (arg0: string) => void;
   /** 右键把该任务退回上次保存的内容，不影响其它任务。 */
-  restore: [string];
+  restore: (arg0: string) => void;
   /** 右键启用或停用任务，只改草稿里的 enabled，不立刻请求后端。 */
-  enabled: [id: string, enabled: boolean];
-  position: [string];
+  enabled: (id: string, enabled: boolean) => void;
+  position: (arg0: string) => void;
 }>();
 
 const workspaceKey = computed(() => String(props.workspaceId));

@@ -38,9 +38,9 @@ const props = defineProps<{
 }>();
 
 const emit = defineEmits<{
-  'update:modelValue': [boolean];
+  'update:modelValue': (arg0: boolean) => void;
   /** 创建成功，payload 为新实例名 */
-  created: [instanceName: string];
+  created: (instanceName: string) => void;
 }>();
 
 const visible = computed({

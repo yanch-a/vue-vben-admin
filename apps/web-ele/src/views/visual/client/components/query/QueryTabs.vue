@@ -30,13 +30,13 @@ withDefaults(
 );
 
 const emit = defineEmits<{
-  change: [id: string];
-  add: [];
-  close: [id: string];
-  'close-all': [];
-  'close-others': [keepId: string];
+  change: (id: string) => void;
+  add: () => void;
+  close: (id: string) => void;
+  'close-all': () => void;
+  'close-others': (keepId: string) => void;
   /** fromId 拖到 toId 之前；toId 空表示拖到末尾（+ 号前） */
-  reorder: [fromId: string, toId: string | null];
+  reorder: (fromId: string, toId: string | null) => void;
 }>();
 
 const ctxMenu = reactive({

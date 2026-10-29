@@ -65,33 +65,25 @@ const props = defineProps<{
 }>();
 
 const emit = defineEmits<{
-  openTable: [
-    payload: { instanceName: string; tableName: string; schemaName?: string },
-  ];
-  insertName: [name: string];
+  openTable: (payload: { instanceName: string; tableName: string; schemaName?: string }) => void;
+  insertName: (name: string) => void;
   /** 单击库节点：同步编辑器当前库 */
-  selectInstance: [instanceName: string];
+  selectInstance: (instanceName: string) => void;
   /** 单击 schema/owner：同步编辑器当前命名空间。 */
-  selectSchema: [payload: { instanceName: string; schemaName: string }];
+  selectSchema: (payload: { instanceName: string; schemaName: string }) => void;
   /** 单击表节点：供 F11 打开表 */
-  selectTable: [
-    payload: { instanceName: string; tableName: string; schemaName?: string },
-  ];
-  openSavedQuery: [
-    payload: {
+  selectTable: (payload: { instanceName: string; tableName: string; schemaName?: string }) => void;
+  openSavedQuery: (payload: {
       id: number | string;
       queryName: string;
       sqlText: string;
       instanceName: string;
       schemaName?: string;
-    },
-  ];
-  contextAction: [
-    payload: {
+    }) => void;
+  contextAction: (payload: {
       action: TreeCtxAction;
       node: any;
-    },
-  ];
+    }) => void;
 }>();
 
 const treeRef = ref();

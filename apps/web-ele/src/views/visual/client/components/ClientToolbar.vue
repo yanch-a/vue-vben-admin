@@ -16,37 +16,37 @@ defineProps<{
 }>();
 
 const emit = defineEmits<{
-  create: [];
-  open: [];
-  refresh: [];
-  group: [];
+  create: () => void;
+  open: () => void;
+  refresh: () => void;
+  group: () => void;
   /** 打开查询视图（直接写 SQL 模式） */
-  queryView: [];
-  relation: [];
+  queryView: () => void;
+  relation: () => void;
   /** 已保存查询文件管理 */
-  savedQueries: [];
+  savedQueries: () => void;
   /** 跳转数据大屏工作台（路由名 Dashboard） */
-  chartLibrary: [];
+  chartLibrary: () => void;
   /** 跳转变更窗口配置（路由名 DbChangeWindow） */
-  changeWindow: [];
+  changeWindow: () => void;
   /** 打开右上角任务进度 */
-  progress: [];
+  progress: () => void;
   /** 系统功能：导出 / 导入配置 */
-  system: [mode: 'export' | 'import'];
+  system: (mode: 'export' | 'import') => void;
   /** 偏好设置（Tabs 位置等） */
-  preferences: [];
+  preferences: () => void;
   /** 产品许可证 */
-  license: [];
+  license: () => void;
   /** 打开 AI 助手浮窗 */
-  ai: [];
+  ai: () => void;
   /** 打开 Schema 结构文档 */
-  schemaDoc: [];
+  schemaDoc: () => void;
   /** 打开查询历史 */
-  history: [];
+  history: () => void;
   /** 管理服务端官方数据库客户端 */
-  tools: [];
+  tools: () => void;
   /** 将当前 SQL 提交为工单 */
-  submitWorkOrder: [];
+  submitWorkOrder: () => void;
 }>();
 
 function onSystemCommand(cmd: string | number) {

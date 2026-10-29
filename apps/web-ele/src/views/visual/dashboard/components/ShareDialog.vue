@@ -49,7 +49,7 @@ const props = defineProps<{
   screenId?: number | string;
   screenName?: string;
 }>();
-const emit = defineEmits<{ 'update:modelValue': [value: boolean] }>();
+const emit = defineEmits<{ 'update:modelValue': (value: boolean) => void;}>();
 
 const router = useRouter();
 const visible = computed({

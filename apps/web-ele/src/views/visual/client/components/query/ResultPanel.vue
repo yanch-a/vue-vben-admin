@@ -110,24 +110,24 @@ const props = defineProps<{
 }>();
 
 const emit = defineEmits<{
-  'update:visible': [boolean];
-  'update:activeTab': ['messages' | 'plan' | 'result'];
+  'update:visible': (arg0: boolean) => void;
+  'update:activeTab': (arg0: 'messages' | 'plan' | 'result') => void;
   /** 执行计划页签里「重新分析」 */
-  'explain-rerun': [{ analyze: boolean }];
+  'explain-rerun': (arg0: { analyze: boolean }) => void;
   /** 执行计划页签里「让 AI 优化」 */
-  'ask-ai-optimize': [];
+  'ask-ai-optimize': () => void;
   /** 执行 DML 后由父级刷新结果 */
-  'run-dml': [sql: string];
+  'run-dml': (sql: string) => void;
   /** 批量保存成功后，按原 SELECT 重查 */
-  'refresh-result': [];
+  'refresh-result': () => void;
   /** 请求后台重查并导出 xlsx */
-  'export-excel': [];
+  'export-excel': () => void;
   /** 请求后台重查并按方言导出 INSERT .sql */
-  'export-sql': [];
+  'export-sql': () => void;
   /** Messages 报错：把 SQL + 错误交给 AI 修复 */
-  askAiFix: [{ sql: string; error: string }];
+  askAiFix: (arg0: { sql: string; error: string }) => void;
   /** 多条结果里点某一条，父级把它设为导出 / 编辑目标 */
-  'focus-result-set': [index: number];
+  'focus-result-set': (index: number) => void;
 }>();
 
 const canExport = computed(

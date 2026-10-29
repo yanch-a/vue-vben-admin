@@ -17,8 +17,8 @@ import { resolveDashboardMediaUrl } from '../mediaUrlPolicy';
 
 defineOptions({ name: 'DashboardChartRenderer' });
 const emit = defineEmits<{
-  error: [message: string];
-  rendering: [value: boolean];
+  error: (message: string) => void;
+  rendering: (value: boolean) => void;
 }>();
 
 const props = defineProps<{

@@ -34,7 +34,7 @@ const props = defineProps<{
   connections: EtlConnectionOption[];
 }>();
 const emit = defineEmits<{
-  apply: [document: EtlWorkspaceDocument, baseJson: string];
+  apply: (document: EtlWorkspaceDocument, baseJson: string) => void;
 }>();
 interface FileRow {
   id: string;

@@ -33,9 +33,9 @@ const props = defineProps<{
 }>();
 
 const emit = defineEmits<{
-  'update:modelValue': [boolean];
+  'update:modelValue': (arg0: boolean) => void;
   /** 已压成一行的文本。父级按常规结果更新写入，不能直接存格式化文本。 */
-  save: [text: string];
+  save: (text: string) => void;
 }>();
 
 const { isDark } = usePreferences();

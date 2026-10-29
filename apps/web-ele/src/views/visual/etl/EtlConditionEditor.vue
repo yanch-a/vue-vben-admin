@@ -3,7 +3,7 @@
 import { ref, watch } from 'vue';
 import { translateUiText as tr } from '#/locales/ui-text';
 const props = defineProps<{ modelValue: any; columns: string[] }>();
-const emit = defineEmits<{ 'update:modelValue': [value: any] }>();
+const emit = defineEmits<{ 'update:modelValue': (value: any) => void;}>();
 type Rule = { field: string; op: string; kind: string; value: string };
 const rules=ref<Rule[]>([]), mode=ref('and'), editable=ref(false);
 const castKinds=['decimal','date','time','timestamp','offsetTimestamp'];

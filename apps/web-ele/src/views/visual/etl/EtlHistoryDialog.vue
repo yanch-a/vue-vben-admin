@@ -11,7 +11,7 @@ import { listEtlHistory } from '#/api/visual/etl';
 import { translateUiText } from '#/locales/ui-text';
 
 defineProps<{ busy?: boolean }>();
-const emit = defineEmits<{ restore: [item: EtlHistoryVersion] }>();
+const emit = defineEmits<{ restore: (item: EtlHistoryVersion) => void;}>();
 
 const visible = ref(false);
 const loading = ref(false);

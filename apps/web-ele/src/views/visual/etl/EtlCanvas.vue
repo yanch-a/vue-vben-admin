@@ -58,20 +58,19 @@ const props = defineProps<{
 }>();
 
 const emit = defineEmits<{
-  add: [type: string];
-  addTask: [];
-  redo: [];
-  undo: [];
-  deleteTask: [pipelineId: string];
-  edit: [pipelineId: string, nodeId: string];
-  enableTask: [pipelineId: string, enabled: boolean];
-  remove: [pipelineId: string, nodeId: string];
-  rename: [pipelineId: string, nodeId: string];
-  renameTask: [pipelineId: string];
-  move: [pipelineId: string, nodeId: string, delta: -1 | 1];
-  run: [pipelineId: string];
-  select: [pipelineId: string, nodeId?: string];
->();
+  add: (type: string) => void;
+  addTask: () => void;
+  redo: () => void;
+  undo: () => void;
+  deleteTask: (pipelineId: string) => void;
+  edit: (pipelineId: string, nodeId: string) => void;
+  enableTask: (pipelineId: string, enabled: boolean) => void;
+  remove: (pipelineId: string, nodeId: string) => void;
+  rename: (pipelineId: string, nodeId: string) => void;
+  renameTask: (pipelineId: string) => void;
+  move: (pipelineId: string, nodeId: string, delta: -1 | 1) => void;
+  run: (pipelineId: string) => void;
+  select: (pipelineId: string, nodeId?: string) => void;}>();
 
 const NODE_SHAPE = 'lemon-etl-step';
 const shortcut = /mac/i.test(navigator.platform || navigator.userAgent) ? '⌘' : 'Ctrl';

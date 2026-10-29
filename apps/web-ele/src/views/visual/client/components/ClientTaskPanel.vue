@@ -23,11 +23,11 @@ const props = defineProps<{
 }>();
 
 const emit = defineEmits<{
-  cancel: [task: ClientTask];
-  download: [task: ClientTask];
-  refresh: [];
-  'update:modelValue': [boolean];
-  'update:tab': ['done' | 'running'];
+  cancel: (task: ClientTask) => void;
+  download: (task: ClientTask) => void;
+  refresh: () => void;
+  'update:modelValue': (arg0: boolean) => void;
+  'update:tab': (arg0: 'done' | 'running') => void;
 }>();
 
 const visible = computed({

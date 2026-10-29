@@ -28,7 +28,7 @@ const props = withDefaults(
   }>(),
   { previewHeight: 260, previewWidth: 420 },
 );
-const emit = defineEmits<{ 'update:spec': [spec: ChartSpec] }>();
+const emit = defineEmits<{ 'update:spec': (spec: ChartSpec) => void;}>();
 const appearance = computed(() => props.spec.appearance || {});
 const supportsOption = computed(
   () => !['kpi', 'table', 'text'].includes(props.spec.chartType),

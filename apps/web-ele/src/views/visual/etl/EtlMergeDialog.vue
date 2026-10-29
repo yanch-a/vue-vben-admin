@@ -19,7 +19,7 @@ const props = defineProps<{
   document: EtlWorkspaceDocument;
 }>();
 const emit = defineEmits<{
-  apply: [document: EtlWorkspaceDocument, summary: string];
+  apply: (document: EtlWorkspaceDocument, summary: string) => void;
 }>();
 
 const visible = ref(false);

@@ -40,8 +40,8 @@ const props = defineProps<{
 }>();
 
 const emit = defineEmits<{
-  started: [task: DbCopyTaskVO];
-  'update:modelValue': [boolean];
+  started: (task: DbCopyTaskVO) => void;
+  'update:modelValue': (arg0: boolean) => void;
 }>();
 
 const visible = computed({

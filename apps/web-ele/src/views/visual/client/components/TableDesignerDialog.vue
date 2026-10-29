@@ -60,8 +60,8 @@ const props = withDefaults(
 );
 
 const emit = defineEmits<{
-  save: [payload: TableDesignSqlResult];
-  'update:modelValue': [boolean];
+  save: (payload: TableDesignSqlResult) => void;
+  'update:modelValue': (arg0: boolean) => void;
 }>();
 
 interface TableInfoInput {

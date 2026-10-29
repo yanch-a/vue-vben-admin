@@ -23,8 +23,8 @@ const props = defineProps<{
 }>();
 
 const emit = defineEmits<{
-  'update:modelValue': [boolean];
-  started: [task: SqlScriptTaskVO];
+  'update:modelValue': (arg0: boolean) => void;
+  started: (task: SqlScriptTaskVO) => void;
 }>();
 
 const visible = computed({

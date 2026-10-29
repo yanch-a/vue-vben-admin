@@ -31,11 +31,11 @@ const props = defineProps<{
 }>();
 
 const emit = defineEmits<{
-  'update:modelValue': [value: boolean];
-  saved: [payload: { id: string; alias: string }];
-  loaded: [payload: { id: string; alias: string; snapshot: unknown }];
+  'update:modelValue': (value: boolean) => void;
+  saved: (payload: { id: string; alias: string }) => void;
+  loaded: (payload: { id: string; alias: string; snapshot: unknown }) => void;
   /** 删掉的是当前本地关联的那一条，前台应忘掉这个 id */
-  unlinked: [id: string];
+  unlinked: (id: string) => void;
 }>();
 
 const visible = computed({

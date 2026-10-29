@@ -24,30 +24,30 @@ const props = defineProps<{
 }>();
 
 const emit = defineEmits<{
-  change: [sessionId: number | string];
-  close: [sessionId: number | string];
+  change: (sessionId: number | string) => void;
+  close: (sessionId: number | string) => void;
   /** 关闭当前已打开的全部连接 */
-  'close-all': [];
+  'close-all': () => void;
   /** 只保留右键的这个连接，关闭其余已打开连接 */
-  'close-others': [sessionId: number | string];
+  'close-others': (sessionId: number | string) => void;
   /** 打开已有数据库连接 */
-  open: [];
+  open: () => void;
   /** 刷新该连接对应的左侧浏览对象 */
-  refresh: [sessionId: number | string];
+  refresh: (sessionId: number | string) => void;
   /** 导出全部本地临时连接与查询记录 */
-  exportSession: [];
+  exportSession: () => void;
   /** 把当前工作现场保存到服务器 */
-  saveWorkspace: [];
+  saveWorkspace: () => void;
   /** 从服务器选择一份本人的工作现场加载 */
-  loadWorkspace: [];
+  loadWorkspace: () => void;
   /** 导入全部本地临时连接与查询记录文件内容 */
-  importSession: [file: File];
+  importSession: (file: File) => void;
   /** 导出当前右键连接的查询记录 */
-  exportConnectionQueries: [sessionId: number | string];
+  exportConnectionQueries: (sessionId: number | string) => void;
   /** 查看该连接在前端缓存的最近已执行 SQL */
-  executedSql: [sessionId: number | string];
+  executedSql: (sessionId: number | string) => void;
   /** 导入查询记录到当前右键连接 */
-  importConnectionQueries: [sessionId: number | string, file: File];
+  importConnectionQueries: (sessionId: number | string, file: File) => void;
 }>();
 
 const { preferences, setConnectionColor } = useClientPreferences();
