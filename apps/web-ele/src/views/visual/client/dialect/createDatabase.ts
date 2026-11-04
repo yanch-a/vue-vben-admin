@@ -97,13 +97,37 @@ export const PG_ENCODINGS = [
 
 export const PG_TEMPLATES = ['template0', 'template1'] as const;
 
+/** PostgreSQL 常用 Locale（建库 LC_COLLATE / LC_CTYPE；表级无 charset） */
+export const PG_LOCALES = [
+  'C',
+  'POSIX',
+  'en_US.UTF-8',
+  'en_US.utf8',
+  'zh_CN.UTF-8',
+  'zh_CN.utf8',
+  'zh_TW.UTF-8',
+  'ja_JP.UTF-8',
+  'ko_KR.UTF-8',
+  'de_DE.UTF-8',
+  'fr_FR.UTF-8',
+] as const;
+
 export const SQLSERVER_COLLATIONS = [
   'Chinese_PRC_CI_AS',
   'Chinese_PRC_CS_AS',
+  'Chinese_PRC_CI_AI',
+  'Chinese_Taiwan_Stroke_CI_AS',
   'SQL_Latin1_General_CP1_CI_AS',
+  'SQL_Latin1_General_CP1_CS_AS',
   'Latin1_General_CI_AS',
+  'Latin1_General_CS_AS',
   'Japanese_CI_AS',
+  'Korean_Wansung_CI_AS',
+  'Turkish_CI_AS',
 ] as const;
+
+/** SQL Server 表常用文件组（可 allow-create 补服务器自定义名） */
+export const SQLSERVER_FILEGROUPS = ['PRIMARY'] as const;
 
 export function defaultCreateDatabaseForm(
   family: SqlDialectFamily,

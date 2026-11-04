@@ -5,6 +5,7 @@ import type {
   TableDesignIndex,
   TableDesignModel,
   TableDesignSqlResult,
+  TableDesignerOption,
 } from '../dialect/tableDesignerDialect';
 
 /**
@@ -26,6 +27,7 @@ import {
   columnTypeNotice,
   normalizeColumnTypeSelection,
   resolveColumnParameterMode,
+  resolveTableDesignerOptionValues,
   resolveTableDesignerProfile,
   splitColumnType,
   supportsIndexSort,
@@ -113,6 +115,29 @@ const validationErrors = ref<string[]>([]);
 const errorSummary = ref<HTMLElement>();
 const previousColumnNames = new Map<string, string>();
 let sequence = 0;
+
+/** 表信息下拉值：按当前方言族解析，避免跨族复用选项。 */
+function resolveOptionValues(option: TableDesignerOption): string[] {
+  return resolveTableDesignerOptionValues(profile.value.family, option, form.options);
+}
+
+watch(
+  () => form.options.charset,
+  (charset) => {
+    // 仅 MySQL 族表级有 charset → collation 联动；其它族不展示这两项
+    if (profile.value.family !== 'MYSQL_LIKE') return;
+    const valid = resolveTableDesignerOptionValues(
+      'MYSQL_LIKE',
+      { key: 'collation', label: '排序规则', type: 'select' },
+      { charset: String(charset || '') },
+    );
+    const current = String(form.options.collation || '').trim();
+    if (!valid.length) return;
+    if (!current || !valid.includes(current)) {
+      form.options.collation = valid[0];
+    }
+  },
+);
 
 function uid(prefix: string): string {
   sequence += 1;
@@ -267,6 +292,7 @@ function resetForm(): void {
     if (profile.value.family === 'MYSQL_LIKE') {
       next.options.engine = 'InnoDB';
       next.options.charset = 'utf8mb4';
+      next.options.collation = 'utf8mb4_general_ci';
     }
     if (profile.value.family === 'MONGODB_LIKE') {
       next.options.validationLevel = 'strict';
@@ -642,7 +668,7 @@ function save(): void {
             <ElFormItem v-for="option in profile.options" :key="option.key" :label="$tr(option.label)">
               <ElSwitch v-if="option.type === 'boolean'" v-model="form.options[option.key]" />
               <ElSelect v-else-if="option.type === 'select'" v-model="form.options[option.key]" filterable allow-create clearable :placeholder="option.placeholder">
-                <ElOption v-for="value in option.values" :key="value" :label="value" :value="value" />
+                <ElOption v-for="value in resolveOptionValues(option)" :key="value" :label="value" :value="value" />
               </ElSelect>
               <ElInput v-else v-model="form.options[option.key]" clearable :placeholder="option.placeholder" />
             </ElFormItem>

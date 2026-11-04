@@ -108,6 +108,27 @@ export interface PersistedQueryTab {
   ephemeral?: boolean;
 }
 
+/**
+ * 编辑器仍要保住的查询页签。
+ * 范围是当前所有已打开连接，不是只留正在看的那一个：
+ * 切到连接 B 再回到 A 时，A 的 Monaco Model、滚动位置和撤销栈都还在。
+ * 已经关掉的连接不计入，对应 Model 可以被释放。
+ */
+export function collectAliveEditorTabIds(
+  openSessionIds: Array<number | string>,
+  tabsByConnection: Record<string, Array<{ id: string } | null | undefined>>,
+): string[] {
+  const ids: string[] = [];
+  for (const sessionId of openSessionIds) {
+    const list = tabsByConnection[String(sessionId)];
+    if (!list) continue;
+    for (const tab of list) {
+      if (tab?.id) ids.push(tab.id);
+    }
+  }
+  return ids;
+}
+
 /** 未保存的新查询有内容，或已保存查询相对保存基线有改动。一次性页签永不视为脏。 */
 export function isQueryTabDirty(tab: QueryTab | null | undefined): boolean {
   if (!tab) return false;

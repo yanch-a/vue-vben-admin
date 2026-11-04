@@ -2725,5 +2725,8 @@
   "发布预检进行中，请稍后再运行": "Publish preflight is running; try again later",
   "当前有任务正在运行，请结束后再发布": "A task is still running; publish after it finishes",
   "当前有发布预检进行中，请结束后再发布": "Publish preflight is still running; publish after it finishes",
-  "只有工作区所有者或任务发起人可以取消": "Only the workspace owner or the run starter can cancel"
+  "只有工作区所有者或任务发起人可以取消": "Only the workspace owner or the run starter can cancel",
+  "停止全部任务运行": "Stop all task runs",
+  "停止当前任务运行": "Stop the current task run",
+  "已请求停止，后续任务将不会启动": "Stop requested; remaining tasks will not start"
 }

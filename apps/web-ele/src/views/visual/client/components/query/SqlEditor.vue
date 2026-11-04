@@ -9,7 +9,7 @@
  * - 智能补全：写表名用本地表清单；写字段名按需拉列并缓存（多表联查合并各表字段）；Tab 接受建议
  * - 函数补全：按当前数据库方言列出内置函数，选中自动补括号；括号内显示参数提示，悬停显示说明
  * - 拖入 .sql / .txt：解析文本写入编辑器，并通知父级保存到当前库
- * - 按 tabId 复用 ITextModel + 恢复 viewState，切换页签不丢滚动位置与撤销栈
+ * - 按 tabId 复用 ITextModel + 恢复 viewState，切换页签或连接不丢滚动位置与撤销栈
  * @author yanch
  */
 import * as monaco from 'monaco-editor';
@@ -72,7 +72,10 @@ const props = defineProps<{
   modelValue: string;
   /** 当前查询页签 ID：用于绑定独立 Monaco Model（保留撤销/滚动） */
   tabId?: string;
-  /** 仍存活的页签 ID；不在列表内的 Model 会被释放 */
+  /**
+   * 仍存活的页签 ID；不在列表内的 Model 会被释放。
+   * 必须带上所有已打开连接的页签。只传当前连接时，切走再回来会新建 Model，滚动回到顶部，撤销栈也没了。
+   */
   aliveTabIds?: string[];
   dbConfigId?: number | string;
   /** 数据库类型码：用于方言触发字符等（不拆多套编辑器组件） */
@@ -223,6 +226,8 @@ function shouldHandleEditorShortcut(): boolean {
 let currentTabId: string | null = null;
 /** 切换 Model 时忽略 modelValue 回写，避免误 setValue 清掉撤销栈 */
 let applyingModelSwitch = false;
+/** 后一次恢复作废前一次，避免快速切换连接时旧的滚动位置盖住新页签 */
+let viewStateRestoreToken = 0;
 
 
 function themeName() {
@@ -246,8 +251,25 @@ function getOrCreateTabState(tabId: string, initialValue: string): TabEditorStat
 }
 
 /**
+ * 恢复滚动和光标。
+ * 切连接会改结果区高度，Monaco 的 automaticLayout 在本帧可能把滚动夹回顶部。
+ * 等这一帧布局完成后再恢复一次，位置才稳定。
+ */
+function restoreEditorViewState(state: TabEditorState) {
+  if (!editor || !state.viewState) return;
+  const viewState = state.viewState;
+  const token = ++viewStateRestoreToken;
+  editor.restoreViewState(viewState);
+  requestAnimationFrame(() => {
+    if (token !== viewStateRestoreToken || !editor) return;
+    if (editor.getModel() !== state.model) return;
+    editor.restoreViewState(viewState);
+  });
+}
+
+/**
  * 切到指定页签：保存上一页签视图状态，挂上对应 Model 并恢复滚动/光标。
- * Model 复用可保留该页签的撤销栈。
+ * Model 复用可保留该页签的撤销栈。连接切换和页签切换走同一条路径。
  */
 function switchToTab(tabId: string, sql: string) {
   if (!editor) return;
@@ -266,9 +288,7 @@ function switchToTab(tabId: string, sql: string) {
       state.model.setValue(sql || '');
     }
     editor.setModel(state.model);
-    if (state.viewState) {
-      editor.restoreViewState(state.viewState);
-    }
+    restoreEditorViewState(state);
     currentTabId = key;
   } finally {
     applyingModelSwitch = false;

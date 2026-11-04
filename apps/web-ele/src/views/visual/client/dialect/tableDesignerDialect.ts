@@ -8,6 +8,11 @@
  */
 import type { SqlDialectFamily } from './dbTypes';
 
+import {
+  MYSQL_CHARSETS,
+  MYSQL_COLLATIONS,
+  SQLSERVER_FILEGROUPS,
+} from './createDatabase';
 import { DB_TYPE_REGISTRY, normalizeDbTypeCode, resolveDialectFamily } from './dbTypes';
 import { resolveSqlDialect } from './sqlDialect';
 
@@ -155,14 +160,52 @@ const DM_TYPES = [
   'TIMESTAMP WITH LOCAL TIME ZONE', 'INTERVAL YEAR TO MONTH', 'INTERVAL DAY TO SECOND',
 ];
 
+
+/** MySQL 表字符集对应的常用排序规则；未知字符集返回空数组。 */
+export function mysqlCollationsForCharset(charset?: null | string): string[] {
+  const key = String(charset || '').trim();
+  if (!key) return [];
+  return MYSQL_COLLATIONS[key] || [];
+}
+
+/**
+ * 按方言族解析表信息下拉候选项。
+ * <p>仅 MYSQL_LIKE 有字符集/排序规则联动；其它族只返回各自 profile 声明的 values，
+ * 避免把 MySQL collation 列表套到 SQL Server / PostgreSQL。</p>
+ */
+export function resolveTableDesignerOptionValues(
+  family: SqlDialectFamily,
+  option: TableDesignerOption,
+  currentOptions: Record<string, boolean | number | string> = {},
+): string[] {
+  const base = option.values ? [...option.values] : [];
+  if (family === 'MYSQL_LIKE' && option.key === 'collation') {
+    const list = mysqlCollationsForCharset(String(currentOptions.charset || 'utf8mb4'));
+    const current = String(currentOptions.collation || '').trim();
+    if (current && !list.includes(current)) return [current, ...list];
+    return list.length ? list : base;
+  }
+  const current = String(currentOptions[option.key] ?? '').trim();
+  if (current && base.length && !base.includes(current) && option.type === 'select') {
+    return [current, ...base];
+  }
+  return base;
+}
+
 /** 返回当前产品的字段、索引及表选项配置。 */
 export function resolveTableDesignerProfile(dbType?: null | string): TableDesignerProfile {
   const productCode = normalizeDbTypeCode(dbType);
   const family = resolveDialectFamily(dbType);
   const mysqlOptions: TableDesignerOption[] = [
     { key: 'engine', label: '存储引擎', type: 'select', values: ['InnoDB', 'MyISAM'], placeholder: 'InnoDB' },
-    { key: 'charset', label: '字符集', type: 'select', values: ['utf8mb4', 'utf8', 'latin1'], placeholder: 'utf8mb4' },
-    { key: 'collation', label: '排序规则', placeholder: 'utf8mb4_general_ci' },
+    { key: 'charset', label: '字符集', type: 'select', values: [...MYSQL_CHARSETS], placeholder: 'utf8mb4' },
+    {
+      key: 'collation',
+      label: '排序规则',
+      type: 'select',
+      values: [...(MYSQL_COLLATIONS.utf8mb4 || [])],
+      placeholder: 'utf8mb4_general_ci',
+    },
   ];
   const profile: TableDesignerProfile = {
     family,
@@ -186,14 +229,16 @@ export function resolveTableDesignerProfile(dbType?: null | string): TableDesign
   }
   if (family === 'POSTGRES_LIKE') {
     profile.indexTypes = ['BTREE', 'HASH', 'GIN', 'GIST', 'SPGIST', 'BRIN'];
-    profile.options = [{ key: 'tablespace', label: '表空间', placeholder: '默认表空间' }];
+    // Encoding / LC_COLLATE 属于建库，不在表级展示 charset/collation
+    profile.options = [{ key: 'tablespace', label: '表空间', placeholder: 'pg_default' }];
   }
   if (family === 'ORACLE_LIKE') {
     profile.indexTypes = ['NORMAL', 'BITMAP'];
     profile.defaultIndexType = 'NORMAL';
     profile.foreignKeyDeleteActions = ['NO ACTION', 'CASCADE', 'SET NULL'];
     profile.foreignKeyUpdateActions = ['NO ACTION'];
-    profile.options = [{ key: 'tablespace', label: '表空间', placeholder: '默认表空间' }];
+    // NLS 字符集在库/会话级；表级只改表空间
+    profile.options = [{ key: 'tablespace', label: '表空间', placeholder: 'USERS' }];
   }
   if (family === 'SQLSERVER_LIKE') {
     profile.indexTypes = [
@@ -203,7 +248,16 @@ export function resolveTableDesignerProfile(dbType?: null | string): TableDesign
     profile.defaultIndexType = 'NONCLUSTERED';
     profile.foreignKeyDeleteActions = ['NO ACTION', 'CASCADE', 'SET NULL', 'SET DEFAULT'];
     profile.foreignKeyUpdateActions = ['NO ACTION', 'CASCADE', 'SET NULL', 'SET DEFAULT'];
-    profile.options = [{ key: 'filegroup', label: '文件组', placeholder: 'PRIMARY' }];
+    // 表级无 charset/collation（排序规则在库/列级）；文件组用下拉，可 allow-create
+    profile.options = [
+      {
+        key: 'filegroup',
+        label: '文件组',
+        type: 'select',
+        values: [...SQLSERVER_FILEGROUPS],
+        placeholder: 'PRIMARY',
+      },
+    ];
   }
   if (family === 'SQLITE_LIKE') {
     profile.indexTypes = ['DEFAULT'];

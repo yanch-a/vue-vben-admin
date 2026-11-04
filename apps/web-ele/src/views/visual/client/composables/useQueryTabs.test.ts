@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
-import { isQueryTabDirty, type QueryTab } from './useQueryTabs';
+import {
+  collectAliveEditorTabIds,
+  isQueryTabDirty,
+  type QueryTab,
+} from './useQueryTabs';
 
 /**
  * 查询页签未保存状态测试。
@@ -41,5 +45,24 @@ describe('isQueryTabDirty', () => {
         tab({ savedQueryId: 1, sql: 'select 2', savedSqlBaseline: 'select 1' }),
       ),
     ).toBe(true);
+  });
+});
+
+describe('collectAliveEditorTabIds', () => {
+  it('切换连接时保留其他已打开连接的页签，已关闭连接不保留', () => {
+    const tabsByConnection = {
+      'sess-a': [{ id: 'q-a1' }, { id: 'q-a2' }],
+      'sess-b': [{ id: 'q-b1' }],
+      'sess-closed': [{ id: 'q-old' }],
+    };
+    expect(collectAliveEditorTabIds(['sess-a', 'sess-b'], tabsByConnection)).toEqual([
+      'q-a1',
+      'q-a2',
+      'q-b1',
+    ]);
+    expect(collectAliveEditorTabIds(['sess-a'], tabsByConnection)).toEqual([
+      'q-a1',
+      'q-a2',
+    ]);
   });
 });

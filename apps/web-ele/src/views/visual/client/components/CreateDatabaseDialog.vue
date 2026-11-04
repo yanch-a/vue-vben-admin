@@ -18,6 +18,7 @@ import {
   MYSQL_CHARSETS,
   MYSQL_COLLATIONS,
   PG_ENCODINGS,
+  PG_LOCALES,
   PG_TEMPLATES,
   SQLSERVER_COLLATIONS,
   type CreateDatabaseForm,
@@ -232,18 +233,38 @@ async function onSubmit() {
           <div class="tip">{{ $tr('自定义 Encoding / Locale 时请用 template0') }}</div>
         </ElFormItem>
         <ElFormItem label="LC_COLLATE">
-          <ElInput
+          <ElSelect
             v-model="form.lcCollate"
+            filterable
+            allow-create
             clearable
+            class="w-full"
             :placeholder="$tr('如 C、en_US.UTF-8、zh_CN.UTF-8')"
-          />
+          >
+            <ElOption
+              v-for="locale in PG_LOCALES"
+              :key="`collate-${locale}`"
+              :label="locale"
+              :value="locale"
+            />
+          </ElSelect>
         </ElFormItem>
         <ElFormItem label="LC_CTYPE">
-          <ElInput
+          <ElSelect
             v-model="form.lcCtype"
+            filterable
+            allow-create
             clearable
+            class="w-full"
             :placeholder="$tr('如 C、en_US.UTF-8、zh_CN.UTF-8')"
-          />
+          >
+            <ElOption
+              v-for="locale in PG_LOCALES"
+              :key="`ctype-${locale}`"
+              :label="locale"
+              :value="locale"
+            />
+          </ElSelect>
         </ElFormItem>
         <ElFormItem label="Tablespace">
           <ElInput

@@ -505,6 +505,28 @@ const liveBatchMode = ref(false);
 const liveBatchItems = ref<EtlBatchItem[]>([]);
 const liveBatchSummary = computed(() => summarizeBatch(liveBatchItems.value));
 let batchCancelRequested = false;
+/** 工具栏/画布「停止」请求中，避免连点重复打 cancel。 */
+const cancelBusy = ref(false);
+
+/** 顶部「运行」全部任务进行中：显示停止。 */
+const showStopAllRun = computed(() => {
+  if (!liveBatchMode.value) return false;
+  if (running.value) return true;
+  if (isActiveEtlRunStatus(liveRunSnapshot.value?.status)) return true;
+  return liveBatchItems.value.some((item) =>
+    ['PENDING', 'RUNNING'].includes(String(item.status || '')),
+  );
+});
+/** 下方/画布单任务运行进行中：显示停止（running 提交后即清，还需看 live 状态）。 */
+const showStopTaskRun = computed(
+  () =>
+    !liveBatchMode.value &&
+    (running.value || isActiveEtlRunStatus(liveRunSnapshot.value?.status)),
+);
+/** 发起方 running 中即可停；旁观者仅所有者/发起人。 */
+const canClickToolbarStop = computed(
+  () => running.value || canCancelLiveRun.value,
+);
 /** 当前轮询日志所属任务，用于给日志行打任务名前缀。 */
 let liveLogTagTask: { id: string; name: string } | undefined;
 /** 只取消还没返回的预览。正式运行一旦提交就不能靠断开 HTTP 停掉。 */
@@ -3119,6 +3141,7 @@ function openLiveHistory() {
 }
 
 async function cancelLiveRun() {
+  if (cancelBusy.value) return;
   if (liveBatchMode.value) {
     if (!canCancelLiveRun.value && !running.value) {
       say('warning', '只有工作区所有者或任务发起人可以取消');
@@ -3126,8 +3149,13 @@ async function cancelLiveRun() {
     }
     batchCancelRequested = true;
   }
-  if (!liveRunSnapshot.value) return;
-  if (!canCancelLiveRun.value) {
+  if (!liveRunSnapshot.value) {
+    if (liveBatchMode.value && running.value) {
+      say('info', '已请求停止，后续任务将不会启动');
+    }
+    return;
+  }
+  if (!canCancelLiveRun.value && !running.value) {
     say('warning', '只有工作区所有者或任务发起人可以取消');
     return;
   }
@@ -3536,6 +3564,8 @@ async function refreshRunsOnce(forceList = false) {
     let liveActive =
       !!liveRunId.value &&
       isActiveEtlRunStatus(liveRunSnapshot.value?.status);
+    // 本轮开始时仍在跑：后面 listRuns 若已看到终态，也要再补拉一次日志。
+    const wasLiveActive = liveActive;
     const discovery = nextEtlLiveDiscoverTick({
       forceList,
       liveActive,
@@ -3568,8 +3598,8 @@ async function refreshRunsOnce(forceList = false) {
     if (runsVisible.value && selectedRun.value) await refreshLogs();
 
     // 发起方 wait-loop 已在 refreshLiveLogs；旁观者/单任务轮询才在这里拉。
-    // 仅活跃运行拉日志，结束后不再每 1.5s 重拉终态日志。
-    if (liveRunId.value && !ownerWaitLoop && liveActive) {
+    // 活跃中持续拉；若本轮刚从活跃变终态也补拉一次，避免标题已成功但控制台停在「待提交」。
+    if (liveRunId.value && !ownerWaitLoop && (liveActive || wasLiveActive)) {
       await refreshLiveLogs();
       if (!stillCurrent()) {
         scheduleLivePoll(workspaceId);
@@ -3594,7 +3624,7 @@ async function refreshRunsOnce(forceList = false) {
 }
 
 async function cancelRun() {
-  if (!selectedRun.value) return;
+  if (!selectedRun.value || cancelBusy.value) return;
   if (
     !canCancelEtlRun({
       run: selectedRun.value,
@@ -3605,11 +3635,14 @@ async function cancelRun() {
     say('warning', '只有工作区所有者或任务发起人可以取消');
     return;
   }
+  cancelBusy.value = true;
   try {
     await cancelEtlRun(selectedRun.value.id);
     await refreshRuns();
   } catch (error) {
     say('error', errorMessage(error));
+  } finally {
+    cancelBusy.value = false;
   }
 }
 function statusLabel(status: string) {
@@ -4327,11 +4360,21 @@ onBeforeUnmount(() => {
           >
           <el-button
             type="primary"
-            :disabled="!activeWorkspace || editorMode === 'json'"
-            :loading="running"
+            :disabled="!activeWorkspace || editorMode === 'json' || showStopAllRun"
+            :loading="running && !showStopAllRun"
             :title="$tr('按顺序运行全部启用任务')"
             @click="runAllPipelines"
             >{{ $tr('运行') }}</el-button
+          >
+          <el-button
+            v-if="showStopAllRun && canClickToolbarStop"
+            type="danger"
+            :icon="VideoPause"
+            :loading="cancelBusy"
+            :disabled="cancelBusy"
+            :title="$tr('停止全部任务运行')"
+            @click="cancelLiveRun"
+            >{{ $tr('停止') }}</el-button
           >
           <el-button-group class="save-split etl-ai-split">
             <el-button
@@ -4619,10 +4662,20 @@ onBeforeUnmount(() => {
                   link
                   type="primary"
                   :icon="VideoPlay"
-                  :loading="running"
-                  :disabled="editorMode === 'json'"
+                  :loading="running && !showStopTaskRun"
+                  :disabled="editorMode === 'json' || showStopTaskRun"
                   @click="runPipeline"
                   >{{ $tr('运行') }}</el-button
+                ><el-button
+                  v-if="showStopTaskRun && canClickToolbarStop"
+                  link
+                  type="danger"
+                  :icon="VideoPause"
+                  :loading="cancelBusy"
+                  :disabled="cancelBusy"
+                  :title="$tr('停止当前任务运行')"
+                  @click="cancelLiveRun"
+                  >{{ $tr('停止') }}</el-button
                 >
               </div>
               <EtlCanvas
@@ -4631,12 +4684,15 @@ onBeforeUnmount(() => {
                 :pipelines="doc.pipelines"
                 :active-pipeline-id="activePipelineId"
                 :running="running"
+                :can-stop="showStopTaskRun && canClickToolbarStop"
+                :stop-loading="cancelBusy"
                 :can-undo="historyState.canUndo"
                 :can-redo="historyState.canRedo"
                 @undo="undoDoc"
                 @redo="redoDoc"
                 @add-task="addPipeline()"
                 @run="runCanvasTask"
+                @stop="cancelLiveRun"
                 @rename-task="renameCanvasTask"
                 @enable-task="setPipelineEnabled"
                 @delete-task="removePipeline"
@@ -5494,20 +5550,22 @@ onBeforeUnmount(() => {
                 }}</span>
                 <el-button
                   v-if="
-                    canCancelLiveRun &&
+                    (canCancelLiveRun || running) &&
                     (liveBatchMode
                       ? running ||
-                        ['PENDING', 'RUNNING'].includes(
+                        ['PENDING', 'RUNNING', 'VALIDATING'].includes(
                           liveRunSnapshot?.status || '',
                         )
-                      : ['PENDING', 'RUNNING'].includes(
+                      : ['PENDING', 'RUNNING', 'VALIDATING'].includes(
                           liveRunSnapshot?.status || '',
                         ))
                   "
                   link
                   type="danger"
+                  :loading="cancelBusy"
+                  :disabled="cancelBusy"
                   @click="cancelLiveRun"
-                  >{{ $tr('取消') }}</el-button
+                  >{{ $tr('停止') }}</el-button
                 >
                 <el-button link @click="openLiveHistory">{{
                   $tr('运行记录')
@@ -5692,12 +5750,14 @@ onBeforeUnmount(() => {
               <el-button
                 v-if="
                   canCancelSelectedRun &&
-                  ['PENDING', 'RUNNING'].includes(selectedRun.status)
+                  ['PENDING', 'RUNNING', 'VALIDATING'].includes(selectedRun.status)
                 "
                 type="danger"
                 plain
+                :loading="cancelBusy"
+                :disabled="cancelBusy"
                 @click="cancelRun"
-                >{{ $tr('取消任务') }}</el-button
+                >{{ $tr('停止') }}</el-button
               >
             </div>
             <el-table :data="runSteps" max-height="160">

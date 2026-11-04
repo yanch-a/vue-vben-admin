@@ -11,6 +11,8 @@ import { writeFileSync } from 'node:fs';
 import { DB_TYPE_REGISTRY } from './dbTypes';
 import {
   generateTableDesignSql,
+  mysqlCollationsForCharset,
+  resolveTableDesignerOptionValues,
   resolveTableDesignerProfile,
   splitColumnType,
   normalizeColumnTypeSelection,
@@ -465,3 +467,60 @@ describe('表设计器数据库适配', () => {
     expect(changedResult.sql).toContain('"required":["_id","code"]');
   });
 });
+
+  it('MySQL 表选项排序规则为下拉且按字符集过滤', () => {
+    const profile = resolveTableDesignerProfile('MY_SQL');
+    const charset = profile.options.find((item) => item.key === 'charset');
+    const collation = profile.options.find((item) => item.key === 'collation');
+    expect(charset?.type).toBe('select');
+    expect(charset?.values).toEqual(expect.arrayContaining(['utf8mb4', 'gbk', 'latin1']));
+    expect(collation?.type).toBe('select');
+    expect(collation?.values).toEqual(expect.arrayContaining(['utf8mb4_general_ci', 'utf8mb4_unicode_ci']));
+    expect(mysqlCollationsForCharset('gbk')).toEqual(['gbk_chinese_ci', 'gbk_bin']);
+    expect(mysqlCollationsForCharset('unknown_cs')).toEqual([]);
+    expect(
+      resolveTableDesignerOptionValues('MYSQL_LIKE', collation!, { charset: 'latin1' }),
+    ).toEqual(['latin1_swedish_ci', 'latin1_general_ci', 'latin1_bin']);
+  });
+
+  it('各方言族表信息选项互不混用字符集/排序规则', () => {
+    const mysql = resolveTableDesignerProfile('MY_SQL').options.map((item) => item.key);
+    const pg = resolveTableDesignerProfile('POSTGRE_SQL').options.map((item) => item.key);
+    const oracle = resolveTableDesignerProfile('ORACLE').options.map((item) => item.key);
+    const dm = resolveTableDesignerProfile('DM').options.map((item) => item.key);
+    const mssql = resolveTableDesignerProfile('SQL_SERVER').options.map((item) => item.key);
+    const sqlite = resolveTableDesignerProfile('SQLITE').options.map((item) => item.key);
+    const mongo = resolveTableDesignerProfile('MONGODB').options.map((item) => item.key);
+    const h2 = resolveTableDesignerProfile('H2').options.map((item) => item.key);
+
+    expect(mysql).toEqual(['engine', 'charset', 'collation']);
+    expect(pg).toEqual(['tablespace']);
+    expect(oracle).toEqual(['tablespace']);
+    expect(dm).toEqual(['tablespace']);
+    expect(mssql).toEqual(['filegroup']);
+    expect(sqlite).toEqual(['withoutRowid', 'strict']);
+    expect(mongo).toEqual(['validationLevel', 'validationAction']);
+    expect(h2).toEqual([]);
+
+    for (const familyOptions of [pg, oracle, dm, mssql, sqlite, mongo, h2]) {
+      expect(familyOptions).not.toContain('charset');
+      expect(familyOptions).not.toContain('collation');
+    }
+
+    const filegroup = resolveTableDesignerProfile('SQL_SERVER').options.find((item) => item.key === 'filegroup');
+    expect(filegroup?.type).toBe('select');
+    expect(filegroup?.values).toEqual(expect.arrayContaining(['PRIMARY']));
+    expect(
+      resolveTableDesignerOptionValues('SQLSERVER_LIKE', filegroup!, { filegroup: 'CUSTOM_FG' }),
+    ).toEqual(['CUSTOM_FG', 'PRIMARY']);
+
+    // 切到 SQL Server 时绝不能拿到 MySQL collation 列表
+    expect(
+      resolveTableDesignerOptionValues(
+        'SQLSERVER_LIKE',
+        { key: 'collation', label: '排序规则', type: 'select', values: ['Chinese_PRC_CI_AS'] },
+        { charset: 'utf8mb4' },
+      ),
+    ).toEqual(['Chinese_PRC_CI_AS']);
+  });
+

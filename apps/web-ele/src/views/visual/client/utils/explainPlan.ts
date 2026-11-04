@@ -7,6 +7,7 @@
  * @author yanch
  */
 import { resolveDialectFamily } from '../dialect/dbTypes';
+import { topLevelWords } from './sqlTopLevel';
 
 export type PlanAccessType =
   | 'AGGREGATE'
@@ -351,26 +352,103 @@ export function planTreeText(root: ExplainPlanNode | null | undefined, maxLines 
   return lines.join('\n');
 }
 
-/** 发给 AI 助手的优化请求：SQL + 引擎 + 告警 + 计划树（截断，避免超长） */
+/**
+ * 优化请求总长度上限。
+ * 原先整段硬切 6000 字：长 SELECT 列表占满预算后，FROM/JOIN/WHERE 和执行计划一起被切掉。
+ */
+const AI_OPTIMIZE_MAX_CHARS = 48_000;
+/** SQL 正文软上限。超过后只省略 SELECT 列表中间，外层 FROM 之后整段保留。 */
+const AI_OPTIMIZE_SQL_MAX = 32_000;
+const SQL_SELECT_OMIT = '\n-- ...[SELECT 列表过长，中间已省略；下面保留外层 FROM/JOIN/WHERE]...\n';
+const SQL_MIDDLE_OMIT = '\n-- ...[中间已省略]...\n';
+
+/**
+ * 超长时保留 SELECT 列表开头，以及最外层 FROM 到语句结尾。
+ * 性能瓶颈在 JOIN/WHERE/GROUP BY，不能从 SELECT 列表中间一刀切。
+ */
+export function clipSqlKeepFrom(sql: string, maxChars: number): string {
+  const text = sql.trim();
+  if (maxChars <= 0) return '';
+  if (text.length <= maxChars) return text;
+  const fromAt = indexOfOuterFrom(text);
+  const tail = fromAt >= 0 ? text.slice(fromAt) : '';
+  if (!tail) return clipHeadAndTail(text, maxChars);
+  if (tail.length >= maxChars) return clipHeadAndTail(tail, maxChars);
+  const headBudget = maxChars - tail.length - SQL_SELECT_OMIT.length;
+  if (headBudget < 24) return clipHeadAndTail(tail, maxChars);
+  return text.slice(0, headBudget) + SQL_SELECT_OMIT + tail;
+}
+
+/** 没有可用的外层 FROM 时，保留头尾，避免 WHERE/ORDER BY 落在被切掉的一侧。 */
+function clipHeadAndTail(text: string, maxChars: number): string {
+  if (text.length <= maxChars) return text;
+  if (maxChars <= SQL_MIDDLE_OMIT.length + 16) return text.slice(Math.max(0, text.length - maxChars));
+  const tailKeep = Math.max(16, Math.floor((maxChars - SQL_MIDDLE_OMIT.length) * 0.6));
+  const headKeep = maxChars - SQL_MIDDLE_OMIT.length - tailKeep;
+  if (headKeep < 8) return text.slice(text.length - maxChars);
+  return text.slice(0, headKeep) + SQL_MIDDLE_OMIT + text.slice(text.length - tailKeep);
+}
+
+/**
+ * 最外层 FROM 的位置。子查询、字符串和注释里的 FROM 不算。
+ * WITH ... SELECT ... FROM 取 SELECT 之后的那个 FROM。
+ */
+function indexOfOuterFrom(sql: string): number {
+  let seenQuery = false;
+  let fromAt = -1;
+  for (const word of topLevelWords(sql)) {
+    if (word.word === 'SELECT' || word.word === 'WITH') seenQuery = true;
+    if (word.word === 'FROM') {
+      fromAt = word.start;
+      if (seenQuery) return fromAt;
+    }
+  }
+  return fromAt;
+}
+
+/** 发给 AI 助手的优化请求：说明 + 数据库 + SQL + 告警 + 计划树。超长时先压缩计划树，不截断 SQL 尾部。 */
 export function buildAiOptimizePrompt(
   sql: string,
   plan: ExplainPlanResult,
-  maxChars = 6000,
+  maxChars = AI_OPTIMIZE_MAX_CHARS,
 ): string {
+  const intro =
+    '请根据下面的执行计划分析这条 SQL 的性能瓶颈，给出具体的优化建议（索引设计、SQL 改写、统计信息等），并给出优化后的 SQL 或建索引语句。';
+  const engine = `数据库：${plan.engine || plan.dbType || ''}${plan.analyzed ? '（EXPLAIN ANALYZE 实际执行统计）' : ''}`;
   const warnings = (plan.warnings ?? [])
     .slice(0, 12)
     .map((w) => `- [${w.level}] ${w.message || warningTitle(w)}`)
     .join('\n');
-  const tree = plan.structured ? planTreeText(plan.root) : (plan.rawText ?? '').slice(0, 3000);
-  const parts = [
-    '请根据下面的执行计划分析这条 SQL 的性能瓶颈，给出具体的优化建议（索引设计、SQL 改写、统计信息等），并给出优化后的 SQL 或建索引语句。',
-    `数据库：${plan.engine || plan.dbType || ''}${plan.analyzed ? '（EXPLAIN ANALYZE 实际执行统计）' : ''}`,
-    `SQL：\n${sql.trim()}`,
-    warnings ? `已识别的问题：\n${warnings}` : '',
-    `执行计划：\n${tree}`,
-  ].filter(Boolean);
-  const text = parts.join('\n\n');
-  return text.length > maxChars ? `${text.slice(0, maxChars)}\n...` : text;
+  const warningBlock = warnings ? `已识别的问题：\n${warnings}` : '';
+  const treeFull = plan.structured ? planTreeText(plan.root) : (plan.rawText ?? '');
+  const head = [intro, engine].join('\n\n');
+  if (head.length >= maxChars) return head.slice(0, maxChars);
+
+  const warningCost = warningBlock ? warningBlock.length + 2 : 0;
+  const planLabel = '执行计划：\n';
+  const sqlLabel = 'SQL：\n';
+  // 计划树可以缩短，SQL 尾部不行。先给计划预留一小段，剩下的全部给 SQL。
+  const planReserve = Math.min(treeFull.length + planLabel.length, Math.max(0, Math.floor((maxChars - head.length) * 0.2)));
+  const sqlRoom = maxChars - head.length - 2 - warningCost - (planReserve > 0 ? planReserve + 2 : 0) - sqlLabel.length;
+  const sqlText = clipSqlKeepFrom(sql, Math.min(AI_OPTIMIZE_SQL_MAX, Math.max(0, sqlRoom)));
+  const sqlBlock = sqlText ? `${sqlLabel}${sqlText}` : '';
+  const withSql = [head, sqlBlock, warningBlock].filter(Boolean).join('\n\n');
+
+  let planBlock = '';
+  const planRoom = maxChars - withSql.length - 2;
+  if (treeFull && planRoom > planLabel.length + 8) {
+    const bodyRoom = planRoom - planLabel.length;
+    const body = treeFull.length <= bodyRoom ? treeFull : `${treeFull.slice(0, Math.max(0, bodyRoom - 4))}\n...`;
+    planBlock = `${planLabel}${body}`;
+  }
+  const text = [withSql, planBlock].filter(Boolean).join('\n\n');
+  if (text.length <= maxChars) return text;
+  // 预算算紧时丢掉计划树，不能再从末尾把 FROM/WHERE 切掉
+  if (withSql.length <= maxChars) return withSql;
+  const retryRoom = maxChars - head.length - 2 - warningCost - sqlLabel.length;
+  const retried = clipSqlKeepFrom(sql, Math.max(0, retryRoom));
+  const retriedText = [head, retried ? `${sqlLabel}${retried}` : '', warningBlock].filter(Boolean).join('\n\n');
+  return retriedText.length <= maxChars ? retriedText : retriedText.slice(0, maxChars);
 }
 
 /** 节点详情面板的字段列表（标签为中文，模板里 $tr） */

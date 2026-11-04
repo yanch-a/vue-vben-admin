@@ -9,6 +9,7 @@ import {
   accessTypeText,
   ancestorIds,
   buildAiOptimizePrompt,
+  clipSqlKeepFrom,
   flattenPlan,
   formatPlanMs,
   formatPlanNumber,
@@ -205,7 +206,47 @@ describe('explainPlan helpers', () => {
     expect(buildAiOptimizePrompt('SELECT 1', { ...plan, structured: false, rawText: 'RAW PLAN' })).toContain(
       'RAW PLAN',
     );
-    expect(buildAiOptimizePrompt('SELECT 1', plan, 50).length).toBeLessThanOrEqual(54);
+    expect(buildAiOptimizePrompt('SELECT 1', plan, 50).length).toBeLessThanOrEqual(50);
+  });
+
+  it('keeps the outer FROM when a long SELECT list used to be cut at 6000 chars', () => {
+    const plan: ExplainPlanResult = {
+      supported: true,
+      structured: true,
+      engine: 'MySQL 5.7.27',
+      root: tree(),
+      warnings: [{ code: 'MISSING_INDEX', level: 'HIGH', message: '宽表与业务表 JOIN 发生字符集转换' }],
+    };
+    const selectList = Array.from({ length: 400 }, (_, i) => `  t.col_${i} AS c${i} -- 字段${i}`).join(',\n');
+    const tail = 'FROM orders t\nJOIN users u ON u.id = t.user_id\nWHERE t.id = 1\nGROUP BY t.id';
+    const sql = `SELECT\n${selectList}\n${tail}`;
+    expect(sql.length).toBeGreaterThan(6000);
+    const prompt = buildAiOptimizePrompt(sql, plan);
+    expect(prompt).toContain('FROM orders t');
+    expect(prompt).toContain('JOIN users u ON u.id = t.user_id');
+    expect(prompt).toContain('GROUP BY t.id');
+    expect(prompt).toContain('[HIGH] 宽表与业务表 JOIN 发生字符集转换');
+    expect(prompt).toContain('执行计划');
+    expect(prompt.endsWith('...')).toBe(false);
+  });
+
+  it('omits only the middle of the SELECT list when SQL itself exceeds the budget', () => {
+    const plan: ExplainPlanResult = {
+      supported: true,
+      structured: true,
+      engine: 'MySQL 5.7.27',
+      root: tree(),
+    };
+    const sql = `SELECT ${'a.very_long_column_name,'.repeat(80)} z\nFROM real_table t\nWHERE t.id = 1 AND 'FROM fake' = 'x'`;
+    const clipped = clipSqlKeepFrom(sql, 500);
+    expect(clipped.length).toBeLessThanOrEqual(500);
+    expect(clipped).toContain('FROM real_table t');
+    expect(clipped).toContain("AND 'FROM fake' = 'x'");
+    expect(clipped.indexOf('FROM real_table')).toBeLessThan(clipped.indexOf('FROM fake'));
+    const prompt = buildAiOptimizePrompt(sql, plan, 900);
+    expect(prompt.length).toBeLessThanOrEqual(900);
+    expect(prompt).toContain('FROM real_table t');
+    expect(prompt).toContain('WHERE t.id = 1');
   });
 
   it('builds node detail fields without empty values', () => {

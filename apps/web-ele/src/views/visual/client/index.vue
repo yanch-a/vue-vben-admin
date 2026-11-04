@@ -98,6 +98,7 @@ import {
 } from './composables/usePendingSavedQuery';
 import {
   applyQueryTabsSnapshot,
+  collectAliveEditorTabIds,
   getQueryTabsSnapshot,
   isQueryTabDirty,
   replaceConnectionTabs,
@@ -912,6 +913,17 @@ watch(
     void refreshResultPrimaryKeys();
   },
   { immediate: true },
+);
+
+/**
+ * 所有已打开连接的查询页签。
+ * 只传当前连接的话，切到别的连接会把这边的编辑器 Model 释放掉，回来就滚到最上面。
+ */
+const aliveEditorTabIds = computed(() =>
+  collectAliveEditorTabIds(
+    openConnections.value.map((conn) => conn.sessionId),
+    getQueryTabsSnapshot().tabsByConnection,
+  ),
 );
 
 /** 编辑器区域高度：总高 - 工具条/Tab - 结果区（若显示） */
@@ -4052,7 +4064,7 @@ onBeforeUnmount(() => {
               ref="sqlEditorRef"
               v-model="activeTab.sql"
               :tab-id="activeTab.id"
-              :alive-tab-ids="tabs.map((t) => t.id)"
+              :alive-tab-ids="aliveEditorTabIds"
               :db-config-id="activeConnection?.id"
               :db-type="activeConnection?.dbType"
               :instance-name="activeTab.instanceName"

@@ -16,7 +16,7 @@ import type { EtlNode, EtlPipeline } from '#/api/visual/etl';
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 
 import { Graph } from '@antv/x6';
-import { Aim, ArrowDown, ArrowUp, Delete, FolderAdd, Grid, Plus, RefreshLeft, RefreshRight, Search, VideoPlay, ZoomIn, ZoomOut } from '@element-plus/icons-vue';
+import { Aim, ArrowDown, ArrowUp, Delete, FolderAdd, Grid, Plus, RefreshLeft, RefreshRight, Search, VideoPlay, VideoPause, ZoomIn, ZoomOut } from '@element-plus/icons-vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 
 import { translateUiText } from '#/locales/ui-text';
@@ -49,10 +49,12 @@ import { ETL_OPERATORS } from './etlOperators';
 const props = defineProps<{
   activePipelineId: string;
   canRedo?: boolean;
+  canStop?: boolean;
   canUndo?: boolean;
   pipelines: EtlPipeline[];
   running?: boolean;
   selectedId?: string;
+  stopLoading?: boolean;
   subtitleOf: (node: EtlNode) => string;
   titleOf: (node: EtlNode) => string;
 }>();
@@ -70,7 +72,9 @@ const emit = defineEmits<{
   renameTask: (pipelineId: string) => void;
   move: (pipelineId: string, nodeId: string, delta: -1 | 1) => void;
   run: (pipelineId: string) => void;
-  select: (pipelineId: string, nodeId?: string) => void;}>();
+  select: (pipelineId: string, nodeId?: string) => void;
+  stop: () => void;
+}>();
 
 const NODE_SHAPE = 'lemon-etl-step';
 const shortcut = /mac/i.test(navigator.platform || navigator.userAgent) ? '⌘' : 'Ctrl';
@@ -759,15 +763,27 @@ onBeforeUnmount(() => {
       <el-button size="small" :icon="Delete" :disabled="!selectedEdge && !selectedId" @click="removeSelected">
         {{ $tr(selectedEdge ? '删除连线' : '删除节点') }}
       </el-button>
-      <el-button
+            <el-button
         size="small"
         :icon="VideoPlay"
-        :loading="running"
-        :disabled="!activePipeline"
+        :loading="running && !canStop"
+        :disabled="!activePipeline || !!canStop"
         :title="activePipeline ? `${$tr('运行任务')}：${activePipeline.name || activePipeline.id}` : ''"
         @click="activePipeline && emit('run', activePipeline.id)"
       >
         {{ $tr('运行') }}
+      </el-button>
+      <el-button
+        v-if="canStop"
+        size="small"
+        type="danger"
+        :icon="VideoPause"
+        :loading="stopLoading"
+        :disabled="stopLoading"
+        :title="$tr('停止当前任务运行')"
+        @click="emit('stop')"
+      >
+        {{ $tr('停止') }}
       </el-button>
       <div class="etl-canvas__search">
         <el-input
