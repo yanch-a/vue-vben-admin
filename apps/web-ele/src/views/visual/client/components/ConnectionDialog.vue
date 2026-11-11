@@ -409,7 +409,7 @@ function onCurrentChange(row: any) {
   selectedId.value = row?.id;
 }
 
-/** 双击行：直接打开连接（与底部「打开」一致） */
+/** 打开指定连接。操作列「打开」和双击行共用，效果与底部「打开」相同。 */
 function openByRow(row: any) {
   if (!row?.id) {
     ElMessage.warning('请选择一个连接');
@@ -667,8 +667,11 @@ watch(
           :label="$tr('默认库')"
           min-width="100"
         />
-        <ElTableColumn :label="$tr('操作')" width="100" fixed="right">
+        <ElTableColumn :label="$tr('操作')" width="132" fixed="right">
           <template #default="{ row }">
+            <ElButton link type="primary" @click.stop="openByRow(row)">
+              {{ $tr('打开') }}
+            </ElButton>
             <ElButton link type="primary" @click.stop="startEdit(row)">
               {{ $tr('编辑') }}
             </ElButton>
@@ -676,7 +679,7 @@ watch(
         </ElTableColumn>
       </ElTable>
       <div class="hint">
-        {{ $tr('提示：双击行即可打开连接；编辑请点「编辑」按钮') }}
+        {{ $tr('提示：点击「打开」或双击行即可打开连接') }}
       </div>
     </div>
 

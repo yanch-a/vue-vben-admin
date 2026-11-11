@@ -882,15 +882,98 @@ function waitExpand(node: any): Promise<void> {
   });
 }
 
+/** 表节点是否就是要定位的那张表。schema 不一致时不把同名表认成目标。 */
+function tableDataMatches(data: any, tableName: string, schemaName?: string): boolean {
+  if (!data || (data.nodeType && data.nodeType !== 'table')) return false;
+  const want = tableName.trim().toLowerCase();
+  if (!want) return false;
+  const dot = want.lastIndexOf('.');
+  const bare = dot >= 0 ? want.slice(dot + 1) : want;
+  const schemaInName = dot >= 0 ? want.slice(0, dot) : '';
+  const schema = (schemaName || schemaInName).trim().toLowerCase();
+  const raw = String(data.rawTableName || '').trim().toLowerCase();
+  const qualified = String(data.qualifiedName || data.name || '').trim().toLowerCase();
+  const nodeSchema = String(data.schemaName || '').trim().toLowerCase();
+  const qualifiedHit = qualified === want || (!!schema && qualified === `${schema}.${bare}`);
+  const bareHit = raw === bare || raw === want || qualified === bare;
+  if (!qualifiedHit && !bareHit) return false;
+  if (schema && nodeSchema && schema !== nodeSchema && !qualifiedHit) return false;
+  return true;
+}
+
+/** 把定位路径上的节点显示出来，避免当前检索把目标表滤掉后看不到高亮。 */
+function revealLocatePath(node: any) {
+  let current = node;
+  while (current) {
+    current.visible = true;
+    current = current.parent;
+  }
+}
+
+/**
+ * 展开到表节点。
+ * 有 Schema 层时先在已加载的 schema 里找表，再只展开命中的那一支；
+ * 没有 Schema 层时展开 Tables，缓存里没有这张表就再拉一次。
+ */
+async function locateTableNode(
+  insNode: any,
+  instanceName: string,
+  tableName: string,
+  schemaName?: string,
+) {
+  const tree = treeRef.value;
+  if (hasSchemaLayer.value) {
+    const collect = (hint?: string) => (insNode.childNodes || [])
+      .map((schemaNode: any) => {
+        const tables = schemaNode.data?.objectNodes?.tables || [];
+        const hit = tables.find((table: any) => tableDataMatches(table, tableName, hint));
+        return hit ? { schemaNode, hit } : null;
+      })
+      .filter(Boolean);
+    // 先按 SQL 里的 schema 找；那里没有时再在其它 schema 里找同名表。
+    const hinted = (schemaName || '').trim().toLowerCase();
+    const matches = collect(schemaName);
+    const chosen = (hinted
+      ? matches.find((item: any) => String(item.schemaNode.data?.schemaName || '').toLowerCase() === hinted)
+      : null) || matches[0] || collect('')[0];
+    if (!chosen) return null;
+    await waitExpand(chosen.schemaNode);
+    const folder = findTreeNode(
+      tree,
+      `tables-${instanceName}-${chosen.schemaNode.data.schemaName}`,
+    );
+    if (!folder) return null;
+    await waitExpand(folder);
+    return findTreeNode(tree, chosen.hit.id)
+      || (folder.childNodes || []).find((child: any) => tableDataMatches(child.data, tableName, chosen.schemaNode.data.schemaName))
+      || null;
+  }
+
+  const folderKey = `tables-${instanceName}`;
+  let folder = findTreeNode(tree, folderKey);
+  if (!folder) return null;
+  await waitExpand(folder);
+  let found = (folder.childNodes || []).find((child: any) => tableDataMatches(child.data, tableName, schemaName));
+  if (!found) {
+    await reloadFolder('tables', instanceName, false);
+    folder = findTreeNode(treeRef.value, folderKey);
+    if (folder) await waitExpand(folder);
+    found = (folder?.childNodes || []).find((child: any) => tableDataMatches(child.data, tableName, schemaName));
+  }
+  return found || null;
+}
+
 /**
  * 在对象树中定位：
+ * - 有 tableName：展开实例 →（Schema）→ Tables，高亮这张表
  * - 有 savedQueryId：展开实例 → Queries，高亮对应已保存查询
- * - 无 savedQueryId：高亮当前数据库实例节点
+ * - 都没有：高亮当前数据库实例节点
  */
 async function locateTarget(opts: {
   instanceName?: string;
   schemaName?: string;
   savedQueryId?: number | string;
+  tableName?: string;
 }) {
   const tree = treeRef.value;
   const instanceName = (opts.instanceName || '').trim();
@@ -916,6 +999,26 @@ async function locateTarget(opts: {
   }
 
   await waitExpand(insNode);
+
+  const tableName = (opts.tableName || '').trim();
+  if (tableName) {
+    const tableNode = await locateTableNode(
+      insNode,
+      instanceName,
+      tableName,
+      (opts.schemaName || '').trim(),
+    );
+    if (!tableNode?.data?.id) {
+      ElMessage.warning(`左侧未找到表：${tableName}`);
+      applyLocateHighlight(insKey);
+      refilterTree();
+      return;
+    }
+    refilterTree();
+    revealLocatePath(tableNode);
+    applyLocateHighlight(tableNode.data.id);
+    return;
+  }
 
   if (!hasQuery) {
     applyLocateHighlight(insKey);

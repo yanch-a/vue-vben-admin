@@ -16,6 +16,7 @@ import {
   saveRedisKey, scanRedisKeys, searchRedisGrantCandidates, testRedisConnection, updateRedisKeyMeta,
 } from '#/api/visual/redisConsole';
 import { listMemberUserGroups } from '#/api/visual/vq';
+import { translateUiText } from '#/locales/ui-text';
 
 defineOptions({ name: 'RedisConsole' });
 const router = useRouter();
@@ -114,6 +115,8 @@ const encodingLabel = computed(() => {
 
 const command = ref('');
 const commandLoading = ref(false);
+/** 清空当前 DB 的进行中状态，避免确认后重复提交 FLUSHDB。 */
+const flushingDb = ref(false);
 const cliLines = ref<Array<{ command: string; database: number; error?: boolean; output: string; }>>([]);
 const commandHistory = ref<string[]>([]);
 const historyIndex = ref(-1);
@@ -738,6 +741,62 @@ function cleanCommandError(error: any): string {
   return message || '命令执行失败';
 }
 
+/**
+ * 清空当前选中的 Redis DB。
+ * 弹窗里必须输入大写 Y 并点确定才会发送 FLUSHDB；取消、关闭或输错都不会执行。
+ */
+async function flushCurrentDatabase() {
+  if (!active.value?.manageable || flushingDb.value || !activeId.value) return;
+  const connectionId = activeId.value;
+  const targetDatabase = database.value;
+  const connectionName = String(active.value.connectionName || '');
+  try {
+    await ElMessageBox.prompt(
+      `${connectionName} / DB ${targetDatabase}\n${translateUiText('将清空当前 DB 的全部键，此操作不可恢复。请输入大写 Y 后点击确定。')}`,
+      'Flush DB',
+      {
+        type: 'warning',
+        confirmButtonText: translateUiText('确定'),
+        cancelButtonText: translateUiText('取消'),
+        inputPlaceholder: 'Y',
+        inputPattern: /^Y$/,
+        inputErrorMessage: translateUiText('请输入大写 Y 才能继续'),
+        confirmButtonClass: 'el-button--danger',
+      },
+    );
+  } catch {
+    return;
+  }
+  // 确认框打开期间如果已经切走连接或 DB，不能把清空打到新的目标上。
+  if (activeId.value !== connectionId || database.value !== targetDatabase) {
+    ElMessage.warning(translateUiText('当前连接或 DB 已切换，已取消清空'));
+    return;
+  }
+  flushingDb.value = true;
+  try {
+    const result = unbox(await executeRedisCommand(connectionId, targetDatabase, 'FLUSHDB', true));
+    const output = result && Object.prototype.hasOwnProperty.call(result, 'output') ? result.output : result;
+    cliLines.value.push({
+      command: 'FLUSHDB',
+      database: targetDatabase,
+      output: formatCommandOutput(output),
+    });
+    if (activeId.value !== connectionId || database.value !== targetDatabase) return;
+    newKey();
+    ElMessage.success(translateUiText(`已清空 DB ${targetDatabase}`));
+    try { await loadDatabaseStats(); } catch { /* 数量统计失败不影响已经完成的清空。 */ }
+    await loadKeys();
+    if (mode.value === 'cli') await scrollTerminalToEnd();
+  } catch (error: any) {
+    const message = cleanCommandError(error);
+    cliLines.value.push({ command: 'FLUSHDB', database: targetDatabase, output: message, error: true });
+    ElMessage.error(message);
+    if (mode.value === 'cli') await scrollTerminalToEnd();
+  } finally {
+    flushingDb.value = false;
+  }
+}
+
 async function scrollTerminalToEnd() {
   await nextTick();
   if (terminalOutput.value) terminalOutput.value.scrollTop = terminalOutput.value.scrollHeight;
@@ -867,6 +926,16 @@ onBeforeUnmount(() => {
           </ElSelect>
         </template>
         <ElSegmented v-model="mode" :options="[{ label: '键浏览器', value: 'browser' }, { label: '命令行', value: 'cli' }]" />
+        <ElButton
+          v-if="active"
+          class="flush-db"
+          type="danger"
+          plain
+          :disabled="!active.manageable"
+          :loading="flushingDb"
+          :title="active.manageable ? $tr('清空当前 DB 的全部键') : $tr('只有连接所有者或管理员可以清空当前 DB')"
+          @click="flushCurrentDatabase"
+        >Flush DB</ElButton>
         <template v-if="active">
           <ElTag size="small" effect="plain" class="encoding-tag" :title="$tr('连接级字符集与显示模式')">{{ encodingLabel }}</ElTag>
           <span class="connection-state">{{ active.mode === 'CLUSTER' ? 'Cluster' : `${active.hostName}:${active.port}` }}</span>
@@ -1078,6 +1147,7 @@ onBeforeUnmount(() => {
 .topbar { height: 52px; min-width: 0; display: flex; align-items: center; gap: 10px; padding: 0 12px; border-bottom: 1px solid var(--el-border-color); }
 .topbar h2 { margin: 0; font-size: 17px; letter-spacing: 0; white-space: nowrap; }
 .encoding-tag { margin-left: auto; }
+.flush-db { flex: 0 0 auto; }
 .connection-state { min-width: 0; overflow: hidden; color: var(--el-text-color-secondary); text-overflow: ellipsis; white-space: nowrap; }
 .encoding-hint,.encoding-help { margin: 0; padding: 8px 14px; color: var(--el-color-warning); background: var(--el-color-warning-light-9); font-size: 12px; line-height: 1.5; }
 .encoding-help { margin: 0 0 12px; border-radius: 4px; }

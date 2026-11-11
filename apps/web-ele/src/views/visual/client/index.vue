@@ -2774,22 +2774,24 @@ function onFormatSql() {
 }
 
 /**
- * 在左侧对象树定位当前编辑器：
- * - 已保存：展开实例 → Queries，高亮对应查询
- * - 未保存：高亮当前数据库实例
+ * 在左侧对象树定位当前编辑器。
+ * 能从选区、光标或当前语句识别出表时，展开到这张表；
+ * 没有表时，已保存查询高亮 Queries，未保存则高亮数据库实例。
  */
 function locateCurrentInTree() {
   const tab = activeTab.value;
   if (!tab) return;
-  const instanceName = tab.instanceName?.trim();
+  const table = sqlEditorRef.value?.resolveLocateTable?.() ?? null;
+  const instanceName = (table?.instanceName || tab.instanceName || '').trim();
   if (!instanceName) {
     ElMessage.warning('请先选择当前库/模式');
     return;
   }
   objectTreeRef.value?.locateTarget?.({
     instanceName,
-    schemaName: tab.schemaName,
-    savedQueryId: tab.savedQueryId,
+    schemaName: table ? table.schemaName : tab.schemaName,
+    savedQueryId: table ? undefined : tab.savedQueryId,
+    tableName: table?.tableName,
   });
 }
 
@@ -4050,7 +4052,7 @@ onBeforeUnmount(() => {
             <ElButton
               size="small"
               :icon="Aim"
-              :title="$tr('在对象树中定位')"
+              :title="$tr('在对象树中定位当前表')"
               :disabled="!activeTab"
               @click="locateCurrentInTree"
             />

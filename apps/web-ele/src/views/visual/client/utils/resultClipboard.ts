@@ -41,3 +41,81 @@ export function buildResultTsv(
   );
   return [header, ...lines].join('\r\n');
 }
+
+const RESULT_CELL_SELECTOR = '.vrt-td, .vrt-th';
+
+function nodeElement(node: Node | null): Element | null {
+  if (!node) return null;
+  return node instanceof Element ? node : node.parentElement;
+}
+
+/**
+ * 选区是否包住了整个单元格文本。
+ * 双击或从格子一端拖到另一端时，选区常会冲出 span、落到块级 div 的边界上。
+ */
+function selectionCoversNode(range: Range, node: Node): boolean {
+  const nodeRange = node.ownerDocument.createRange();
+  try {
+    nodeRange.selectNodeContents(node);
+    return (
+      range.compareBoundaryPoints(Range.START_TO_START, nodeRange) <= 0 &&
+      range.compareBoundaryPoints(Range.END_TO_END, nodeRange) >= 0
+    );
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * 去掉浏览器在块级格子末尾多写的那一个换行。
+ * 单元格原文自己以换行结尾时保留，只丢掉多出来的那个。
+ *
+ * @param selectedText 选区纯文本
+ * @param cellText 选区结束位置所在格子的原文；无法对照时传 null
+ */
+export function stripResultCopyTrailingBreak(
+  selectedText: string,
+  cellText: string | null,
+): string {
+  if (!/[\r\n]$/.test(selectedText)) return selectedText;
+  if (cellText != null && /[\r\n]$/.test(cellText)) return selectedText;
+  return selectedText.replace(/\r?\n$/, '');
+}
+
+/**
+ * 结果表里的选区 → 应写入剪贴板的纯文本。
+ * 选区不在这张表里、或正在编辑输入框时返回 null，调用方不要改写剪贴板。
+ * 整格选中时直接用格子原文，避免块级 div 在末尾多一个换行。
+ */
+export function plainTextFromResultSelection(
+  root: HTMLElement,
+  selection: Selection,
+): string | null {
+  if (selection.rangeCount === 0 || selection.isCollapsed) return null;
+  const anchor = selection.anchorNode;
+  const focus = selection.focusNode;
+  if (!anchor || !focus || !root.contains(anchor) || !root.contains(focus)) {
+    return null;
+  }
+  if (nodeElement(anchor)?.closest('input, textarea, [contenteditable="true"]')) {
+    return null;
+  }
+  const selectedText = selection.toString();
+  if (!selectedText) return null;
+
+  const range = selection.getRangeAt(0);
+  const startCell = nodeElement(range.startContainer)?.closest(RESULT_CELL_SELECTOR);
+  const endCell = nodeElement(range.endContainer)?.closest(RESULT_CELL_SELECTOR);
+  if (startCell && startCell === endCell) {
+    const span = startCell.querySelector('.vrt-cell-text');
+    const cellText = span?.textContent ?? '';
+    if (span && selectionCoversNode(range, span)) return cellText;
+    return stripResultCopyTrailingBreak(selectedText, cellText);
+  }
+
+  const endSpan = nodeElement(range.endContainer)?.closest('.vrt-cell-text');
+  return stripResultCopyTrailingBreak(
+    selectedText,
+    endSpan?.textContent ?? null,
+  );
+}

@@ -10,6 +10,7 @@ import { writeFileSync } from 'node:fs';
 
 import { DB_TYPE_REGISTRY } from './dbTypes';
 import {
+  bareDesignTableName,
   generateTableDesignSql,
   mysqlCollationsForCharset,
   resolveTableDesignerOptionValues,
@@ -161,6 +162,27 @@ describe('表设计器数据库适配', () => {
     model.columns.push({ ...model.columns[0]!, id: 'second', name: 'second', primary: false });
     const result = generateTableDesignSql({ dbType: 'POSTGRE_SQL', mode: 'create', model, schema: '' });
     expect(result.errors).toEqual([]); expect(result.sql).toContain('SMALLSERIAL');
+  });
+
+  it('瀚高改表只保留一个 schema，带引号的重复 schema 也会去掉', () => {
+    expect(bareDesignTableName('app', 'app.orders')).toBe('orders');
+    expect(bareDesignTableName('app', 'app."app".orders')).toBe('orders');
+    expect(bareDesignTableName('app', '"app"."orders"')).toBe('orders');
+    expect(bareDesignTableName('app', 'app.app.orders')).toBe('app.orders');
+    expect(bareDesignTableName('public', 'other.orders')).toBe('other.orders');
+
+    const original = createModel('HIGHGO');
+    original.tableName = 'orders';
+    original.columns[0]!.originalName = 'id';
+    const changed: TableDesignModel = JSON.parse(JSON.stringify(original));
+    changed.columns[0]!.name = 'order_id';
+    const result = generateTableDesignSql({
+      dbType: 'HIGHGO', mode: 'alter', model: changed, original, schema: 'app',
+    });
+    expect(result.errors).toEqual([]);
+    expect(result.sql).toContain('ALTER TABLE "app"."orders" RENAME COLUMN "id" TO "order_id"');
+    expect(result.sql).not.toContain('"app"."app.');
+    expect(result.sql).not.toContain('."app".');
   });
 
   it('字段改名保留自增主键，显式聚集索引使用非聚集主键，MongoDB 保留 _id 及特殊字段名', () => {

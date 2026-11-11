@@ -11,6 +11,8 @@
  * @author yanch
  */
 
+import { normalizeDbTypeCode, resolveDialectFamily } from '../dialect/sqlDialect';
+
 /** 补全类型 */
 export type CompletionKind = 'table' | 'column' | 'none';
 
@@ -52,7 +54,7 @@ export interface TableNameItem {
 /**
  * 将字符串字面量与注释替换为空格，保留长度大致对应关系（用于关键字判断，不用于切片）
  */
-function maskSqlNoise(sql: string): string {
+function maskSqlNoise(sql: string, keepDoubleQuotedIdents = false): string {
   let out = '';
   let i = 0;
   while (i < sql.length) {
@@ -108,8 +110,8 @@ function maskSqlNoise(sql: string): string {
       }
       continue;
     }
-    // 双引号（部分方言标识符，这里按字面量屏蔽以免干扰）
-    if (c === '"') {
+    // 双引号在 PostgreSQL 族是标识符。解析 FROM 时必须保留，否则 "schema"."table" 会被抹掉。
+    if (c === '"' && !keepDoubleQuotedIdents) {
       out += ' ';
       i++;
       while (i < sql.length) {
@@ -1331,7 +1333,7 @@ export interface SqlTableRef {
  * 解析语句中 FROM / JOIN 出现的表及别名（供 a.col / b.col 补全）
  */
 export function parseTableRefsFromStatement(stmt: string): SqlTableRef[] {
-  const masked = maskSqlNoise(stmt);
+  const masked = maskSqlNoise(stmt, true);
   const ident =
     '(?:[a-zA-Z0-9_$#]+|`[^`]+`|"[^"]+"|\\[[^\\]]+\\])';
   const out: SqlTableRef[] = [];
@@ -1463,6 +1465,148 @@ export function resolveTableTargetFromEditor(
     return { schema: byAlias.schema, table: byAlias.table };
   }
   return { table: name };
+}
+
+export interface EditorTableActionTarget {
+  /** 真正要连接的库。PostgreSQL 族这里必须是数据库，不能是 public 这类 schema。 */
+  instanceName: string;
+  /**
+   * 传给表详情接口的名字。
+   * 有独立 schema 的库与对象树一样使用 schema.table，后端才能找到瀚高里的表。
+   */
+  tableName: string;
+  schemaName?: string;
+}
+
+/**
+ * SQL 编辑器右键「查看表信息 / 改变表」的定位。
+ * MySQL 的前缀是库名；瀚高 / PostgreSQL / SQL Server / Oracle 的前缀是 schema。
+ */
+export function resolveEditorTableAction(input: {
+  dbType?: null | string;
+  instanceName?: string;
+  tabSchema?: string;
+  schema?: string;
+  table?: string;
+}): EditorTableActionTarget | null {
+  const table = String(input.table || '').trim();
+  if (!table) return null;
+  const family = resolveDialectFamily(input.dbType);
+  const code = normalizeDbTypeCode(input.dbType);
+  const prefix = String(input.schema || '').trim();
+  const current = String(input.instanceName || '').trim();
+  const tabSchema = String(input.tabSchema || '').trim();
+
+  // 库.表：前缀用来切换库，表名保持裸名。
+  if (family === 'MYSQL_LIKE') {
+    const instanceName = prefix || current;
+    if (!instanceName) return null;
+    return { instanceName, tableName: table };
+  }
+
+  // H2 / 达梦的一级节点就是 schema 或用户。前缀表示切换到那个节点。
+  if (family === 'H2_LIKE' || code === 'DM') {
+    const instanceName = prefix || current || tabSchema;
+    if (!instanceName) return null;
+    return { instanceName, tableName: table, schemaName: instanceName };
+  }
+
+  if (family === 'SQLITE_LIKE' || family === 'MONGODB_LIKE') {
+    if (!current) return null;
+    return { instanceName: current, tableName: table };
+  }
+
+  // 点号前是 schema。拿它去连库会连到不存在的 public / app。
+  const schemaName = prefix || tabSchema
+    || (family === 'POSTGRES_LIKE' ? 'public' : family === 'SQLSERVER_LIKE' ? 'dbo' : '');
+  if (!current) return null;
+  const alreadyQualified = !!schemaName
+    && table.toLowerCase().startsWith(`${schemaName.toLowerCase()}.`);
+  return {
+    instanceName: current,
+    tableName: schemaName && !alreadyQualified ? `${schemaName}.${table}` : table,
+    schemaName: schemaName || undefined,
+  };
+}
+
+/**
+ * 这些词出现在选区或光标上时，不能当成表名。
+ * 真正的表如果就叫 select，仍然会先按 FROM/JOIN 里的表匹配，不会被这里丢掉。
+ */
+const LOCATE_SKIP_WORDS = new Set([
+  'select', 'from', 'where', 'and', 'or', 'insert', 'update', 'delete',
+  'join', 'set', 'values', 'into', 'create', 'alter', 'drop', 'as', 'on',
+  'left', 'right', 'inner', 'outer', 'full', 'cross', 'group', 'by', 'order',
+  'limit', 'offset', 'having', 'union', 'case', 'when', 'then', 'else', 'end',
+  'not', 'null', 'in', 'is', 'like', 'between', 'distinct', 'with', 'table',
+]);
+
+function sameSqlIdent(left?: string, right?: string): boolean {
+  return !!left && !!right && left.toLowerCase() === right.toLowerCase();
+}
+
+/**
+ * 定位按钮要去左侧对象树找的表。
+ * 光标或选区落在某张表（含别名、schema.table）上时用这张表；
+ * 当前语句只有一张表时，即使光标在字段上，也直接定位这张表。
+ */
+export function resolveLocateTableTarget(input: {
+  fullSql: string;
+  offset: number;
+  rawToken?: string;
+  explicitSelection?: boolean;
+  dbType?: null | string;
+  instanceName?: string;
+  tabSchema?: string;
+}): EditorTableActionTarget | null {
+  const fullSql = input.fullSql || '';
+  const stmt = locateStatementAt(fullSql, input.offset);
+  const text = stmt ? fullSql.slice(stmt.start, Math.max(stmt.end, input.offset)) : fullSql;
+  let refs = parseTableRefsFromStatement(text);
+  if (!refs.length) {
+    const primary = parsePrimaryTableFromStatement(text);
+    if (primary.table) {
+      refs = [{ schema: primary.schema, table: primary.table, alias: primary.table }];
+    }
+  }
+
+  const trimmed = String(input.rawToken || '').trim();
+  // 选中整段 SQL 时，第一个词通常是 SELECT，不能拿它当表名。
+  const identifierToken = input.explicitSelection && /\s/.test(trimmed) ? '' : trimmed;
+  const parsed = identifierToken
+    ? resolveTableTargetFromEditor(text, identifierToken)
+    : null;
+  const tokenBare = identifierToken.split('.').pop()?.replace(/^[`"\[]|[`"\]]$/g, '') || '';
+
+  let chosen: { schema?: string; table: string } | null = null;
+  if (parsed?.table) {
+    const match = refs.find((ref) =>
+      sameSqlIdent(ref.alias, tokenBare)
+      || sameSqlIdent(ref.table, parsed.table)
+      || sameSqlIdent(ref.table, tokenBare),
+    );
+    if (match) {
+      chosen = { schema: match.schema || parsed.schema, table: match.table };
+    } else if (parsed.schema) {
+      chosen = parsed;
+    } else if (
+      input.explicitSelection
+      && !LOCATE_SKIP_WORDS.has(parsed.table.toLowerCase())
+    ) {
+      chosen = parsed;
+    }
+  }
+  if (!chosen && refs.length === 1 && refs[0]?.table) {
+    chosen = { schema: refs[0].schema, table: refs[0].table };
+  }
+  if (!chosen?.table) return null;
+  return resolveEditorTableAction({
+    dbType: input.dbType,
+    instanceName: input.instanceName,
+    tabSchema: input.tabSchema,
+    schema: chosen.schema,
+    table: chosen.table,
+  });
 }
 
 /**

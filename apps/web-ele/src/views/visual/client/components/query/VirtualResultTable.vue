@@ -16,6 +16,8 @@ import {
   watch,
 } from 'vue';
 
+import { plainTextFromResultSelection } from '../../utils/resultClipboard';
+
 defineOptions({ name: 'VirtualResultTable' });
 
 const ROW_HEIGHT = 32;
@@ -388,7 +390,23 @@ function onResizeEnd() {
 
 let ro: ResizeObserver | null = null;
 
+/**
+ * 格子是块级 div。Chrome / Electron 复制这种选区时，会在纯文本末尾多写一个换行，
+ * 贴进 SQL 编辑器就会多出一行。这里改写成格子里的原文。
+ * 输入框内的复制不拦截，避免编辑单元格时把用户选中的片段换成整格。
+ */
+function onDocumentCopy(event: ClipboardEvent) {
+  const root = scrollRef.value;
+  const selection = window.getSelection();
+  if (!root || !selection || !event.clipboardData) return;
+  const plain = plainTextFromResultSelection(root, selection);
+  if (plain == null) return;
+  event.preventDefault();
+  event.clipboardData.setData('text/plain', plain);
+}
+
 onMounted(() => {
+  document.addEventListener('copy', onDocumentCopy);
   measure();
   initColWidths();
   if (scrollRef.value && typeof ResizeObserver !== 'undefined') {
@@ -401,6 +419,7 @@ onMounted(() => {
 });
 
 onBeforeUnmount(() => {
+  document.removeEventListener('copy', onDocumentCopy);
   onResizeEnd();
   ro?.disconnect();
   ro = null;
@@ -625,7 +644,8 @@ defineExpose({
                 @blur="emit('cell-blur', item.index, col)"
                 @keydown="emit('cell-keydown', $event)"
               />
-              <template v-else>{{ formatCell(item.row[col]) }}</template>
+              <!-- 行内 span：选区落在文本上，而不是块级 div 的末尾，避免复制多一个换行 -->
+              <span v-else class="vrt-cell-text">{{ formatCell(item.row[col]) }}</span>
             </div>
           </div>
         </div>
@@ -779,6 +799,10 @@ defineExpose({
 .vrt-tr .vrt-check,
 .vrt-tr .vrt-rownum {
   background: inherit;
+}
+.vrt-cell-text {
+  /* 继承格子的省略号；本身保持行内，复制时才不会带上块末尾换行 */
+  user-select: text;
 }
 .vrt-td.is-null {
   font-style: italic;

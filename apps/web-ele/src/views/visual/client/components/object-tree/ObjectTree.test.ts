@@ -170,6 +170,30 @@ describe('对象树按范围刷新', () => {
     );
   });
 
+  it('定位表时展开库和 Tables，并高亮这张表', async () => {
+    await mount();
+    await tree.value.locateTarget({ instanceName: 'app', tableName: 'orders' });
+    await vi.waitFor(() =>
+      expect(host.querySelector('.is-locate-target')?.textContent).toContain('orders'),
+    );
+    expect(host.textContent).toContain('Tables');
+  });
+
+  it('定位表时只展开目标 schema，高亮对应表', async () => {
+    await mount('postgresql');
+    await tree.value.locateTarget({
+      instanceName: 'app',
+      schemaName: 'audit',
+      tableName: 'audit.logs',
+    });
+    await vi.waitFor(() =>
+      expect(host.querySelector('.is-locate-target')?.textContent).toContain('logs'),
+    );
+    const target = host.querySelector('.is-locate-target')!;
+    expect(target.closest('.el-tree-node')?.textContent).toContain('logs');
+    expect(target.textContent).not.toContain('orders');
+  });
+
   it('刷新浏览对象先清 dbId 缓存，再重新加载实例', async () => {
     await mount();
     api.getInstances.mockResolvedValue({

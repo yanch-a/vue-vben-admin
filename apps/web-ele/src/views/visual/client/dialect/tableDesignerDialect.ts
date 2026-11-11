@@ -606,6 +606,41 @@ function indexColumnsSql(index: TableDesignIndex, quote: (name: string) => strin
     .join(', ');
 }
 
+/**
+ * 表设计器里 schema 和表名是分开的。
+ * 对象树传来的名字经常已经是 schema.table，瀚高上还可能是 schema."schema".table。
+ * 只去掉与当前 schema 相同的这一层前缀（含紧跟着的带引号重复），避免 ALTER 变成 "schema"."schema.table"。
+ * 表名本身含点时（schema 为 app、表名为 app.orders，限定名是 app.app.orders）保留 app.orders。
+ */
+export function bareDesignTableName(schema: string | undefined, table: string | undefined): string {
+  const raw = String(table || '').trim();
+  const prefix = unquoteDesignIdent(String(schema || '').trim());
+  if (!raw || !prefix) return unquoteDesignIdent(raw);
+  let name = raw;
+  const plain = `${prefix}.`;
+  if (startsWithIgnoreCase(name, plain)) {
+    name = name.slice(plain.length).trim();
+  }
+  const quoted = `"${prefix.replaceAll('"', '""')}".`;
+  if (startsWithIgnoreCase(name, quoted)) {
+    name = name.slice(quoted.length).trim();
+  }
+  return unquoteDesignIdent(name);
+}
+
+/** 去掉成对双引号。只在整段都是一个标识符时去掉，避免把 schema.table 误拆开。 */
+function unquoteDesignIdent(name: string): string {
+  const raw = name.trim();
+  if (raw.length >= 2 && raw.startsWith('"') && raw.endsWith('"')) {
+    return raw.slice(1, -1).replaceAll('""', '"');
+  }
+  return raw;
+}
+
+function startsWithIgnoreCase(value: string, prefix: string): boolean {
+  return value.length > prefix.length && value.slice(0, prefix.length).toLowerCase() === prefix.toLowerCase();
+}
+
 function tableNameSql(dbType: null | string | undefined, schema: string, table: string): string {
   return resolveSqlDialect(dbType).qualifyTable(schema, table);
 }

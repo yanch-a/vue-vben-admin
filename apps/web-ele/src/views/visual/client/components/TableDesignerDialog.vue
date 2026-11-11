@@ -22,6 +22,7 @@ import { ElMessage } from 'element-plus';
 
 import { resolveTableIdent } from '../dialect/sqlDialect';
 import {
+  bareDesignTableName,
   generateTableDesignSql,
   columnParameterHint,
   columnTypeNotice,
@@ -286,6 +287,16 @@ function resetForm(): void {
   const next = props.mode === 'alter' && props.info
     ? modelFromInfo(props.info)
     : emptyModel();
+  // 对象树表名是 schema.table。表名框和后续 ALTER 只用裸表名，schema 由「所属位置」单独限定。
+  const nameSchema = resolveTableIdent(props.dbType, {
+    instanceName: props.instanceName,
+    schemaName: props.schemaName || props.info?.schemaName,
+    tableName: next.tableName,
+  }).schema;
+  next.tableName = bareDesignTableName(nameSchema, next.tableName);
+  if (next.originalTableName) {
+    next.originalTableName = bareDesignTableName(nameSchema, next.originalTableName);
+  }
   if (props.mode === 'create') {
     next.tableName = props.tableName || 'new_table';
     next.options = inferOptions({});
@@ -321,7 +332,7 @@ function resetForm(): void {
 }
 
 watch(
-  () => [props.modelValue, props.info, props.dbType, props.mode],
+  () => [props.modelValue, props.info, props.dbType, props.mode, props.schemaName],
   ([open]) => {
     if (open) resetForm();
   },
@@ -460,14 +471,21 @@ function moveColumn(index: number, offset: number): void {
 function buildSql(): TableDesignSqlResult {
   form.tableName = form.tableName.trim();
   form.columns.forEach(renameColumn);
+  // 改表时用打开时的 schema.table 解析 schema。表名框已是裸表名，不能再从中拆出 schema。
   const ident = resolveTableIdent(props.dbType, {
     instanceName: props.instanceName,
     schemaName: props.schemaName || props.info?.schemaName,
-    tableName: form.tableName,
+    tableName: props.mode === 'alter'
+      ? (props.info?.tableName || props.tableName || form.tableName)
+      : form.tableName,
   });
+  // 限定名拆出来的 schema 可能自带引号，不能再交给 quoteIdent 包一层。
+  const plainSchema = ident.schema.length >= 2 && ident.schema.startsWith('"') && ident.schema.endsWith('"')
+    ? ident.schema.slice(1, -1).replaceAll('""', '"')
+    : ident.schema;
   const result = generateTableDesignSql({
     dbType: props.dbType,
-    schema: ident.schema,
+    schema: plainSchema,
     mode: props.mode,
     model: cloneModel(form),
     original: original.value ? cloneModel(original.value) : null,

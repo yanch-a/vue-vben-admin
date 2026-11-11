@@ -1965,7 +1965,7 @@ function onDocumentKeydown(e: KeyboardEvent) {
     ) {
       // 交给原生/编辑器
     } else if (window.getSelection()?.toString()) {
-      // 用户有划选文本，交给浏览器默认复制
+      // 划选文本仍走浏览器的 copy 事件。结果表会在那里改写剪贴板，去掉块级格子末尾多出的换行。
     } else if (canCopyCell.value && !editingCell.value) {
       e.preventDefault();
       void onCopyCell();

@@ -73,6 +73,24 @@ export function canCancelEtlRun(options: {
   return String(runUser) === String(me);
 }
 
+/**
+ * 实时日志标题用这次运行自己的任务名。
+ * 没有 pipelineName 时按任务 ID 到当前草稿里找名称；找不到再用 ID。
+ * 不回退到编辑器里正打开的任务，否则旁观者跟上别人的运行时标题会停在上一次。
+ */
+export function resolveAttachedRunTitle(
+  run: Pick<EtlAttachableRun, 'id' | 'pipelineId' | 'pipelineName'> | null | undefined,
+  pipelines?: Array<{ id?: string; name?: string }> | null,
+): string {
+  const named = String(run?.pipelineName || '').trim();
+  if (named) return named;
+  if (run?.pipelineId === '__publish__') return '发布预检';
+  const fromDoc = (pipelines || []).find((item) => item?.id && item.id === run?.pipelineId);
+  const docName = String(fromDoc?.name || '').trim();
+  if (docName) return docName;
+  return String(run?.pipelineId || run?.id || '').trim();
+}
+
 /** 旁观者轮询：已挂上活跃运行时不必每次 listRuns，隔 N 次再发现更高优先级/定时新跑。 */
 export const ETL_LIVE_DISCOVER_EVERY = 4;
 

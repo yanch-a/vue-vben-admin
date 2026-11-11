@@ -29,6 +29,8 @@ import {
   locateStatementAt,
   matchColumnSuggestions,
   matchTableSuggestions,
+  resolveEditorTableAction,
+  resolveLocateTableTarget,
   resolveTableTargetFromEditor,
   scoreIdentMatch,
   splitQualifiedTableName,
@@ -1060,82 +1062,66 @@ function readTableTokenAtCursor(): string {
 }
 
 /**
- * 从选区/光标解析表目标；失败时给出提示并返回 null。
- * instanceName 规则与「查看表信息」一致：优先 schema.table 前缀，否则用当前库。
+ * 查看表信息和改变表共用同一次表名解析。
+ * 瀚高的 "schema"."table" 不能把 schema 当成库名，否则表详情会去连一个不存在的库。
  */
-function resolveEditorTableTarget(): {
-  instanceName: string;
-  tableName: string;
-  schemaToken?: string;
-} | null {
-  if (!editor) return null;
+function emitTableAction(kind: 'view' | 'alter') {
+  if (!editor) return;
   const model = editor.getModel();
-  if (!model) return null;
-  const token = readTableTokenAtCursor();
-  const target = resolveTableTargetFromEditor(model.getValue(), token);
-  if (!target?.table) {
+  if (!model) return;
+  const parsed = resolveTableTargetFromEditor(model.getValue(), readTableTokenAtCursor());
+  if (!parsed?.table) {
     ElMessage.warning('请先选中或将光标放在表名上');
-    return null;
+    return;
   }
-  const schemaToken = (target.schema || '').trim() || undefined;
-  const instanceName = (schemaToken || props.instanceName || '').trim();
-  if (!instanceName) {
+  const action = resolveEditorTableAction({
+    dbType: props.dbType,
+    instanceName: props.instanceName,
+    tabSchema: props.schemaName,
+    schema: parsed.schema,
+    table: parsed.table,
+  });
+  if (!action) {
     ElMessage.warning('请先选择数据库 / Schema');
-    return null;
+    return;
   }
-  return {
-    instanceName,
-    tableName: target.table,
-    schemaToken,
-  };
+  if (kind === 'view') {
+    emit('viewTableInfo', {
+      instanceName: action.instanceName,
+      tableName: action.tableName,
+    });
+    return;
+  }
+  emit('alterTable', action);
 }
 
 /** 解析选中/光标表名并通知父级打开表信息弹窗 */
 function emitViewTableInfo() {
-  const target = resolveEditorTableTarget();
-  if (!target) return;
-  emit('viewTableInfo', {
-    instanceName: target.instanceName,
-    tableName: target.tableName,
-  });
+  emitTableAction('view');
+}
+
+/** 解析选中/光标表名并通知父级打开「改变表」设计器。 */
+function emitAlterTable() {
+  emitTableAction('alter');
 }
 
 /**
- * 解析选中/光标表名并通知父级打开「改变表」设计器。
- * 与对象树 alterTable 对齐：
- * - 有 schemaName（PG/Oracle）：当前库 + 前缀/页签 schema
- * - 无 schemaName（MySQL）：前缀当库名（与查看表信息一致）
+ * 供工具栏「定位」使用：返回当前应在左侧对象树展开的表。
+ * 没有可定位的表时返回 null，父级再退回已保存查询或数据库实例。
  */
-function emitAlterTable() {
-  if (!editor) return;
+function resolveLocateTable() {
+  if (!editor) return null;
   const model = editor.getModel();
-  if (!model) return;
-  const token = readTableTokenAtCursor();
-  const target = resolveTableTargetFromEditor(model.getValue(), token);
-  if (!target?.table) {
-    ElMessage.warning('请先选中或将光标放在表名上');
-    return;
-  }
-  const currentInstance = (props.instanceName || '').trim();
-  const tabSchema = (props.schemaName || '').trim();
-  const prefix = (target.schema || '').trim();
-
-  let instanceName = '';
-  let schemaName: string | undefined;
-  if (tabSchema) {
-    instanceName = currentInstance || prefix;
-    schemaName = prefix || tabSchema;
-  } else {
-    instanceName = prefix || currentInstance;
-  }
-  if (!instanceName) {
-    ElMessage.warning('请先选择数据库 / Schema');
-    return;
-  }
-  emit('alterTable', {
-    instanceName,
-    tableName: target.table,
-    schemaName,
+  if (!model) return null;
+  const pos = editor.getPosition();
+  return resolveLocateTableTarget({
+    fullSql: model.getValue(),
+    offset: pos ? model.getOffsetAt(pos) : 0,
+    rawToken: readTableTokenAtCursor(),
+    explicitSelection: hasUserSelection(),
+    dbType: props.dbType,
+    instanceName: props.instanceName,
+    tabSchema: props.schemaName,
   });
 }
 
@@ -1289,6 +1275,7 @@ defineExpose({
   formatSql: formatCurrentSql,
   replaceSelectionOrAll,
   getSelectedText,
+  resolveLocateTable,
 });
 </script>
 

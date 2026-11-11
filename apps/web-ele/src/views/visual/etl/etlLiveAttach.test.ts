@@ -8,6 +8,7 @@ import {
   isActiveEtlRunStatus,
   nextEtlLiveDiscoverTick,
   pickActiveEtlRun,
+  resolveAttachedRunTitle,
 } from './etlLiveAttach';
 
 describe('etlLiveAttach', () => {
@@ -82,6 +83,27 @@ describe('etlLiveAttach', () => {
       { id: 'old', pipelineId: 'x', status: 'FAILED', startedAt: 90 },
     ]);
     expect(picked?.id).toBe('sched');
+  });
+
+  it('titles a followed run by its own task, not the editor selection', () => {
+    expect(
+      resolveAttachedRunTitle(
+        { id: 'run-b', pipelineId: 'task-b', pipelineName: '夜间同步' },
+        [{ id: 'task-a', name: '白天同步' }],
+      ),
+    ).toBe('夜间同步');
+    expect(
+      resolveAttachedRunTitle(
+        { id: 'run-b', pipelineId: 'task-b' },
+        [{ id: 'task-a', name: '白天同步' }, { id: 'task-b', name: '夜间同步' }],
+      ),
+    ).toBe('夜间同步');
+    expect(
+      resolveAttachedRunTitle({ id: 'pub', pipelineId: '__publish__' }, []),
+    ).toBe('发布预检');
+    expect(resolveAttachedRunTitle({ id: 'run-x', pipelineId: 'missing' }, [])).toBe(
+      'missing',
+    );
   });
 
   it('returns undefined when nothing is active', () => {

@@ -78,6 +78,12 @@ const tasks = computed(() =>
   ),
 );
 const published = computed(() => detail.value?.publishedVersion || 0);
+/** 发布之后草稿又有改动。打开定时配置时直接说明仍会跑旧版本。 */
+const draftAheadOfPublish = computed(
+  () =>
+    target.value?.status === 'DRAFT' &&
+    Number(target.value?.publishedVersion || published.value || 0) > 0,
+);
 /** Schedule config panel shows only the latest 5 fires (full list: More -> schedule logs). */
 const recentFires = computed(() => (detail.value?.recentFires || []).slice(0, 5));
 /** 尚未加入前置链的其他已发布工作区。 */
@@ -395,6 +401,18 @@ defineExpose({ open });
       />
       <template v-else>
         <el-alert
+          v-if="draftAheadOfPublish"
+          :title="
+            $tr(
+              '定时任务仍按已发布版本执行。当前修改需要重新发布，并在定时计划里改用新版本后才会生效。',
+            )
+          "
+          type="warning"
+          :closable="false"
+          show-icon
+        />
+        <el-alert
+          v-else
           :title="
             $tr(
               '定时执行使用已发布版本；保存计划不会保存或发布草稿。可配置前置工作区，整条链按顺序串行，失败中断本次。',

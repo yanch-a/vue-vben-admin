@@ -40,6 +40,29 @@ describe('建表弹窗交互', () => {
     await click('保存'); expect(saved).toHaveLength(1); expect(saved[0]!.sql).toContain('AUTO_INCREMENT');
   });
 
+  it('瀚高改变表时不把 schema 拼两次，表名框只显示裸表名', async () => {
+    const { saved } = await mount({
+      mode: 'alter',
+      dbType: 'HIGHGO',
+      instanceName: 'highgo',
+      schemaName: 'app',
+      tableName: 'app."app".orders',
+      info: {
+        tableName: 'app."app".orders',
+        schemaName: 'app',
+        columns: [{ fieldName: 'id', dataType: 'BIGINT', isNullable: false, isPrimary: true, autoIncrement: true }],
+      },
+    });
+    expect(document.body.querySelector<HTMLInputElement>('.table-summary input')?.value).toBe('orders');
+    await input('字段名 id', 'order_id');
+    await click('保存');
+    expect(saved).toHaveLength(1);
+    expect(saved[0]!.errors).toEqual([]);
+    expect(saved[0]!.sql).toContain('ALTER TABLE "app"."orders"');
+    expect(saved[0]!.sql).not.toContain('"app"."app.');
+    expect(saved[0]!.sql).not.toContain('."app".');
+  });
+
   it('字段改名同步普通唯一索引，不误隐藏名称以 primary 开头的索引', async () => {
     const { saved } = await mount({ mode: 'alter', info: { tableName: 'orders', columns: [{ fieldName: 'id', dataType: 'BIGINT', isNullable: false, isPrimary: true }], indexes: [{ indexName: 'primary_business', columns: 'id', indexType: 'BTREE', unique: true }] } });
     expect(document.body.textContent).toContain('索引 (1)');

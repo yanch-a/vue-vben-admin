@@ -97,6 +97,7 @@ import {
   isActiveEtlRunStatus,
   nextEtlLiveDiscoverTick,
   pickActiveEtlRun,
+  resolveAttachedRunTitle,
 } from './etlLiveAttach';
 import { createEtlRequestGate } from './etlRequestGate';
 import { createEtlPreviewSession } from './etlPreviewSession';
@@ -284,6 +285,12 @@ const usedRefs = computed(() =>
 const dirty = computed(
   () => Boolean(activeWorkspace.value) && snapshot() !== saved.value,
 );
+/** 已发布后又改了草稿。定时任务仍跑发布快照，页面上需要直接说清楚。 */
+const unpublishedScheduleHint = computed(() => {
+  const row = activeWorkspace.value;
+  if (!row || Number(row.publishedVersion || 0) < 1) return false;
+  return row.status === 'DRAFT' || dirty.value;
+});
 /**
  * 相对上次保存到数据库的草稿，内容有变化的任务 ID。
  * 只比较任务自身；其它任务未改时不标黄。
@@ -504,6 +511,10 @@ let liveLogRequest = 0;
 const liveBatchMode = ref(false);
 const liveBatchItems = ref<EtlBatchItem[]>([]);
 const liveBatchSummary = computed(() => summarizeBatch(liveBatchItems.value));
+/** 单任务实时日志标题。跟的是这次运行，不用编辑器里当前打开的任务名顶替。 */
+const attachedRunTitle = computed(() =>
+  resolveAttachedRunTitle(liveRunSnapshot.value, doc.value.pipelines),
+);
 let batchCancelRequested = false;
 /** 工具栏/画布「停止」请求中，避免连点重复打 cancel。 */
 const cancelBusy = ref(false);
@@ -2008,6 +2019,8 @@ async function commitDraft(
     activeWorkspace.value = {
       ...current,
       revision: committed.revision,
+      // 保存只更新草稿。已发布版本不变，定时任务继续用发布快照。
+      status: 'DRAFT',
     };
     savedRevision.value = Number(committed.revision);
     knownRemoteRevision.value = savedRevision.value;
@@ -2267,7 +2280,12 @@ const notifyDialog = ref<InstanceType<typeof WorkspaceNotify>>();
 function configureSchedule() {
   const target = menuWorkspace() || activeWorkspace.value;
   dismissWorkspaceMenu();
-  if (target) void scheduleDialog.value?.open(target);
+  if (!target) return;
+  const current = activeWorkspace.value;
+  const ahead =
+    target.status === 'DRAFT' ||
+    Boolean(current && sameWorkspace(current.id, target.id) && dirty.value);
+  void scheduleDialog.value?.open(ahead ? { ...target, status: 'DRAFT' } : target);
 }
 function configureNotify() {
   const target = menuWorkspace() || activeWorkspace.value;
@@ -3270,6 +3288,9 @@ function maybeAttachActiveLiveRun(items: EtlRun[]) {
         liveRunSnapshot.value = {
           ...liveRunSnapshot.value,
           ...current,
+          // 列表行缺任务名时保留已挂上的标题，避免轮询把标题刷回空白后再落到别的任务。
+          pipelineName:
+            current.pipelineName || liveRunSnapshot.value.pipelineName,
         };
       }
       return;
@@ -3278,16 +3299,14 @@ function maybeAttachActiveLiveRun(items: EtlRun[]) {
   const picked = pickActiveEtlRun(items);
   if (!picked) return;
   if (currentId === picked.id) return;
+  // 日志已经换成别人的这次运行。上一轮「全部任务」标题不能继续留在新日志上。
+  liveBatchMode.value = false;
+  liveBatchItems.value = [];
+  batchCancelRequested = false;
+  const taskName = resolveAttachedRunTitle(picked, doc.value.pipelines);
   attachLiveRun(
-    picked,
-    {
-      id: picked.pipelineId || picked.id,
-      name:
-        picked.pipelineName ||
-        (picked.pipelineId === '__publish__'
-          ? '发布预检'
-          : picked.pipelineId || picked.id),
-    },
+    { ...picked, pipelineName: picked.pipelineName || taskName },
+    { id: picked.pipelineId || picked.id, name: taskName },
     true,
   );
 }
@@ -4505,6 +4524,18 @@ onBeforeUnmount(() => {
         @click="exportLocalDraft"
         >{{ $tr('导出未完成 JSON 备份') }}</el-button
       >
+      <el-alert
+        v-if="unpublishedScheduleHint && !syncBlocked && !mergeConflicts.length && !draftConflict"
+        class="publish-schedule-hint"
+        type="warning"
+        :closable="false"
+        show-icon
+        :title="
+          $tr(
+            '定时任务仍按已发布版本执行。当前修改需要重新发布，并在定时计划里改用新版本后才会生效。',
+          )
+        "
+      />
       <div class="etl-body">
         <aside v-if="sidebarOpen" class="workspace-sidebar">
           <div class="sidebar-title">
@@ -5529,7 +5560,7 @@ onBeforeUnmount(() => {
                     {{ liveBatchSummary.headline }}</template
                   >
                   <template v-else>{{
-                    liveRunSnapshot?.pipelineName || pipeline?.name
+                    attachedRunTitle || pipeline?.name
                   }}</template></strong
                 >
                 <el-tag size="small">{{
@@ -5929,6 +5960,11 @@ onBeforeUnmount(() => {
   padding: 12px;
   border-bottom: 1px solid var(--el-border-color-light);
   flex-wrap: wrap;
+}
+.publish-schedule-hint {
+  flex: none;
+  margin: 0;
+  border-radius: 0;
 }
 .toolbar-nav {
   flex: 1;
