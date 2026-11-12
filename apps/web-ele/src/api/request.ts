@@ -19,6 +19,7 @@ import { ElMessage } from 'element-plus';
 import { useAuthStore } from '#/store';
 
 import { refreshTokenApi } from './core';
+import { installTransportEncryption, invalidateTransportEncryptionCache } from './transportEncryption';
 
 const { apiURL } = useAppConfig(import.meta.env, import.meta.env.PROD);
 
@@ -48,6 +49,9 @@ function createRequestClient(baseURL: string, options?: RequestClientOptions) {
     ...options,
     baseURL,
   });
+
+  // 解密必须先于登录失效识别、业务码解包和错误提示。 @author yanch
+  installTransportEncryption(client, transportKeyClient);
 
   /**
    * 重新认证逻辑（防重入；用 location.replace 跳出可能卡住的导航）
@@ -205,8 +209,17 @@ function createRequestClient(baseURL: string, options?: RequestClientOptions) {
   return client;
 }
 
+/** 独立明文协商客户端，防止获取公钥时递归进入加密拦截器。 @author yanch */
+const transportKeyClient = new RequestClient({ baseURL: apiURL });
+
+/** 管理员保存配置后，使当前页面的公钥和开关缓存立即失效。 @author yanch */
+export function clearTransportEncryptionCache(): void {
+  invalidateTransportEncryptionCache(transportKeyClient);
+}
+
 export const requestClient = createRequestClient(apiURL, {
   responseReturn: 'data',
 });
 
 export const baseRequestClient = new RequestClient({ baseURL: apiURL });
+installTransportEncryption(baseRequestClient, transportKeyClient);

@@ -6,6 +6,8 @@ import type {
 } from 'axios';
 
 type ExtendOptions<T = any> = {
+  /** 特殊明文接口显式跳过传输加密；文件、表单、SSE 会自动跳过。 @author yanch */
+  skipEncryption?: boolean;
   /**
    * 是否由全局请求拦截器展示错误消息。
    * 定时轮询、自动保存等后台请求应设为 false，避免服务异常反复打断用户。

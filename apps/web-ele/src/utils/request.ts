@@ -13,6 +13,8 @@ export default async function request(config: {
   params?: any;
   responseType?: any;
   responseReturn?: 'body' | 'raw';
+  /** 特殊明文接口跳过传输加密。 @author yanch */
+  skipEncryption?: boolean;
   /** 定时轮询、自动保存等后台请求可关闭全局错误弹窗。 */
   showErrorMessage?: boolean;
   signal?: AbortSignal;
@@ -26,6 +28,7 @@ export default async function request(config: {
   if (config.showErrorMessage != null) {
     options.showErrorMessage = config.showErrorMessage;
   }
+  if (config.skipEncryption != null) options.skipEncryption = config.skipEncryption;
   if (config.params) options.params = config.params;
   if (config.responseType) options.responseType = config.responseType;
   if (config.headers) options.headers = config.headers;

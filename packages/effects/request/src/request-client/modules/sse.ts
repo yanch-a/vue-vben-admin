@@ -40,7 +40,8 @@ class SSE {
     let axiosConfig: InternalAxiosRequestConfig<any> = {
       url,
       method: (requestOptions?.method as any) ?? 'GET',
-      headers: {} as AxiosRequestHeaders,
+      // 拦截器执行前声明流式类型，避免被普通 JSON 传输加密处理。 @author yanch
+      headers: { Accept: 'text/event-stream' } as AxiosRequestHeaders,
     };
     const requestInterceptors = this.client.instance.interceptors
       .request as any;
