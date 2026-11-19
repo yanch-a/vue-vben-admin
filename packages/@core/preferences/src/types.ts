@@ -147,7 +147,7 @@ interface AppPreferences {
   /** 布局方式 */
   layout: LayoutType;
   /** 支持的语言 */
-  locale: SupportedLanguagesType;
+  locale: string;
   /** 登录过期模式 */
   loginExpiredMode: LoginExpiredModeType;
   /** 应用名 */
@@ -356,7 +356,7 @@ interface TransitionPreferences {
   // /** 是否开启页面加载loading */
   loading: boolean;
   /** 页面切换动画 */
-  name: PageTransitionType | string;
+  name: PageTransitionType | (string & {});
   /** 是否开启页面加载进度动画 */
   progress: boolean;
 }

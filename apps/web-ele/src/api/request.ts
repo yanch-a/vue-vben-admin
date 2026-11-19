@@ -5,6 +5,7 @@ import { humanizeApiError } from '#/utils/humanizeApiError';
 import type { RequestClientOptions } from '@vben/request';
 
 import { useAppConfig } from '@vben/hooks';
+import { i18n } from '@vben/locales';
 import { preferences } from '@vben/preferences';
 import {
   authenticateResponseInterceptor,
@@ -116,7 +117,8 @@ function createRequestClient(baseURL: string, options?: RequestClientOptions) {
       if (token) {
         config.headers.lmtoken = token;
       }
-      config.headers['Accept-Language'] = preferences.app.locale;
+      config.headers['Accept-Language'] =
+        i18n.global.locale.value || preferences.app.locale;
       return config;
     },
   });

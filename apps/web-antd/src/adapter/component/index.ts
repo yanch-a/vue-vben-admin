@@ -249,11 +249,6 @@ async function previewImage(
     return;
   }
 
-  const [ImageComponent, PreviewGroupComponent] = await Promise.all([
-    Image,
-    PreviewGroup,
-  ]);
-
   // 过滤图片文件并生成预览
   const imageFiles = (unref(fileList) || []).filter((f) => isImageFile(f));
 
@@ -274,7 +269,7 @@ async function previewImage(
       return () => {
         if (isUnmounted) return null;
         return h(
-          PreviewGroupComponent,
+          PreviewGroup,
           {
             class: 'hidden',
             preview: {
@@ -296,7 +291,7 @@ async function previewImage(
           },
           () =>
             imageFiles.map((imgFile) =>
-              h(ImageComponent, {
+              h(Image, {
                 key: imgFile.uid,
                 src: imgFile.url || imgFile.preview,
               }),
@@ -321,7 +316,9 @@ function cropImage(file: File, aspectRatio: string | undefined) {
     let objectUrl: null | string = null;
 
     const open = ref<boolean>(true);
-    const cropperRef = ref<InstanceType<typeof VCropper> | null>(null);
+    const cropperRef = ref<null | {
+      getCropImage: () => Promise<Blob | string | undefined>;
+    }>(null);
 
     const closeModal = () => {
       open.value = false;
@@ -703,6 +700,9 @@ async function initComponentAdapter() {
       modelValueProp: 'value',
     }),
     Input: withDefaultPlaceholder(Input, 'input'),
+    // ant-design-vue 的运行时 CSS-in-JS 不支持层注入（见 theme.css 层序
+    // 注释），工具类无法可靠覆盖组件样式，保留内联宽度确保表单内撑满；
+    // 长期解是迁移 antdv-next（其 StyleProvider 原生支持 layer）。
     InputNumber: withDefaultPlaceholder(InputNumber, 'input', {
       style: { width: '100%' },
     }),

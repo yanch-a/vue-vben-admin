@@ -34,7 +34,7 @@
     "i18n:audit": "node scripts/i18n-audit.mjs",
     "i18n:migrate-templates": "node scripts/i18n-migrate-templates.mjs",
     "preview": "vite preview",
-    "typecheck": "vue-tsc --noEmit --skipLibCheck"
+    "typecheck": "vue-tsc --noEmit"
   },
   "imports": {
     "#/*": "./src/*"
@@ -62,6 +62,7 @@
     "@univerjs/sheets-ui": "0.25.1",
     "@univerjs/ui": "0.25.1",
     "@univerjs/ui-adapter-vue3": "0.25.1",
+    "@vben-core/typings": "workspace:*",
     "@vben/access": "workspace:*",
     "@vben/common-ui": "workspace:*",
     "@vben/constants": "workspace:*",

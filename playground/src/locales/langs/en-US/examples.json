@@ -40,7 +40,11 @@
     "editRow": "Edit Row",
     "custom-cell": "Custom Cell",
     "form": "Form Table",
+    "segmented": "Segmented Layout",
     "viewed": "Row Marker"
+  },
+  "tableAction": {
+    "title": "Table Action"
   },
   "captcha": {
     "title": "Captcha",

@@ -187,6 +187,14 @@ const routes: RouteRecordRaw[] = [
             },
           },
           {
+            name: 'VxeTableSegmentedExample',
+            path: 'segmented',
+            component: () => import('#/views/examples/vxe-table/segmented.vue'),
+            meta: {
+              title: $t('examples.vxeTable.segmented'),
+            },
+          },
+          {
             name: 'VxeTableEditCellExample',
             path: 'edit-cell',
             component: () => import('#/views/examples/vxe-table/edit-cell.vue'),
@@ -367,6 +375,15 @@ const routes: RouteRecordRaw[] = [
         meta: {
           icon: 'mdi:check-circle',
           title: $t('examples.button-group.title'),
+        },
+      },
+      {
+        name: 'TableActionExample',
+        path: 'table-action',
+        component: () => import('#/views/examples/table-action/index.vue'),
+        meta: {
+          icon: 'lucide:mouse-pointer-click',
+          title: $t('examples.tableAction.title'),
         },
       },
       {
