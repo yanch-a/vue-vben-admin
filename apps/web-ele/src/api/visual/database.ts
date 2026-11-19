@@ -19,6 +19,15 @@ export function testConnection(dbConfigId: any) {
   })
 }
 
+/** 探测当前用户拥有的一条已保存连接，并回写在线状态。 */
+export function probeOwnedDbConfig(dbConfigId: number | string) {
+  return request({
+    url: adminUrl + '/dbConfig/probeOwned/' + dbConfigId,
+    method: 'post',
+    timeout: 0,
+  })
+}
+
 /**
  * 测试未保存的连接：直接用表单内容建连
  * 编辑已有连接时可只传 id 而不传密码，后端会补齐已保存的密码

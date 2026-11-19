@@ -28,6 +28,14 @@ export function getDbConfigList(params: any) {
   })
 }
 
+/** 当前登录用户自己拥有的数据库连接，不含公开库和被授权的库。 */
+export function getOwnedDbConfigs() {
+  return request({
+    url: dbConfigUrl + 'getOwned',
+    method: 'get',
+  })
+}
+
 export function getDbConfigPage(params: any) {
   return request({
     url: dbConfigUrl + 'getPage',

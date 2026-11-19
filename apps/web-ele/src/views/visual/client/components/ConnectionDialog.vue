@@ -486,13 +486,24 @@ async function handleSubmit() {
       } else {
         payload.sshPassword = '';
       }
-      await editDbConfig(payload);
-      ElMessage.success(form.id ? '保存成功' : '创建成功');
+      const created = !form.id;
+      const savedRes: any = await editDbConfig(payload);
+      const savedId = created ? savedRes?.data : form.id;
       await loadList();
-      const saved = existingList.value.find((r) => r.id === form.id) ||
+      const saved = existingList.value.find((r) => String(r.id) === String(savedId)) ||
+        existingList.value.find((r) => r.id === form.id) ||
         existingList.value.find((r) => r.dbName === form.dbName) || {
           ...form,
         };
+      if (!created) {
+        ElMessage.success('保存成功');
+      } else if (saved.connectionStatus === 1) {
+        ElMessage.success('创建成功，连接在线');
+      } else if (saved.connectionStatus === 0) {
+        ElMessage.success('创建成功，当前无法连通，已记为离线');
+      } else {
+        ElMessage.success('创建成功');
+      }
 
       if (isOpenMode.value && form.id) {
         // 编辑后回到列表，并通知父级刷新已打开连接信息

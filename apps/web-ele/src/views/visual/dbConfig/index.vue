@@ -10,6 +10,10 @@
   import { getMemberUser } from '@/api/member/memberUser'
   import { getInstances, getTableTree, testConnection, testConnectionDraft } from '@/api/visual/database'
   import {
+    probeOwnedConnections,
+    probeSummaryText,
+  } from '../client/composables/probeOwnedConnections'
+  import {
     deleteDbConfig,
     editDbConfig,
     getDbConfigById,
@@ -321,6 +325,36 @@
         return payload
       }
 
+      /** 一键探测自己拥有的连接。进度显示在按钮上，当前页卡片会跟着变在线或离线。 */
+      const probingOwned = ref(false)
+      const probeCurrent = ref(0)
+      const probeTotal = ref(0)
+      const probeOwned = async () => {
+        if (probingOwned.value) return
+        probingOwned.value = true
+        probeCurrent.value = 0
+        probeTotal.value = 0
+        try {
+          const result = await probeOwnedConnections((progress) => {
+            probeCurrent.value = progress.current
+            probeTotal.value = progress.total
+            if (progress.connectionStatus == null) return
+            const row = tableData.value.find(
+              (item) => String(item.id) === String(progress.id),
+            )
+            if (row) row.connectionStatus = progress.connectionStatus
+          })
+          const text = probeSummaryText(result)
+          if (result.total === 0) ElMessage.info(text)
+          else ElMessage.success(text)
+          if (result.total > 0) await getList()
+        } catch (error) {
+          ElMessage.error(error?.msg || error?.message || '探测失败')
+        } finally {
+          probingOwned.value = false
+        }
+      }
+
       const testConnectionMethod = async (row) => {
         const { data } = await testConnection(row.id)
         if (data.success) {
@@ -455,10 +489,12 @@
               } else {
                 payload.sshPassword = ''
               }
+              if (dialogType.value === 'add') loading.value = true
               const { msg } = await editDbConfig(payload)
               $baseMessage(msg, 'success', 'vab-hey-message-success')
               getList()
             } catch (error) {
+              loading.value = false
               console.error('保存数据库配置失败:', error)
               ElMessage.error('保存数据库配置失败')
             }
@@ -787,6 +823,10 @@
         tableData,
         dataBaseType,
         testConnectionMethod,
+        probingOwned,
+        probeCurrent,
+        probeTotal,
+        probeOwned,
         handleAdd,
         handleEdit,
         handleDelete,
@@ -853,6 +893,20 @@
           >
             <el-icon class="el-icon--left"><Plus /></el-icon>
             {{ $tr('新增连接') }}
+          </el-button>
+          <el-button
+            :loading="probingOwned"
+            :disabled="probingOwned"
+            :title="$tr('依次检测你拥有的数据库连接是否在线')"
+            @click="probeOwned"
+          >
+            {{
+              probingOwned
+                ? probeTotal
+                  ? `${$tr('探测中')} ${probeCurrent}/${probeTotal}`
+                  : $tr('探测中')
+                : $tr('一键探测')
+            }}
           </el-button>
         </div>
         <p class="db-config-desc">{{ $tr('以卡片管理各数据源，支持测试、授权与画布。') }}</p>

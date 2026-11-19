@@ -1871,6 +1871,9 @@
   "新建会话": "New conversation",
   "新建会话（脱敏设置将重新跟随数据库配置）": "New session (masking follows the database settings again)",
   "新建连接": "New connection",
+  "没有可探测的连接": "No connections to probe",
+  "探测中": "Probing",
+  "依次检测你拥有的数据库连接是否在线": "Check each database connection you own",
   "新建视图": "New view",
   "新建同步任务": "New sync task",
   "新建图表": "New chart",
@@ -1968,6 +1971,7 @@
   "一对一": "One-to-one",
   "一个": "one",
   "一体管理": "Unified management",
+  "一键探测": "Probe all",
   "一些演示的内容": "Demo content",
   "一致": "Consistent",
   "依赖": "Depends on",
@@ -2766,5 +2770,11 @@
   "生成传输密钥": "Generate transport key",
   "确认生成": "Confirm generation",
   "传输密钥已更新": "Transport key updated",
-  "当前浏览器无法启用安全加密，请通过 HTTPS 或 localhost 打开后再启用。": "Secure encryption is unavailable in this browser context. Open this page over HTTPS or localhost before enabling it."
+  "当前浏览器无法启用安全加密，请通过 HTTPS 或 localhost 打开后再启用。": "Secure encryption is unavailable in this browser context. Open this page over HTTPS or localhost before enabling it.",
+  "改变数据库": "Alter database",
+  "确定修改": "Apply changes",
+  "只修改该库以后新建对象的默认字符集和排序规则，已有表和字段不会自动转换。": "This changes only the default character set and collation for objects created later. Existing tables and columns are not converted.",
+  "SQL Server 没有单独的库字符集，这里修改默认排序规则。已有列不会自动转换，并且修改时不能有其它会话正在使用该库。": "SQL Server has no separate database character set. This changes the default collation. Existing columns are not converted, and no other session can be using the database.",
+  "正在读取当前字符集和排序规则": "Reading the current character set and collation",
+  "当前数据库类型不支持修改字符集或排序规则": "This database type cannot change the character set or collation"
 }

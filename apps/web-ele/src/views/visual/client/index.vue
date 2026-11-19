@@ -62,6 +62,7 @@ import QueryTabs from './components/query/QueryTabs.vue';
 import ResultPanel from './components/query/ResultPanel.vue';
 import SqlEditor from './components/query/SqlEditor.vue';
 import SqlDumpDialog from './components/SqlDumpDialog.vue';
+import AlterDatabaseDialog from './components/AlterDatabaseDialog.vue';
 import CreateDatabaseDialog from './components/CreateDatabaseDialog.vue';
 import CopyDatabaseDialog from './components/CopyDatabaseDialog.vue';
 import SqlScriptUploadDialog from './components/SqlScriptUploadDialog.vue';
@@ -644,6 +645,14 @@ const createDbDialog = reactive({
   visible: false,
   /** 执行 DDL 时连到的已有实例 */
   connectInstance: '',
+});
+
+/** 改变数据库的字符集和排序规则。连接信息在打开时固定，避免随后切页签改到别的库。 */
+const alterDbDialog = reactive({
+  visible: false,
+  dbConfigId: '' as number | string,
+  dbType: '',
+  databaseName: '',
 });
 
 /** 上传 SQL 文件后台执行 */
@@ -1584,6 +1593,20 @@ async function onTreeContextAction(payload: {
         return;
       }
       createDbDialog.visible = true;
+      return;
+    case 'alterDatabase':
+      if (!actionConnection) {
+        ElMessage.warning('请先打开数据库连接');
+        return;
+      }
+      if (!instanceName) {
+        ElMessage.warning(`请先选择${instanceLabel.value}`);
+        return;
+      }
+      alterDbDialog.dbConfigId = actionConnection.id;
+      alterDbDialog.dbType = actionConnection.dbType || '';
+      alterDbDialog.databaseName = instanceName;
+      alterDbDialog.visible = true;
       return;
     case 'dropDatabase':
       try {
@@ -4309,6 +4332,12 @@ onBeforeUnmount(() => {
       :db-type="activeConnection.dbType"
       :connect-instance="createDbDialog.connectInstance"
       @created="onDatabaseCreated"
+    />
+    <AlterDatabaseDialog
+      v-model="alterDbDialog.visible"
+      :db-config-id="alterDbDialog.dbConfigId"
+      :db-type="alterDbDialog.dbType"
+      :database-name="alterDbDialog.databaseName"
     />
     <SystemFunctionsDialog
       v-model="systemFunctionsVisible"

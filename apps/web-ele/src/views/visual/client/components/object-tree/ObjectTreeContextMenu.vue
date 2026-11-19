@@ -12,6 +12,7 @@ export type TreeCtxAction =
   | 'refreshTree'
   | 'refreshTables'
   | 'createDatabase'
+  | 'alterDatabase'
   | 'dropDatabase'
   | 'importData'
   | 'exportInstanceSql'
@@ -65,8 +66,10 @@ const props = withDefaults(
     instanceLabel?: string;
     /** 是否允许建删一级节点；Oracle/达梦由 DBA 操作，SQLite 由文件系统决定 */
     canManageInstance?: boolean;
+    /** MySQL 族可改字符集和排序规则，SQL Server 可改默认排序规则 */
+    canAlterDatabase?: boolean;
   }>(),
-  { instanceLabel: '数据库', canManageInstance: true },
+  { instanceLabel: '数据库', canManageInstance: true, canAlterDatabase: false },
 );
 
 const emit = defineEmits<{
@@ -126,6 +129,13 @@ function onAction(action: TreeCtxAction) {
         <template v-if="canManageInstance">
           <div class="item" @click="onAction('createDatabase')">
             {{ $tr('创建') }}{{ $tr(instanceLabel === '模式' ? '数据库' : instanceLabel) }}
+          </div>
+          <div
+            v-if="canAlterDatabase"
+            class="item"
+            @click="onAction('alterDatabase')"
+          >
+            {{ $tr('改变数据库') }}
           </div>
           <div class="item danger" @click="onAction('dropDatabase')">
             {{ $tr('删除') }}{{ instanceLabel }}

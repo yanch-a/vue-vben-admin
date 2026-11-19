@@ -36,6 +36,7 @@ import {
 } from '#/api/visual/database';
 import { listSavedQueries } from '#/api/visual/savedQuery';
 
+import { supportsAlterDatabase } from '../../dialect/alterDatabase';
 import { instanceLabelOf, resolveCapabilities } from '../../dialect/dbTypes';
 import { invalidateEditorMetadata, rememberInstanceTables } from '../../utils/sqlEditorAssist';
 import { useClientPreferences } from '../../composables/useClientPreferences';
@@ -101,6 +102,8 @@ let searchTimer: null | ReturnType<typeof setTimeout> = null;
 let treeEpoch = 0;
 
 const capabilities = computed(() => resolveCapabilities(props.dbType));
+/** 库节点能否改字符集 / 排序规则，由方言决定，不在菜单里再判断产品。 */
+const canAlterDatabase = computed(() => supportsAlterDatabase(props.dbType));
 /** 右键菜单文案：Oracle/达梦一级节点是「模式」而非「数据库」 */
 const instanceLabel = computed(() => instanceLabelOf(props.dbType));
 
@@ -1262,6 +1265,7 @@ defineExpose({
       :object-kind="ctxMenu.objectKind"
       :instance-label="instanceLabel"
       :can-manage-instance="capabilities.manageInstance"
+      :can-alter-database="canAlterDatabase"
       @close="closeCtxMenu"
       @action="onCtxAction"
     />
